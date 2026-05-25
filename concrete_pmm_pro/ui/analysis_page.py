@@ -954,6 +954,37 @@ def _render_selected_case_detail_panel(summary: dict, unbonded_ignored_count: in
         st.caption(f"Message: {summary['message']}")
 
 
+def _pmm_3d_surface_diagnostics_from_figure(fig: go.Figure) -> dict[str, object]:
+    meta = fig.layout.meta
+    if isinstance(meta, dict) and isinstance(meta.get("pmm_surface_diagnostics"), dict):
+        return dict(meta["pmm_surface_diagnostics"])
+    return {}
+
+
+def _render_pmm_3d_surface_diagnostics(diagnostics: dict[str, object], show_surface: bool) -> None:
+    if not diagnostics:
+        return
+    generated = bool(diagnostics.get("surface_generated"))
+    if show_surface and not generated:
+        st.warning(
+            "PMM surface could not be generated from the available stored result data. "
+            "Showing slice/load point only."
+        )
+    with st.expander("3D surface diagnostics", expanded=False):
+        st.write(f"Surface generated: {'Yes' if generated else 'No'}")
+        st.write(f"Surface trace type: {diagnostics.get('surface_trace_type') or 'None'}")
+        st.write(f"Valid PMM points used: {diagnostics.get('valid_point_count', 0)}")
+        st.write(f"Resolved P column: {diagnostics.get('p_column') or 'N/A'}")
+        st.write(f"Resolved Mx column: {diagnostics.get('mx_column') or 'N/A'}")
+        st.write(f"Resolved My column: {diagnostics.get('my_column') or 'N/A'}")
+        fallback_reason = str(diagnostics.get("fallback_reason") or "")
+        if fallback_reason:
+            st.write(f"Fallback reason: {fallback_reason}")
+        available_columns = diagnostics.get("available_columns")
+        if isinstance(available_columns, list):
+            st.write(f"Available columns: {', '.join(str(column) for column in available_columns)}")
+
+
 def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
     st.subheader("ULS Demand/Capacity Prototype")
     st.warning(
@@ -1177,6 +1208,7 @@ def _render_pmm_slice_dashboard(
                 use_container_width=True,
                 key="analysis_3d_dashboard_chart",
             )
+            _render_pmm_3d_surface_diagnostics(_pmm_3d_surface_diagnostics_from_figure(surface_fig), show_surface)
     else:
         st.info("3D PMM interaction rendering is off. Enable it only when a 3D capacity view is needed.")
 

@@ -21,6 +21,10 @@ STATUS_COLORS = {
     "NOT_CHECKED": "#6b7280",
 }
 
+PMM_P_COLUMN_CANDIDATES = ("phiPn_kN", "phiPn_capped_kN", "P_kN", "Pu_kN", "P")
+PMM_MX_COLUMN_CANDIDATES = ("phiMnx_kNm", "Mx_kNm", "Mux_kNm", "Mnx_kNm")
+PMM_MY_COLUMN_CANDIDATES = ("phiMny_kNm", "My_kNm", "Muy_kNm", "Mny_kNm")
+
 
 def get_active_uls_load_cases(load_cases: list[LoadCase]) -> list[LoadCase]:
     return [load_case for load_case in load_cases if load_case.active and load_case.load_type == "ULS"]
@@ -403,6 +407,51 @@ def _dc_result_for(combo_name: str, dc_summary: DemandCapacitySummary | None):
     return None
 
 
+def _resolve_numeric_column(pmm_df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    for column in candidates:
+        if column in pmm_df.columns and pd.to_numeric(pmm_df[column], errors="coerce").notna().any():
+            return column
+    return None
+
+
+def pmm_surface_data_adapter(pmm_df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Resolve stored PMM result data into canonical columns for 3D plotting."""
+
+    diagnostics: dict[str, Any] = {
+        "surface_generated": False,
+        "surface_trace_type": "None",
+        "valid_point_count": 0,
+        "p_column": None,
+        "mx_column": None,
+        "my_column": None,
+        "fallback_reason": "",
+        "available_columns": list(pmm_df.columns),
+    }
+    p_column = _resolve_numeric_column(pmm_df, PMM_P_COLUMN_CANDIDATES)
+    mx_column = _resolve_numeric_column(pmm_df, PMM_MX_COLUMN_CANDIDATES)
+    my_column = _resolve_numeric_column(pmm_df, PMM_MY_COLUMN_CANDIDATES)
+    diagnostics.update({"p_column": p_column, "mx_column": mx_column, "my_column": my_column})
+    if p_column is None or mx_column is None or my_column is None:
+        diagnostics["fallback_reason"] = "Could not resolve numeric P, Mx, and My columns from stored PMM data."
+        return pd.DataFrame(columns=["phiPn_kN", "phiMnx_kNm", "phiMny_kNm"]), diagnostics
+
+    adapted = pd.DataFrame(
+        {
+            "phiPn_kN": pd.to_numeric(pmm_df[p_column], errors="coerce"),
+            "phiMnx_kNm": pd.to_numeric(pmm_df[mx_column], errors="coerce"),
+            "phiMny_kNm": pd.to_numeric(pmm_df[my_column], errors="coerce"),
+        }
+    )
+    for optional_column in ("theta_rad", "c_mm", "phi", "strain_condition"):
+        if optional_column in pmm_df.columns:
+            adapted[optional_column] = pmm_df[optional_column]
+    adapted = adapted.dropna(subset=["phiPn_kN", "phiMnx_kNm", "phiMny_kNm"]).copy()
+    diagnostics["valid_point_count"] = int(len(adapted))
+    if adapted.empty:
+        diagnostics["fallback_reason"] = "No valid numeric P/Mx/My PMM points were available after column resolution."
+    return adapted, diagnostics
+
+
 def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[list[float]], list[list[float]]] | None:
     """Build a Plotly surface grid from stored PMM result points.
 
@@ -413,7 +462,7 @@ def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[lis
     required = {"theta_rad", "c_mm", "phiMnx_kNm", "phiMny_kNm"}
     if not required.issubset(pmm_df.columns):
         return None
-    p_column = _slice_p_column(pmm_df)
+    p_column = "phiPn_kN"
     surface_df = pmm_df[["theta_rad", "c_mm", "phiMnx_kNm", "phiMny_kNm", p_column]].dropna().copy()
     if surface_df.empty or surface_df["theta_rad"].nunique() < 3 or surface_df["c_mm"].nunique() < 2:
         return None
@@ -438,6 +487,58 @@ def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[lis
         y_values.append(y_values[0])
         z_values.append(z_values[0])
     return x_values, y_values, z_values
+
+
+def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics: dict[str, Any]) -> None:
+    if surface_df.empty:
+        diagnostics.setdefault("fallback_reason", "No valid PMM points were available for surface generation.")
+        return
+    surface_grid = _pmm_surface_grid(surface_df)
+    if surface_grid is not None:
+        x_grid, y_grid, z_grid = surface_grid
+        fig.add_trace(
+            go.Surface(
+                x=x_grid,
+                y=y_grid,
+                z=z_grid,
+                opacity=0.36,
+                colorscale=[[0.0, "#d8dee9"], [0.5, "#9fb6d9"], [1.0, "#5477a8"]],
+                showscale=False,
+                name="PMM surface",
+                hovertemplate=(
+                    "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                    "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
+                ),
+            )
+        )
+        diagnostics["surface_generated"] = True
+        diagnostics["surface_trace_type"] = "Surface"
+        diagnostics["fallback_reason"] = ""
+        return
+
+    if len(surface_df) >= 8:
+        fig.add_trace(
+            go.Mesh3d(
+                x=surface_df["phiMnx_kNm"],
+                y=surface_df["phiMny_kNm"],
+                z=surface_df["phiPn_kN"],
+                alphahull=0,
+                opacity=0.36,
+                color="#7f9bbf",
+                flatshading=False,
+                name="PMM visual mesh",
+                hovertemplate=(
+                    "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                    "<br>phiPn=%{z:.2f} kN<extra>PMM visual mesh</extra>"
+                ),
+            )
+        )
+        diagnostics["surface_generated"] = True
+        diagnostics["surface_trace_type"] = "Mesh3d"
+        diagnostics["fallback_reason"] = "theta/c grid unavailable; Mesh3d generated from stored PMM point cloud."
+        return
+
+    diagnostics["fallback_reason"] = f"Only {len(surface_df)} valid PMM points were available; at least 8 are required for Mesh3d."
 
 
 def _closed_pu_slice_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
@@ -616,61 +717,33 @@ def make_pmm_3d_dashboard_figure(
     show_all_uls_load_points: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
-    if show_surface and not pmm_df.empty:
-        surface_grid = _pmm_surface_grid(pmm_df)
-        if surface_grid is not None:
-            x_grid, y_grid, z_grid = surface_grid
-            fig.add_trace(
-                go.Surface(
-                    x=x_grid,
-                    y=y_grid,
-                    z=z_grid,
-                    opacity=0.34,
-                    colorscale=[[0.0, "#d8dee9"], [0.5, "#9fb6d9"], [1.0, "#5477a8"]],
-                    showscale=False,
-                    name="PMM surface",
-                    hovertemplate=(
-                        "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
-                        "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
-                    ),
-                )
-            )
-        elif {"phiMnx_kNm", "phiMny_kNm", "phiPn_kN"}.issubset(pmm_df.columns) and len(pmm_df) >= 4:
-            fig.add_trace(
-                go.Mesh3d(
-                    x=pmm_df["phiMnx_kNm"],
-                    y=pmm_df["phiMny_kNm"],
-                    z=pmm_df["phiPn_kN"],
-                    alphahull=0,
-                    opacity=0.30,
-                    color="#7f9bbf",
-                    flatshading=False,
-                    name="PMM visual mesh",
-                    hoverinfo="skip",
-                )
-            )
+    surface_df, surface_diagnostics = pmm_surface_data_adapter(pmm_df)
+    if show_surface:
+        _add_pmm_surface_trace(fig, surface_df, surface_diagnostics)
+    else:
+        surface_diagnostics["fallback_reason"] = "Surface display option is disabled."
 
-    if show_raw_points and not pmm_df.empty:
+    if show_raw_points and not surface_df.empty:
         hover = [
             f"P={row.phiPn_kN:.2f} kN<br>Mx={row.phiMnx_kNm:.2f} kN-m<br>My={row.phiMny_kNm:.2f} kN-m"
             f"<br>phi={getattr(row, 'phi', float('nan')):.3f}<br>{getattr(row, 'strain_condition', '')}"
-            for row in pmm_df.itertuples()
+            for row in surface_df.itertuples()
         ]
         fig.add_trace(
             go.Scatter3d(
-                x=pmm_df["phiMnx_kNm"],
-                y=pmm_df["phiMny_kNm"],
-                z=pmm_df["phiPn_kN"],
+                x=surface_df["phiMnx_kNm"],
+                y=surface_df["phiMny_kNm"],
+                z=surface_df["phiPn_kN"],
                 mode="markers",
                 marker=dict(size=2.5, color="#475467", opacity=0.34),
                 text=hover,
                 hoverinfo="text",
                 name="PMM raw points",
             )
-        )
+    )
 
     if show_current_pu_slice and selected_load_case is not None:
-        slice_df = pmm_slice_at_pu(pmm_df, N_to_kN(selected_load_case.Pu_N))
+        slice_df = pmm_slice_at_pu(surface_df, N_to_kN(selected_load_case.Pu_N)) if not surface_df.empty else surface_df
         if not slice_df.empty:
             slice_line_df = _closed_pu_slice_dataframe(slice_df)
             fig.add_trace(
@@ -750,6 +823,7 @@ def make_pmm_3d_dashboard_figure(
         ),
         legend=dict(orientation="h"),
         margin=dict(l=0, r=0, t=45, b=0),
+        meta={"pmm_surface_diagnostics": surface_diagnostics},
     )
     return fig
 

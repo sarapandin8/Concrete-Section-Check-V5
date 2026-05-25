@@ -17,6 +17,7 @@ from concrete_pmm_pro.visualization.pmm_dashboard import (
     estimate_directional_capacity_from_slice,
     make_mux_muy_slice_figure,
     make_pmm_3d_dashboard_figure,
+    pmm_surface_data_adapter,
     pmm_slice_at_pu,
     pmm_slice_at_pu_interpolated,
     rank_load_cases_by_dcr,
@@ -71,6 +72,15 @@ def _circular_slice(radius_kNm: float = 100.0, theta_count: int = 16) -> pd.Data
                 "phiMny_kNm": radius_kNm * math.sin(2.0 * math.pi * index / theta_count),
             }
             for index in range(theta_count)
+        ]
+    )
+
+
+def _irregular_pmm_point_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"P_kN": 900.0 + 25.0 * index, "Mx_kNm": 80.0 * math.cos(index), "My_kNm": 60.0 * math.sin(index)}
+            for index in range(10)
         ]
     )
 
@@ -286,6 +296,41 @@ def test_make_pmm_3d_dashboard_figure_returns_plotly_figure() -> None:
 
     assert isinstance(fig, go.Figure)
     assert not any(trace.name == "PMM raw points" for trace in fig.data)
+
+
+def test_pmm_surface_data_adapter_resolves_common_app_columns() -> None:
+    adapted, diagnostics = pmm_surface_data_adapter(_irregular_pmm_point_df())
+
+    assert list(adapted.columns[:3]) == ["phiPn_kN", "phiMnx_kNm", "phiMny_kNm"]
+    assert diagnostics["p_column"] == "P_kN"
+    assert diagnostics["mx_column"] == "Mx_kNm"
+    assert diagnostics["my_column"] == "My_kNm"
+    assert diagnostics["valid_point_count"] == 10
+
+
+def test_make_pmm_3d_dashboard_uses_mesh_when_theta_grid_is_absent() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(_irregular_pmm_point_df(), demand_df, load_case, _dc_summary())
+    diagnostics = fig.layout.meta["pmm_surface_diagnostics"]
+
+    assert any(trace.type == "mesh3d" for trace in fig.data)
+    assert diagnostics["surface_generated"] is True
+    assert diagnostics["surface_trace_type"] == "Mesh3d"
+
+
+def test_make_pmm_3d_dashboard_uses_phi_pn_capped_when_phi_pn_is_absent() -> None:
+    df = _synthetic_interpolated_pmm_df().drop(columns=["phiPn_kN"])
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(df, demand_df, load_case, _dc_summary())
+    diagnostics = fig.layout.meta["pmm_surface_diagnostics"]
+
+    assert any(trace.type in {"surface", "mesh3d"} for trace in fig.data)
+    assert diagnostics["p_column"] == "phiPn_capped_kN"
+    assert diagnostics["surface_generated"] is True
 
 
 def test_make_pmm_3d_dashboard_figure_adds_surface_from_stored_pmm_grid() -> None:

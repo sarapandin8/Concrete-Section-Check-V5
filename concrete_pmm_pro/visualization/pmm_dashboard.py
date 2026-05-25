@@ -490,9 +490,20 @@ def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[lis
 
 
 def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics: dict[str, Any]) -> None:
+    """Add a visible PMM capacity body trace from stored PMM points.
+
+    A light grid Surface is kept when theta/c data are available because it is
+    useful for report/tests, but a Mesh3d capacity body is added as the primary
+    visible object.  This avoids the real-app symptom where a Surface trace can
+    render too faintly or not communicate a body, leaving only the Pu slice line.
+    This function is visualization-only and never recomputes capacity.
+    """
     if surface_df.empty:
         diagnostics.setdefault("fallback_reason", "No valid PMM points were available for surface generation.")
+        diagnostics["surface_generated"] = False
+        diagnostics["surface_trace_type"] = "None"
         return
+
     surface_grid = _pmm_surface_grid(surface_df)
     if surface_grid is not None:
         x_grid, y_grid, z_grid = surface_grid
@@ -501,10 +512,34 @@ def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics
                 x=x_grid,
                 y=y_grid,
                 z=z_grid,
-                opacity=0.36,
-                colorscale=[[0.0, "#d8dee9"], [0.5, "#9fb6d9"], [1.0, "#5477a8"]],
+                opacity=0.20,
+                colorscale=[[0.0, "#cbd7e6"], [0.5, "#7f9bbf"], [1.0, "#426799"]],
                 showscale=False,
+                name="PMM surface grid",
+                showlegend=False,
+                hovertemplate=(
+                    "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                    "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
+                ),
+            )
+        )
+
+    mesh_df = surface_df[["phiMnx_kNm", "phiMny_kNm", "phiPn_kN"]].dropna().copy()
+    diagnostics["valid_point_count"] = int(len(mesh_df))
+    if len(mesh_df) >= 8:
+        fig.add_trace(
+            go.Mesh3d(
+                x=mesh_df["phiMnx_kNm"],
+                y=mesh_df["phiMny_kNm"],
+                z=mesh_df["phiPn_kN"],
+                alphahull=0,
+                opacity=0.42,
+                color="#6f8fb6",
+                flatshading=False,
+                lighting=dict(ambient=0.55, diffuse=0.75, specular=0.18, roughness=0.72, fresnel=0.05),
+                lightposition=dict(x=100, y=200, z=400),
                 name="PMM surface",
+                showlegend=True,
                 hovertemplate=(
                     "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
                     "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
@@ -512,34 +547,21 @@ def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics
             )
         )
         diagnostics["surface_generated"] = True
-        diagnostics["surface_trace_type"] = "Surface"
-        diagnostics["fallback_reason"] = ""
+        diagnostics["surface_trace_type"] = "Surface+Mesh3d" if surface_grid is not None else "Mesh3d"
+        diagnostics["fallback_reason"] = "Mesh3d capacity body generated from stored PMM capacity points."
         return
 
-    if len(surface_df) >= 8:
-        fig.add_trace(
-            go.Mesh3d(
-                x=surface_df["phiMnx_kNm"],
-                y=surface_df["phiMny_kNm"],
-                z=surface_df["phiPn_kN"],
-                alphahull=0,
-                opacity=0.36,
-                color="#7f9bbf",
-                flatshading=False,
-                name="PMM visual mesh",
-                hovertemplate=(
-                    "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
-                    "<br>phiPn=%{z:.2f} kN<extra>PMM visual mesh</extra>"
-                ),
-            )
-        )
+    if surface_grid is not None:
         diagnostics["surface_generated"] = True
-        diagnostics["surface_trace_type"] = "Mesh3d"
-        diagnostics["fallback_reason"] = "theta/c grid unavailable; Mesh3d generated from stored PMM point cloud."
+        diagnostics["surface_trace_type"] = "Surface"
+        diagnostics["fallback_reason"] = "Surface generated from theta/c grid; insufficient points for Mesh3d body."
         return
 
-    diagnostics["fallback_reason"] = f"Only {len(surface_df)} valid PMM points were available; at least 8 are required for Mesh3d."
-
+    diagnostics["surface_generated"] = False
+    diagnostics["surface_trace_type"] = "None"
+    diagnostics["fallback_reason"] = (
+        f"Only {len(mesh_df)} valid PMM points were available; at least 8 are required for Mesh3d."
+    )
 
 def _closed_pu_slice_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
     if slice_df.empty:

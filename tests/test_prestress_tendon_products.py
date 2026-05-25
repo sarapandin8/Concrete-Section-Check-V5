@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import pytest
+
+from concrete_pmm_pro.data.prestress_tendon_products import (
+    apply_tendon_product_to_row,
+    get_tendon_product,
+    list_tendon_products,
+    make_custom_tendon_product,
+    tendon_product_options,
+)
+from concrete_pmm_pro.visualization.section_plot import display_diameter_for_prestress_element, equivalent_diameter_from_area
+from concrete_pmm_pro.core.models import PrestressElement
+
+
+STANDARD_LABELS = {
+    "6-1",
+    "6-2",
+    "6-3",
+    "6-4",
+    "6-7",
+    "6-9",
+    "6-12",
+    "6-15",
+    "6-19",
+    "6-22",
+    "6-27",
+    "6-31",
+    "6-37",
+    "6-43",
+    "6-55",
+}
+
+
+def test_standard_tendon_product_records_exist() -> None:
+    assert set(tendon_product_options()) == STANDARD_LABELS
+
+
+def test_standard_tendon_products_compute_area_and_breaking_load_from_strand_count() -> None:
+    for product in list_tendon_products():
+        assert product.tendon_area_mm2 == pytest.approx(product.strand_count * 140.0)
+        assert product.breaking_load_kN == pytest.approx(product.strand_count * 260.0)
+        assert product.strand_diameter_mm == pytest.approx(15.2)
+        assert product.fpu_MPa == pytest.approx(1860.0)
+
+
+def test_get_tendon_product_6_12_returns_expected_reference_data() -> None:
+    product = get_tendon_product("6-12")
+
+    assert product is not None
+    assert product.strand_count == 12
+    assert product.tendon_area_mm2 == pytest.approx(1680.0)
+    assert product.breaking_load_kN == pytest.approx(3120.0)
+    assert product.duct_id_mm == pytest.approx(80.0)
+
+
+def test_get_tendon_product_6_55_returns_expected_reference_data() -> None:
+    product = get_tendon_product("6-55")
+
+    assert product is not None
+    assert product.strand_count == 55
+    assert product.tendon_area_mm2 == pytest.approx(7700.0)
+    assert product.breaking_load_kN == pytest.approx(14300.0)
+    assert product.duct_id_mm == pytest.approx(160.0)
+
+
+def test_make_custom_tendon_product_6_25_computes_nominal_values() -> None:
+    product = make_custom_tendon_product(25)
+
+    assert product.label == "6-25"
+    assert product.strand_count == 25
+    assert product.tendon_area_mm2 == pytest.approx(3500.0)
+    assert product.breaking_load_kN == pytest.approx(6500.0)
+    assert product.fpu_MPa == pytest.approx(1860.0)
+
+
+def test_custom_tendon_preview_diameter_uses_steel_area_not_duct_id() -> None:
+    product = make_custom_tendon_product(25, duct_id_mm=120.0)
+    element = PrestressElement(
+        x_mm=0.0,
+        y_mm=0.0,
+        area_mm2=product.tendon_area_mm2,
+        diameter_mm=product.duct_id_mm,
+        steel_type="tendon_group",
+    )
+
+    assert equivalent_diameter_from_area(3500.0) == pytest.approx(66.8, abs=0.05)
+    assert display_diameter_for_prestress_element(element) == pytest.approx(66.8, abs=0.05)
+
+
+def test_apply_standard_tendon_product_to_row_updates_area_and_reference_fields() -> None:
+    row = {"Pe_eff_kN": 123.0, "Diameter_mm": 999.0, "Note": "keep user note"}
+    updated = apply_tendon_product_to_row(row, "6-12")
+
+    assert updated["Product"] == "6-12"
+    assert updated["Steel Type"] == "tendon_group"
+    assert updated["Area_mm2"] == pytest.approx(1680.0)
+    assert updated["fpu_MPa"] == pytest.approx(1860.0)
+    assert updated["Breaking Load_kN"] == pytest.approx(3120.0)
+    assert updated["Duct ID_mm"] == pytest.approx(80.0)
+    assert updated["Diameter_mm"] is None
+    assert updated["Pe_eff_kN"] == pytest.approx(123.0)
+
+
+def test_apply_custom_tendon_product_to_row_updates_area_without_pe_overwrite() -> None:
+    product = make_custom_tendon_product(25, duct_id_mm=125.0, duct_type="Round duct")
+    row = {"Pe_eff_kN": 0.0, "fpe_MPa": 900.0}
+    updated = apply_tendon_product_to_row(row, product)
+
+    assert updated["Product"] == "6-25"
+    assert updated["Area_mm2"] == pytest.approx(3500.0)
+    assert updated["Breaking Load_kN"] == pytest.approx(6500.0)
+    assert updated["Duct Type"] == "Round duct"
+    assert updated["Duct ID_mm"] == pytest.approx(125.0)
+    assert updated["Diameter_mm"] is None
+    assert updated["Pe_eff_kN"] == pytest.approx(0.0)
+    assert updated["fpe_MPa"] == pytest.approx(900.0)

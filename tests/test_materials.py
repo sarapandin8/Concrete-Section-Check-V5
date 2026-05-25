@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import pytest
+
+from concrete_pmm_pro.code_checks import aci_beta1
+from concrete_pmm_pro.core.models import ConcreteMaterial, PrestressSteelMaterial, RebarMaterial
+from concrete_pmm_pro.core.project import ProjectModel
+from concrete_pmm_pro.io.project_io import project_from_json, project_to_json
+
+
+def test_concrete_material_creation() -> None:
+    material = ConcreteMaterial(name="C35", fc_MPa=35.0, ecu=0.003, density_kg_m3=2400.0, beta1=0.80)
+
+    assert material.fc_MPa == pytest.approx(35.0)
+    assert material.fc_mpa == pytest.approx(35.0)
+    assert material.ecu == pytest.approx(0.003)
+
+
+def test_rebar_material_creation() -> None:
+    material = RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)
+
+    assert material.fy_MPa == pytest.approx(400.0)
+    assert material.Es_MPa == pytest.approx(200000.0)
+
+
+def test_prestress_steel_material_supports_prestressing_bar() -> None:
+    material = PrestressSteelMaterial(
+        name="PT Bar 32",
+        steel_type="prestressing_bar",
+        diameter_mm=32.0,
+        area_mm2=804.2,
+        grade="1080/1230",
+        fpy_MPa=1080.0,
+        fpu_MPa=1230.0,
+        Ep_MPa=200000.0,
+    )
+
+    assert material.steel_type == "prestressing_bar"
+    assert material.fpu_MPa == pytest.approx(1230.0)
+    assert material.Ep_MPa == pytest.approx(200000.0)
+
+
+def test_prestress_steel_material_rejects_fpy_greater_than_or_equal_to_fpu() -> None:
+    with pytest.raises(ValueError, match="fpy_MPa"):
+        PrestressSteelMaterial(name="Bad PT Bar", steel_type="prestressing_bar", fpy_MPa=1230.0, fpu_MPa=1230.0)
+
+
+def test_prestress_steel_material_rejects_nonpositive_ep() -> None:
+    with pytest.raises(ValueError):
+        PrestressSteelMaterial(name="Bad PT Bar", steel_type="prestressing_bar", fpu_MPa=1230.0, Ep_MPa=0.0)
+
+
+def test_pt_bar_material_with_fpu_and_ep_is_valid() -> None:
+    material = PrestressSteelMaterial(name="PT Bar", steel_type="prestressing_bar", fpu_MPa=1030.0, Ep_MPa=200000.0)
+
+    assert material.fpu_MPa == pytest.approx(1030.0)
+    assert material.Ep_MPa == pytest.approx(200000.0)
+
+
+def test_aci_beta1_values() -> None:
+    assert aci_beta1(28.0) == pytest.approx(0.85)
+    assert aci_beta1(35.0) == pytest.approx(0.80)
+    assert aci_beta1(42.0) == pytest.approx(0.75)
+    assert aci_beta1(100.0) == pytest.approx(0.65)
+
+
+def test_project_round_trip_preserves_concrete_material() -> None:
+    project = ProjectModel(concrete_material=ConcreteMaterial(name="C40", fc_MPa=40.0, beta1=aci_beta1(40.0)))
+
+    loaded = project_from_json(project_to_json(project))
+
+    assert loaded.concrete_material.name == "C40"
+    assert loaded.concrete_material.fc_MPa == pytest.approx(40.0)
+
+
+def test_project_round_trip_preserves_prestressing_bar_material() -> None:
+    project = ProjectModel(
+        prestress_materials=[
+            PrestressSteelMaterial(
+                name="PS Bar 64 - 1080/1230",
+                steel_type="prestressing_bar",
+                diameter_mm=64.0,
+                area_mm2=3217.0,
+                grade="1080/1230",
+                fpy_MPa=1080.0,
+                fpu_MPa=1230.0,
+                Ep_MPa=200000.0,
+            )
+        ],
+        active_prestress_material_name="PS Bar 64 - 1080/1230",
+    )
+
+    loaded = project_from_json(project_to_json(project))
+
+    assert loaded.prestress_materials[0].steel_type == "prestressing_bar"
+    assert loaded.prestress_materials[0].diameter_mm == pytest.approx(64.0)
+    assert loaded.active_prestress_material_name == "PS Bar 64 - 1080/1230"
+
+
+def test_loading_old_project_without_materials_does_not_crash() -> None:
+    loaded = project_from_json('{"project_name": "Old Project", "version": "1.6.1"}')
+
+    assert loaded.project_name == "Old Project"
+    assert loaded.concrete_material.fc_MPa > 0
+    assert loaded.rebar_materials == []
+    assert loaded.prestress_materials == []

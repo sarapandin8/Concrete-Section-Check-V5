@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "units": "mm",
+  "categories": ["Basic Solid", "Hollow / Voided", "Pier / Column", "Girder", "Box Girder", "Custom"],
+  "presets": [
+    {
+      "key": "rectangle",
+      "display_name": "Rectangle",
+      "category": "Basic Solid",
+      "generator": "rectangle",
+      "dimensions_generator": "rectangle",
+      "parameters": [
+        {"name": "width_mm", "label": "Width B (mm)", "type": "number", "default": 400, "min": 1, "max": 10000, "step": 10},
+        {"name": "height_mm", "label": "Height H (mm)", "type": "number", "default": 600, "min": 1, "max": 10000, "step": 10}
+      ]
+    },
+    {
+      "key": "rectangular_chamfered",
+      "display_name": "Rectangular Chamfered",
+      "category": "Basic Solid",
+      "generator": "rectangular_chamfered",
+      "dimensions_generator": "rectangular_chamfered",
+      "parameters": [
+        {"name": "width_mm", "label": "Width B (mm)", "type": "number", "default": 500, "min": 1, "max": 10000, "step": 10},
+        {"name": "height_mm", "label": "Height H (mm)", "type": "number", "default": 700, "min": 1, "max": 10000, "step": 10},
+        {"name": "chamfer_mm", "label": "Chamfer c (mm)", "type": "number", "default": 50, "min": 0, "max": 2000, "step": 5}
+      ]
+    },
+    {
+      "key": "circle",
+      "display_name": "Circle",
+      "category": "Basic Solid",
+      "generator": "circle",
+      "dimensions_generator": "circle",
+      "parameters": [
+        {"name": "diameter_mm", "label": "Diameter D (mm)", "type": "number", "default": 600, "min": 1, "max": 10000, "step": 10}
+      ]
+    },
+    {
+      "key": "circular_hollow",
+      "display_name": "Circular Hollow",
+      "category": "Hollow / Voided",
+      "generator": "circular_hollow",
+      "dimensions_generator": "circular_hollow",
+      "parameters": [
+        {"name": "outer_diameter_mm", "label": "Outer diameter Do (mm)", "type": "number", "default": 900, "min": 1, "max": 20000, "step": 10},
+        {"name": "inner_diameter_mm", "label": "Inner diameter Di (mm)", "type": "number", "default": 500, "min": 1, "max": 19990, "step": 10}
+      ]
+    },
+    {
+      "key": "rectangular_hollow",
+      "display_name": "Rectangular Hollow",
+      "category": "Hollow / Voided",
+      "generator": "rectangular_hollow",
+      "dimensions_generator": "rectangular_hollow",
+      "parameters": [
+        {"name": "width_mm", "label": "Width B (mm)", "type": "number", "default": 1000, "min": 1, "max": 20000, "step": 10},
+        {"name": "height_mm", "label": "Height H (mm)", "type": "number", "default": 800, "min": 1, "max": 20000, "step": 10},
+        {"name": "t_top_mm", "label": "t_top (mm)", "type": "number", "default": 120, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_bottom_mm", "label": "t_bottom (mm)", "type": "number", "default": 140, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_left_mm", "label": "t_left (mm)", "type": "number", "default": 110, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_right_mm", "label": "t_right (mm)", "type": "number", "default": 130, "min": 1, "max": 5000, "step": 5}
+      ]
+    },
+    {
+      "key": "box_section_fillet",
+      "display_name": "Box Section with Fillet",
+      "category": "Box Girder",
+      "generator": "box_section_fillet",
+      "dimensions_generator": "box_section_fillet",
+      "parameters": [
+        {"name": "width_mm", "label": "Width B (mm)", "type": "number", "default": 1200, "min": 1, "max": 30000, "step": 10},
+        {"name": "height_mm", "label": "Height H (mm)", "type": "number", "default": 900, "min": 1, "max": 30000, "step": 10},
+        {"name": "t_top_mm", "label": "t_top (mm)", "type": "number", "default": 150, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_bottom_mm", "label": "t_bottom (mm)", "type": "number", "default": 170, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_left_mm", "label": "t_left (mm)", "type": "number", "default": 140, "min": 1, "max": 5000, "step": 5},
+        {"name": "t_right_mm", "label": "t_right (mm)", "type": "number", "default": 160, "min": 1, "max": 5000, "step": 5},
+        {"name": "r_inner_mm", "label": "Inner fillet radius Ri (mm)", "type": "number", "default": 100, "min": 0, "max": 5000, "step": 5},
+        {"name": "r_outer_mm", "label": "Outer fillet radius Ro (mm)", "type": "number", "default": 0, "min": 0, "max": 5000, "step": 5},
+        {"name": "n_fillet", "label": "Fillet segments", "type": "number", "default": 12, "min": 4, "max": 64, "step": 1}
+      ]
+    },
+    {
+      "key": "psc_i_girder",
+      "display_name": "PSC I-Girder",
+      "category": "Girder",
+      "generator": "psc_i_girder",
+      "dimensions_generator": "psc_i_girder",
+      "parameters": [
+        {"name": "depth_mm", "label": "Overall depth D (mm)", "type": "number", "default": 1800, "min": 1, "max": 6000, "step": 10},
+        {"name": "top_flange_width_mm", "label": "Top flange width (mm)", "type": "number", "default": 900, "min": 1, "max": 6000, "step": 10},
+        {"name": "top_flange_thickness_mm", "label": "Top flange thickness (mm)", "type": "number", "default": 180, "min": 1, "max": 3000, "step": 5},
+        {"name": "web_width_mm", "label": "Web width (mm)", "type": "number", "default": 220, "min": 1, "max": 3000, "step": 5},
+        {"name": "bottom_flange_width_mm", "label": "Bottom flange width (mm)", "type": "number", "default": 700, "min": 1, "max": 6000, "step": 10},
+        {"name": "bottom_flange_thickness_mm", "label": "Bottom flange thickness (mm)", "type": "number", "default": 220, "min": 1, "max": 3000, "step": 5}
+      ]
+    },
+    {
+      "key": "u_girder",
+      "display_name": "U-Girder",
+      "category": "Girder",
+      "generator": "u_girder",
+      "dimensions_generator": "u_girder",
+      "parameters": [
+        {"name": "depth_mm", "label": "Overall depth D (mm)", "type": "number", "default": 1600, "min": 1, "max": 6000, "step": 10},
+        {"name": "top_width_mm", "label": "Top width (mm)", "type": "number", "default": 2200, "min": 1, "max": 12000, "step": 10},
+        {"name": "bottom_width_mm", "label": "Bottom width (mm)", "type": "number", "default": 1200, "min": 1, "max": 12000, "step": 10},
+        {"name": "wall_thickness_mm", "label": "Wall thickness (mm)", "type": "number", "default": 180, "min": 1, "max": 3000, "step": 5},
+        {"name": "bottom_slab_thickness_mm", "label": "Bottom slab thickness (mm)", "type": "number", "default": 220, "min": 1, "max": 3000, "step": 5}
+      ]
+    },
+    {
+      "key": "single_cell_box_girder",
+      "display_name": "Single Cell Box Girder",
+      "category": "Box Girder",
+      "generator": "single_cell_box_girder",
+      "dimensions_generator": "single_cell_box_girder",
+      "parameters": [
+        {"name": "width_mm", "label": "Width b (mm)", "type": "number", "default": 3000, "min": 1, "max": 30000, "step": 10},
+        {"name": "depth_mm", "label": "Depth D (mm)", "type": "number", "default": 1800, "min": 1, "max": 10000, "step": 10},
+        {"name": "top_slab_thickness_mm", "label": "Top slab thickness (mm)", "type": "number", "default": 220, "min": 1, "max": 3000, "step": 5},
+        {"name": "bottom_slab_thickness_mm", "label": "Bottom slab thickness (mm)", "type": "number", "default": 200, "min": 1, "max": 3000, "step": 5},
+        {"name": "web_thickness_mm", "label": "Web thickness (mm)", "type": "number", "default": 180, "min": 1, "max": 3000, "step": 5}
+      ]
+    }
+  ]
+}

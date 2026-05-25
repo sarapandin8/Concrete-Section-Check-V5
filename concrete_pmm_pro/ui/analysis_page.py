@@ -137,7 +137,7 @@ ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "Report / QA"]
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
 PMM_3D_LAYER_DEFAULTS = {
     "show_pmm_3d_surface": True,
-    "show_pmm_3d_raw_points": False,
+    "show_pmm_3d_current_pu_slice": True,
     "show_pmm_3d_selected_point": True,
     "show_pmm_3d_all_load_points": False,
 }
@@ -1124,6 +1124,7 @@ def _render_pmm_slice_dashboard(
 
     st.subheader("3D PMM Interaction View")
     st.caption("3D PMM surface is a visualization aid generated from stored PMM result data and does not recompute capacity.")
+    st.caption("Surface shading/mesh is interpolated between sampled PMM states for visualization.")
     st.checkbox(
         "Show 3D PMM interaction",
         value=False,
@@ -1135,7 +1136,7 @@ def _render_pmm_slice_dashboard(
         with opt_cols[0]:
             show_surface = st.checkbox("Show 3D PMM surface", value=True, key="show_pmm_3d_surface")
         with opt_cols[1]:
-            show_raw_points = st.checkbox("Show PMM raw points", value=False, key="show_pmm_3d_raw_points")
+            show_current_slice = st.checkbox("Show Current Pu Slice", value=True, key="show_pmm_3d_current_pu_slice")
         with opt_cols[2]:
             show_selected_point = st.checkbox("Show selected load point", value=True, key="show_pmm_3d_selected_point")
         with opt_cols[3]:
@@ -1146,7 +1147,7 @@ def _render_pmm_slice_dashboard(
             st.info("Enable at least one 3D display layer to show the PMM interaction view.")
         surface_figure_hash = (
             f"{result_hash or 'unhashed'}:{selected_load_case.name}:pmm_3d:"
-            f"{show_surface}:{show_raw_points}:{show_selected_point}:{show_all_load_points}"
+            f"{show_surface}:{show_current_slice}:{show_selected_point}:{show_all_load_points}"
         )
         if has_3d_layer and (
             st.session_state.get("pmm_interaction_surface_figure_hash") == surface_figure_hash
@@ -1162,7 +1163,8 @@ def _render_pmm_slice_dashboard(
                 selected_load_case,
                 dc_summary,
                 show_surface=show_surface,
-                show_raw_points=show_raw_points,
+                show_current_pu_slice=show_current_slice,
+                show_raw_points=False,
                 show_selected_load_point=show_selected_point,
                 show_all_uls_load_points=show_all_load_points,
             )

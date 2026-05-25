@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from concrete_pmm_pro.analysis.runtime import (
     ACCURACY_PRESET_RESOLUTIONS,
     AnalysisRuntimeMetadata,
@@ -16,7 +18,9 @@ from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisSettings
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar, RebarMaterial
 from concrete_pmm_pro.geometry.generators import rectangle
 from concrete_pmm_pro.serviceability import ServiceabilitySettings
+import concrete_pmm_pro.ui.analysis_page as analysis_page_module
 from concrete_pmm_pro.ui.analysis_page import (
+    PMM_3D_LAYER_DEFAULTS,
     PMM_3D_MASTER_TOGGLE_KEY,
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
@@ -181,6 +185,17 @@ def test_fast_and_high_accuracy_presets_adjust_existing_resolution_parameters() 
 def test_3d_pmm_display_toggle_defaults_off() -> None:
     assert _pmm_3d_display_enabled_from_state({}) is False
     assert _should_generate_pmm_3d_figure_from_state({}) is False
+    assert PMM_3D_LAYER_DEFAULTS["show_pmm_3d_surface"] is True
+    assert PMM_3D_LAYER_DEFAULTS["show_pmm_3d_current_pu_slice"] is True
+    assert PMM_3D_LAYER_DEFAULTS["show_pmm_3d_selected_point"] is True
+    assert PMM_3D_LAYER_DEFAULTS["show_pmm_3d_all_load_points"] is False
+
+
+def test_normal_3d_pmm_ui_does_not_expose_raw_points_toggle() -> None:
+    source = Path(analysis_page_module.__file__).read_text(encoding="utf-8")
+
+    assert "Show PMM raw points" not in source
+    assert "show_pmm_3d_raw_points" not in source
 
 
 def test_3d_pmm_display_toggle_does_not_change_solver_input_hash() -> None:
@@ -199,7 +214,7 @@ def test_3d_pmm_generation_is_skipped_when_master_toggle_is_false() -> None:
     state = {
         PMM_3D_MASTER_TOGGLE_KEY: False,
         "show_pmm_3d_surface": True,
-        "show_pmm_3d_raw_points": True,
+        "show_pmm_3d_current_pu_slice": True,
         "show_pmm_3d_selected_point": True,
         "show_pmm_3d_all_load_points": True,
     }
@@ -211,7 +226,7 @@ def test_3d_pmm_generation_requires_at_least_one_enabled_layer() -> None:
     state = {
         PMM_3D_MASTER_TOGGLE_KEY: True,
         "show_pmm_3d_surface": False,
-        "show_pmm_3d_raw_points": False,
+        "show_pmm_3d_current_pu_slice": False,
         "show_pmm_3d_selected_point": False,
         "show_pmm_3d_all_load_points": False,
     }

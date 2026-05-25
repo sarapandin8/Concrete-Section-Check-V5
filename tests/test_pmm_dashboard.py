@@ -11,6 +11,7 @@ from concrete_pmm_pro.analysis.capacity_check import check_uls_demands_against_r
 from concrete_pmm_pro.analysis.result_models import PMMPoint, PMMSolverResult
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.visualization.pmm_dashboard import (
+    STATUS_COLORS,
     build_selected_load_case_summary,
     demand_load_cases_to_display_dataframe,
     estimate_directional_capacity_from_slice,
@@ -284,6 +285,7 @@ def test_make_pmm_3d_dashboard_figure_returns_plotly_figure() -> None:
     fig = make_pmm_3d_dashboard_figure(_synthetic_pmm_df(), demand_df, load_case, _dc_summary())
 
     assert isinstance(fig, go.Figure)
+    assert not any(trace.name == "PMM raw points" for trace in fig.data)
 
 
 def test_make_pmm_3d_dashboard_figure_adds_surface_from_stored_pmm_grid() -> None:
@@ -325,10 +327,33 @@ def test_make_pmm_3d_dashboard_figure_keeps_raw_point_layer_available() -> None:
     assert all(trace.type != "surface" for trace in fig.data)
 
 
-def test_make_pmm_3d_dashboard_figure_can_show_all_uls_points() -> None:
+def test_make_pmm_3d_dashboard_default_slice_is_line_not_point_cloud() -> None:
     load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(_synthetic_interpolated_pmm_df(), demand_df, load_case, _dc_summary())
+
+    slice_trace = next(trace for trace in fig.data if trace.name == "Current Pu slice")
+    assert slice_trace.type == "scatter3d"
+    assert slice_trace.mode == "lines"
+    assert slice_trace.line.width == 5
+
+
+def test_make_pmm_3d_dashboard_selected_point_is_not_oversized() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(_synthetic_interpolated_pmm_df(), demand_df, load_case, _dc_summary())
+
+    selected_trace = next(trace for trace in fig.data if trace.name == "Selected load point")
+    assert 6 <= selected_trace.marker.size <= 8
+
+
+def test_make_pmm_3d_dashboard_figure_can_show_all_uls_points() -> None:
+    load_case = LoadCase(name="ULS-SELECT", Pu_N=1_000_000.0, Mux_Nmm=20_000_000.0, Muy_Nmm=0.0)
+    pass_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
     other_case = LoadCase(name="ULS-FAIL", Pu_N=1_000_000.0, Mux_Nmm=130_000_000.0, Muy_Nmm=0.0)
-    demand_df = demand_load_cases_to_display_dataframe([load_case, other_case])
+    demand_df = demand_load_cases_to_display_dataframe([pass_case, other_case])
 
     fig = make_pmm_3d_dashboard_figure(
         _synthetic_interpolated_pmm_df(),
@@ -341,7 +366,10 @@ def test_make_pmm_3d_dashboard_figure_can_show_all_uls_points() -> None:
         show_all_uls_load_points=True,
     )
 
-    assert any(trace.name == "All ULS load points" for trace in fig.data)
+    all_points_trace = next(trace for trace in fig.data if trace.name == "All ULS load points")
+    assert all_points_trace.mode == "markers"
+    assert all_points_trace.marker.size == 4
+    assert tuple(all_points_trace.marker.color) == (STATUS_COLORS["PASS"], STATUS_COLORS["FAIL"])
     assert any(trace.name == "Selected load point" for trace in fig.data)
 
 

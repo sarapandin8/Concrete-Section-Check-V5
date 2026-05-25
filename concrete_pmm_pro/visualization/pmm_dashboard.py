@@ -440,6 +440,26 @@ def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[lis
     return x_values, y_values, z_values
 
 
+def _closed_pu_slice_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
+    if slice_df.empty:
+        return slice_df
+    ordered = _sort_slice_by_angle(slice_df)
+    if len(ordered) > 2:
+        return pd.concat([ordered, ordered.iloc[[0]]], ignore_index=True)
+    return ordered
+
+
+def _demand_hover_text(row: pd.Series, dc_summary: DemandCapacitySummary | None) -> str:
+    combo_name = str(row["Combo Name"])
+    status = _status_for(combo_name, dc_summary)
+    dcr = _dcr_for(combo_name, dc_summary)
+    dcr_label = "N/A" if dcr is None else f"{dcr:.3f}"
+    return (
+        f"{combo_name}<br>Status={status}<br>D/C={dcr_label}<br>"
+        f"Pu={row['Pu_kN']:.2f} kN<br>Mux={row['Mux_kNm']:.2f} kN-m<br>Muy={row['Muy_kNm']:.2f} kN-m"
+    )
+
+
 def pmm_slice_export_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
     """Return selected PMM slice data with stable review/export columns."""
 
@@ -590,9 +610,10 @@ def make_pmm_3d_dashboard_figure(
     dc_summary: DemandCapacitySummary | None = None,
     *,
     show_surface: bool = True,
-    show_raw_points: bool = True,
+    show_current_pu_slice: bool = True,
+    show_raw_points: bool = False,
     show_selected_load_point: bool = True,
-    show_all_uls_load_points: bool = True,
+    show_all_uls_load_points: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
     if show_surface and not pmm_df.empty:
@@ -604,8 +625,8 @@ def make_pmm_3d_dashboard_figure(
                     x=x_grid,
                     y=y_grid,
                     z=z_grid,
-                    opacity=0.42,
-                    colorscale="Viridis",
+                    opacity=0.34,
+                    colorscale=[[0.0, "#d8dee9"], [0.5, "#9fb6d9"], [1.0, "#5477a8"]],
                     showscale=False,
                     name="PMM surface",
                     hovertemplate=(
@@ -621,74 +642,101 @@ def make_pmm_3d_dashboard_figure(
                     y=pmm_df["phiMny_kNm"],
                     z=pmm_df["phiPn_kN"],
                     alphahull=0,
-                    opacity=0.22,
-                    color="#7c9cff",
+                    opacity=0.30,
+                    color="#7f9bbf",
+                    flatshading=False,
                     name="PMM visual mesh",
                     hoverinfo="skip",
                 )
             )
 
-    if not pmm_df.empty:
+    if show_raw_points and not pmm_df.empty:
         hover = [
             f"P={row.phiPn_kN:.2f} kN<br>Mx={row.phiMnx_kNm:.2f} kN-m<br>My={row.phiMny_kNm:.2f} kN-m"
             f"<br>phi={getattr(row, 'phi', float('nan')):.3f}<br>{getattr(row, 'strain_condition', '')}"
             for row in pmm_df.itertuples()
         ]
-        if show_raw_points:
-            fig.add_trace(
-                go.Scatter3d(
-                    x=pmm_df["phiMnx_kNm"],
-                    y=pmm_df["phiMny_kNm"],
-                    z=pmm_df["phiPn_kN"],
-                    mode="markers",
-                    marker=dict(size=3, color=pmm_df["phiPn_kN"], colorscale="Viridis", opacity=0.42),
-                    text=hover,
-                    hoverinfo="text",
-                    name="PMM raw points",
-                )
+        fig.add_trace(
+            go.Scatter3d(
+                x=pmm_df["phiMnx_kNm"],
+                y=pmm_df["phiMny_kNm"],
+                z=pmm_df["phiPn_kN"],
+                mode="markers",
+                marker=dict(size=2.5, color="#475467", opacity=0.34),
+                text=hover,
+                hoverinfo="text",
+                name="PMM raw points",
             )
+        )
 
-    if selected_load_case is not None:
+    if show_current_pu_slice and selected_load_case is not None:
         slice_df = pmm_slice_at_pu(pmm_df, N_to_kN(selected_load_case.Pu_N))
         if not slice_df.empty:
+            slice_line_df = _closed_pu_slice_dataframe(slice_df)
             fig.add_trace(
                 go.Scatter3d(
-                    x=slice_df["phiMnx_kNm"],
-                    y=slice_df["phiMny_kNm"],
-                    z=slice_df["phiPn_kN"],
-                    mode="markers",
-                    marker=dict(size=4, color="#facc15", opacity=0.9),
+                    x=slice_line_df["phiMnx_kNm"],
+                    y=slice_line_df["phiMny_kNm"],
+                    z=slice_line_df["phiPn_kN"],
+                    mode="lines",
+                    line=dict(color="#d97706", width=5),
                     name="Current Pu slice",
+                    hovertemplate=(
+                        "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                        "<br>phiPn=%{z:.2f} kN<extra>Current Pu slice</extra>"
+                    ),
                 )
             )
 
     if show_all_uls_load_points and not demand_df.empty:
-        colors = [STATUS_COLORS.get(_status_for(str(row["Combo Name"]), dc_summary), STATUS_COLORS["NOT_CHECKED"]) for _, row in demand_df.iterrows()]
-        fig.add_trace(
-            go.Scatter3d(
-                x=demand_df["Mux_kNm"],
-                y=demand_df["Muy_kNm"],
-                z=demand_df["Pu_kN"],
-                mode="markers+text",
-                marker=dict(size=6, color=colors, symbol="circle", line=dict(width=1, color="#111827")),
-                text=demand_df["Combo Name"],
-                textposition="top center",
-                name="All ULS load points",
+        visible_demand_df = demand_df
+        if selected_load_case is not None and "Combo Name" in demand_df:
+            visible_demand_df = demand_df[demand_df["Combo Name"] != selected_load_case.name]
+        if not visible_demand_df.empty:
+            colors = [
+                STATUS_COLORS.get(_status_for(str(row["Combo Name"]), dc_summary), STATUS_COLORS["NOT_CHECKED"])
+                for _, row in visible_demand_df.iterrows()
+            ]
+            hover = [_demand_hover_text(row, dc_summary) for _, row in visible_demand_df.iterrows()]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=visible_demand_df["Mux_kNm"],
+                    y=visible_demand_df["Muy_kNm"],
+                    z=visible_demand_df["Pu_kN"],
+                    mode="markers",
+                    marker=dict(size=4, color=colors, symbol="circle", opacity=0.62, line=dict(width=0.8, color="#344054")),
+                    text=hover,
+                    hoverinfo="text",
+                    name="All ULS load points",
+                )
             )
-        )
 
     if show_selected_load_point and selected_load_case is not None:
         status = _status_for(selected_load_case.name, dc_summary)
+        dcr = _dcr_for(selected_load_case.name, dc_summary)
+        dc_result = _dc_result_for(selected_load_case.name, dc_summary)
         color = STATUS_COLORS.get(status, STATUS_COLORS["NOT_CHECKED"])
+        dcr_label = "N/A" if dcr is None else f"{dcr:.3f}"
+        capacity_method = "N/A" if dc_result is None or dc_result.capacity_method is None else dc_result.capacity_method
+        slice_method = "N/A" if dc_result is None or dc_result.slice_method is None else dc_result.slice_method
+        selected_hover = (
+            f"{selected_load_case.name}<br>Status={status}<br>D/C={dcr_label}<br>"
+            f"Pu={N_to_kN(selected_load_case.Pu_N):.2f} kN<br>"
+            f"Mux={Nmm_to_kNm(selected_load_case.Mux_Nmm):.2f} kN-m<br>"
+            f"Muy={Nmm_to_kNm(selected_load_case.Muy_Nmm):.2f} kN-m<br>"
+            f"Capacity method={capacity_method}<br>Slice method={slice_method}"
+        )
         fig.add_trace(
             go.Scatter3d(
                 x=[Nmm_to_kNm(selected_load_case.Mux_Nmm)],
                 y=[Nmm_to_kNm(selected_load_case.Muy_Nmm)],
                 z=[N_to_kN(selected_load_case.Pu_N)],
                 mode="markers+text",
-                marker=dict(size=10, color=color, symbol="circle", line=dict(width=3, color="#111827")),
+                marker=dict(size=7, color=color, symbol="circle", line=dict(width=2, color="#111827")),
                 text=[selected_load_case.name],
                 textposition="top center",
+                hovertext=[selected_hover],
+                hoverinfo="text",
                 name="Selected load point",
             )
         )

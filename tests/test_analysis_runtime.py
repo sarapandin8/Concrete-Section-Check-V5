@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concrete_pmm_pro.analysis.runtime import (
+    ACCURACY_PRESET_RESOLUTIONS,
+    AnalysisRuntimeMetadata,
     accuracy_preset_resolution,
     analysis_input_hash,
     apply_accuracy_preset_to_settings,
@@ -14,6 +16,11 @@ from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisSettings
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar, RebarMaterial
 from concrete_pmm_pro.geometry.generators import rectangle
 from concrete_pmm_pro.serviceability import ServiceabilitySettings
+from concrete_pmm_pro.ui.analysis_page import (
+    PMM_3D_MASTER_TOGGLE_KEY,
+    _pmm_3d_display_enabled_from_state,
+    _should_generate_pmm_3d_figure_from_state,
+)
 
 
 def _analysis_input(**kwargs) -> AnalysisInput:
@@ -119,12 +126,48 @@ def test_cache_status_reports_no_cached_result() -> None:
     assert recalculation_required("abc", None, False) is True
 
 
-def test_standard_accuracy_preset_matches_existing_default_resolution() -> None:
+def test_fast_accuracy_preset_uses_practical_resolution() -> None:
+    fast = accuracy_preset_resolution("Fast")
+
+    assert fast["neutral_axis_angle_steps"] == 18
+    assert fast["neutral_axis_depth_steps"] == 30
+
+
+def test_standard_accuracy_preset_uses_practical_default_resolution() -> None:
+    standard = accuracy_preset_resolution("Standard")
+
+    assert standard["neutral_axis_angle_steps"] == 24
+    assert standard["neutral_axis_depth_steps"] == 40
+
+
+def test_high_accuracy_preset_uses_practical_review_resolution() -> None:
+    high_accuracy = accuracy_preset_resolution("High Accuracy")
+
+    assert high_accuracy["neutral_axis_angle_steps"] == 36
+    assert high_accuracy["neutral_axis_depth_steps"] == 60
+
+
+def test_default_accuracy_preset_is_standard() -> None:
+    assert AnalysisRuntimeMetadata().accuracy_preset == "Standard"
+    assert accuracy_preset_resolution(None) == accuracy_preset_resolution("Standard")
+
+
+def test_visible_accuracy_presets_do_not_expose_heavy_resolutions() -> None:
+    visible_resolutions = {
+        (resolution["neutral_axis_angle_steps"], resolution["neutral_axis_depth_steps"])
+        for resolution in ACCURACY_PRESET_RESOLUTIONS.values()
+    }
+
+    assert (72, 120) not in visible_resolutions
+    assert (144, 180) not in visible_resolutions
+
+
+def test_standard_accuracy_preset_applies_practical_resolution() -> None:
     settings = AnalysisSettings()
     standard = apply_accuracy_preset_to_settings(settings, "Standard")
 
-    assert standard.neutral_axis_angle_steps == settings.neutral_axis_angle_steps
-    assert standard.neutral_axis_depth_steps == settings.neutral_axis_depth_steps
+    assert standard.neutral_axis_angle_steps == 24
+    assert standard.neutral_axis_depth_steps == 40
 
 
 def test_fast_and_high_accuracy_presets_adjust_existing_resolution_parameters() -> None:
@@ -133,6 +176,48 @@ def test_fast_and_high_accuracy_presets_adjust_existing_resolution_parameters() 
         accuracy_preset_resolution("High Accuracy")["neutral_axis_depth_steps"]
         > accuracy_preset_resolution("Standard")["neutral_axis_depth_steps"]
     )
+
+
+def test_3d_pmm_display_toggle_defaults_off() -> None:
+    assert _pmm_3d_display_enabled_from_state({}) is False
+    assert _should_generate_pmm_3d_figure_from_state({}) is False
+
+
+def test_3d_pmm_display_toggle_does_not_change_solver_input_hash() -> None:
+    analysis_input = _analysis_input()
+    state_off = {PMM_3D_MASTER_TOGGLE_KEY: False}
+    state_on = {PMM_3D_MASTER_TOGGLE_KEY: True}
+    base_hash = analysis_input_hash(analysis_input, "Standard")
+
+    assert _pmm_3d_display_enabled_from_state(state_off) is False
+    assert _pmm_3d_display_enabled_from_state(state_on) is True
+    assert analysis_input_hash(analysis_input, "Standard") == base_hash
+    assert analysis_input_hash(analysis_input, "Standard") == base_hash
+
+
+def test_3d_pmm_generation_is_skipped_when_master_toggle_is_false() -> None:
+    state = {
+        PMM_3D_MASTER_TOGGLE_KEY: False,
+        "show_pmm_3d_surface": True,
+        "show_pmm_3d_raw_points": True,
+        "show_pmm_3d_selected_point": True,
+        "show_pmm_3d_all_load_points": True,
+    }
+
+    assert _should_generate_pmm_3d_figure_from_state(state) is False
+
+
+def test_3d_pmm_generation_requires_at_least_one_enabled_layer() -> None:
+    state = {
+        PMM_3D_MASTER_TOGGLE_KEY: True,
+        "show_pmm_3d_surface": False,
+        "show_pmm_3d_raw_points": False,
+        "show_pmm_3d_selected_point": False,
+        "show_pmm_3d_all_load_points": False,
+    }
+
+    assert _should_generate_pmm_3d_figure_from_state({PMM_3D_MASTER_TOGGLE_KEY: True}) is True
+    assert _should_generate_pmm_3d_figure_from_state(state) is False
 
 
 def test_serviceability_input_hash_changes_with_serviceability_settings() -> None:

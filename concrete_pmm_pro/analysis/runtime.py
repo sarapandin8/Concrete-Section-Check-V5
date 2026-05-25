@@ -21,9 +21,9 @@ from concrete_pmm_pro.core.models import LoadCase
 AccuracyPreset = Literal["Fast", "Standard", "High Accuracy"]
 
 ACCURACY_PRESET_RESOLUTIONS: dict[AccuracyPreset, dict[str, int]] = {
-    "Fast": {"neutral_axis_angle_steps": 36, "neutral_axis_depth_steps": 60},
-    "Standard": {"neutral_axis_angle_steps": 72, "neutral_axis_depth_steps": 120},
-    "High Accuracy": {"neutral_axis_angle_steps": 144, "neutral_axis_depth_steps": 180},
+    "Fast": {"neutral_axis_angle_steps": 18, "neutral_axis_depth_steps": 30},
+    "Standard": {"neutral_axis_angle_steps": 24, "neutral_axis_depth_steps": 40},
+    "High Accuracy": {"neutral_axis_angle_steps": 36, "neutral_axis_depth_steps": 60},
 }
 
 _HASH_EXCLUDED_KEYS = {

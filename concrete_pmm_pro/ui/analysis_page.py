@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
+from html import escape
 
 import plotly.graph_objects as go
 import pandas as pd
@@ -132,6 +134,88 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
 )
 
 ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "Report / QA"]
+PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
+PMM_3D_LAYER_DEFAULTS = {
+    "show_pmm_3d_surface": True,
+    "show_pmm_3d_raw_points": False,
+    "show_pmm_3d_selected_point": True,
+    "show_pmm_3d_all_load_points": False,
+}
+
+_ANALYSIS_DASHBOARD_CSS = """
+<style>
+.cpmm-analysis-strip {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.72rem 0.82rem;
+  min-height: 98px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.035);
+}
+.cpmm-analysis-card {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.85rem 0.95rem;
+  margin-bottom: 0.55rem;
+}
+.cpmm-analysis-title {
+  color: #667085;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  margin-bottom: 0.22rem;
+}
+.cpmm-analysis-value {
+  color: #101828;
+  font-size: 1.0rem;
+  font-weight: 720;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+.cpmm-analysis-detail {
+  color: #667085;
+  font-size: 0.76rem;
+  line-height: 1.28;
+  margin-top: 0.22rem;
+}
+.cpmm-analysis-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.13rem 0.52rem;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0;
+  margin-top: 0.4rem;
+}
+.cpmm-analysis-badge.ready { color: #1f5f2a; background: #e7f5e8; }
+.cpmm-analysis-badge.warning { color: #7a4b00; background: #fff4d6; }
+.cpmm-analysis-badge.danger { color: #9f1f17; background: #fde8e7; }
+.cpmm-analysis-badge.info { color: #1849a9; background: #e8f1ff; }
+.cpmm-analysis-badge.neutral { color: #475467; background: #eef1f5; }
+.cpmm-analysis-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-bottom: 1px solid #edf0f5;
+  padding: 0.4rem 0;
+}
+.cpmm-analysis-kv-row:last-child { border-bottom: 0; }
+.cpmm-analysis-kv-label {
+  color: #667085;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.cpmm-analysis-kv-value {
+  color: #101828;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+</style>
+"""
 
 
 def _settings_from_session() -> AnalysisSettings:
@@ -148,6 +232,16 @@ def _analysis_accuracy_preset_from_session() -> str:
     if value in ACCURACY_PRESET_RESOLUTIONS:
         return str(value)
     return "Standard"
+
+
+def _pmm_3d_display_enabled_from_state(state: Mapping[str, object]) -> bool:
+    return bool(state.get(PMM_3D_MASTER_TOGGLE_KEY, False))
+
+
+def _should_generate_pmm_3d_figure_from_state(state: Mapping[str, object]) -> bool:
+    if not _pmm_3d_display_enabled_from_state(state):
+        return False
+    return any(bool(state.get(key, default)) for key, default in PMM_3D_LAYER_DEFAULTS.items())
 
 
 def _record_runtime_timing(timing: RuntimeTiming) -> None:
@@ -462,7 +556,7 @@ def _render_pmm_runtime_control_panel(
             preset_options,
             index=preset_options.index(preset),
             key="analysis_accuracy_preset",
-            help="Fast lowers the existing neutral-axis sweep resolution; Standard matches current defaults; High Accuracy increases sweep resolution.",
+            help="Fast is lowest-cost; Standard is the practical default; High Accuracy increases sweep resolution for review cases.",
         )
 
         resolution = accuracy_preset_resolution(st.session_state.get("analysis_accuracy_preset", preset))
@@ -708,7 +802,6 @@ def _render_input_summary() -> None:
                 st.session_state.get("load_cases", []),
                 result_hash,
             )
-            _render_demand_capacity_summary(dc_summary)
             _render_engineering_warnings(
                 _collect_engineering_warnings(
                     result.warnings,
@@ -745,6 +838,120 @@ def _render_input_summary() -> None:
 
 def _demand_capacity_display_dataframe(summary: DemandCapacitySummary) -> pd.DataFrame:
     return demand_capacity_result_to_display_dataframe(summary)
+
+
+def _analysis_status_style(value: object) -> str:
+    text = str(value).strip().upper()
+    if text in {"PASS", "READY", "YES", "AVAILABLE", "VALID"}:
+        return "ready"
+    if text in {"WARNING", "WARN", "OUT_OF_RANGE", "PARTIAL", "CAUTION"}:
+        return "warning"
+    if text in {"FAIL", "FAILED", "NOT_READY", "ERROR", "CRITICAL"}:
+        return "danger"
+    if text in {"N/A", "NA", "NONE", "NOT RUN", "NOT_CHECKED"}:
+        return "neutral"
+    return "info"
+
+
+def _format_optional_number(value: float | None, suffix: str = "", precision: int = 1) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.{precision}f}{suffix}"
+
+
+def _analysis_card_html(title: str, value: str, detail: str = "", status: str = "info", strong: bool = False) -> str:
+    status_class = status if status in {"ready", "warning", "danger", "info", "neutral"} else "info"
+    detail_html = f'<div class="cpmm-analysis-detail">{escape(detail)}</div>' if detail else ""
+    badge_html = f'<span class="cpmm-analysis-badge {status_class}">{escape(value)}</span>' if strong else ""
+    value_html = "" if strong else f'<div class="cpmm-analysis-value">{escape(value)}</div>'
+    return (
+        f'<div class="cpmm-analysis-strip">'
+        f'<div class="cpmm-analysis-title">{escape(title)}</div>'
+        f"{value_html}{badge_html}{detail_html}"
+        "</div>"
+    )
+
+
+def _render_analysis_summary_strip(cards: list[dict[str, object]], columns: int = 4) -> None:
+    for start in range(0, len(cards), columns):
+        cols = st.columns(min(columns, len(cards) - start))
+        for column, card in zip(cols, cards[start : start + columns]):
+            with column:
+                st.markdown(
+                    _analysis_card_html(
+                        str(card["title"]),
+                        str(card["value"]),
+                        str(card.get("detail", "")),
+                        str(card.get("status", "info")),
+                        bool(card.get("strong", False)),
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+
+def _analysis_kv_panel_html(rows: list[tuple[str, str]]) -> str:
+    rendered_rows = []
+    for label, value in rows:
+        rendered_rows.append(
+            '<div class="cpmm-analysis-kv-row">'
+            f'<div class="cpmm-analysis-kv-label">{escape(label)}</div>'
+            f'<div class="cpmm-analysis-kv-value">{escape(value)}</div>'
+            "</div>"
+        )
+    return '<div class="cpmm-analysis-card">' + "".join(rendered_rows) + "</div>"
+
+
+def _selected_case_summary_cards(summary: dict, dc_summary: DemandCapacitySummary) -> list[dict[str, object]]:
+    selected_detail = "Governing case" if summary["selected_combo"] == dc_summary.governing_combo else "Selected case"
+    return [
+        {
+            "title": "Selected / Governing",
+            "value": summary["selected_combo"],
+            "detail": selected_detail,
+            "status": "info",
+        },
+        {
+            "title": "Status",
+            "value": summary["status"].replace("_", " "),
+            "status": _analysis_status_style(summary["status"]),
+            "strong": True,
+        },
+        {
+            "title": "D/C Ratio",
+            "value": _format_optional_number(summary["dcr"], precision=3),
+            "detail": f"Max D/C {_format_optional_number(dc_summary.max_dcr, precision=3)}",
+            "status": _analysis_status_style(summary["status"]),
+        },
+        {"title": "Pu", "value": _format_optional_number(summary["Pu_kN"], " kN"), "status": "neutral"},
+        {"title": "Mux", "value": _format_optional_number(summary["Mux_kNm"], " kN-m"), "status": "neutral"},
+        {"title": "Muy", "value": _format_optional_number(summary["Muy_kNm"], " kN-m"), "status": "neutral"},
+        {
+            "title": "Available phiMn",
+            "value": _format_optional_number(summary["capacity_phiMn_kNm"], " kN-m"),
+            "detail": "At selected Pu",
+            "status": "neutral",
+        },
+        {"title": "Resultant Mu", "value": _format_optional_number(summary["Mu_kNm"], " kN-m"), "status": "neutral"},
+    ]
+
+
+def _render_selected_case_detail_panel(summary: dict, unbonded_ignored_count: int) -> None:
+    rows = [
+        ("Load case", str(summary["selected_combo"])),
+        ("D/C ratio", _format_optional_number(summary["dcr"], precision=3)),
+        ("Pu", _format_optional_number(summary["Pu_kN"], " kN")),
+        ("Mux / Muy", f"{_format_optional_number(summary['Mux_kNm'], ' kN-m')} / {_format_optional_number(summary['Muy_kNm'], ' kN-m')}"),
+        ("Available phiMn", _format_optional_number(summary["capacity_phiMn_kNm"], " kN-m")),
+        ("Analysis mode", str(summary["analysis_mode"])),
+        ("Prestress included", "Yes" if summary["prestress_included"] else "No"),
+        ("Unbonded ignored", f"{unbonded_ignored_count:,}"),
+        ("Slice method", str(summary.get("slice_method", "N/A"))),
+        ("Capacity method", str(summary.get("capacity_method", summary.get("dcr_method", "N/A")))),
+        ("Fallback used", "Yes" if summary.get("used_fallback") else "No"),
+    ]
+    st.markdown(_analysis_kv_panel_html(rows), unsafe_allow_html=True)
+    if summary.get("message"):
+        st.caption(f"Message: {summary['message']}")
 
 
 def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
@@ -818,10 +1025,11 @@ def _render_pmm_slice_dashboard(
     unbonded_ignored_count: int,
     result_hash: str | None,
 ) -> None:
-    st.subheader("PMM Slice Dashboard")
-    st.warning(
-        "PMM slice and demand/capacity values are based on the current prototype PMM point-cloud interpolation. "
-        "Final production-grade interpolation and validation are future work."
+    st.markdown(_ANALYSIS_DASHBOARD_CSS, unsafe_allow_html=True)
+    st.subheader("ULS / PMM Result Workspace")
+    st.caption(
+        "PMM slice, demand/capacity values, and 3D surface display are generated from stored PMM result data; "
+        "this view does not rerun the solver."
     )
     if bonded_prestress_included:
         st.warning("Bonded prestress contribution is included using the current prototype strain compatibility model.")
@@ -852,18 +1060,8 @@ def _render_pmm_slice_dashboard(
     selected_slice = pmm_slice_at_pu(pmm_df, N_to_kN(selected_load_case.Pu_N))
     selected_envelope = build_slice_envelope(selected_slice)
     slice_method = selected_slice.attrs.get("method", "unknown")
-    st.info(f"PMM slice method: {slice_method}.")
-    for warning in selected_slice.attrs.get("warnings", []):
-        st.warning(f"PMM slice warning: {warning}")
-    st.info(
-        f"PMM envelope method: {selected_envelope.method}; "
-        f"valid: {'Yes' if selected_envelope.is_valid else 'No'}; "
-        f"convex hull fallback: {'Yes' if selected_envelope.used_convex_hull else 'No'}."
-    )
     if selected_envelope.used_convex_hull:
         st.error("Convex hull fallback may overestimate PMM capacity. Treat the displayed D/C as approximate.")
-    for warning in selected_envelope.warnings:
-        st.warning(f"PMM envelope warning: {warning}")
     dashboard_warnings = _collect_engineering_warnings(
         selected_slice.attrs.get("warnings", []),
         selected_envelope.warnings,
@@ -871,6 +1069,15 @@ def _render_pmm_slice_dashboard(
     )
     if dashboard_warnings:
         _render_engineering_warnings(dashboard_warnings)
+
+    selected_summary = build_selected_load_case_summary(
+        selected_load_case,
+        dc_summary,
+        mode_label,
+        include_prestress and bonded_prestress_included,
+        selected_envelope,
+    )
+    _render_analysis_summary_strip(_selected_case_summary_cards(selected_summary, dc_summary), columns=4)
 
     slice_export_df = pmm_slice_export_dataframe(selected_slice)
     envelope_export_df = slice_envelope_export_dataframe(selected_envelope)
@@ -884,25 +1091,6 @@ def _render_pmm_slice_dashboard(
     }
     if selected_envelope.used_convex_hull:
         st.session_state["selected_slice_envelope"].attrs["used_convex_hull"] = True
-    export_cols = st.columns(2)
-    with export_cols[0]:
-        if not slice_export_df.empty:
-            st.download_button(
-                "Download Selected PMM Slice CSV",
-                data=slice_export_df.to_csv(index=False),
-                file_name="selected_pmm_slice.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-    with export_cols[1]:
-        if not envelope_export_df.empty:
-            st.download_button(
-                "Download Selected Slice Envelope CSV",
-                data=envelope_export_df.to_csv(index=False),
-                file_name="selected_pmm_slice_envelope.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
 
     demand_df = demand_load_cases_to_display_dataframe(active_uls)
     left, right = st.columns([2.1, 1.0])
@@ -931,24 +1119,41 @@ def _render_pmm_slice_dashboard(
             key="analysis_mux_muy_slice_dashboard",
         )
     with right:
-        selected_summary = build_selected_load_case_summary(
-            selected_load_case,
-            dc_summary,
-            mode_label,
-            include_prestress and bonded_prestress_included,
-            selected_envelope,
-        )
-        _render_pmm_summary_card(selected_summary, unbonded_ignored_count)
+        st.markdown("**Selected Case Details**")
+        _render_selected_case_detail_panel(selected_summary, unbonded_ignored_count)
 
-    show_3d = st.checkbox("Show 3D PMM interaction surface", value=True)
-    if show_3d:
-        surface_figure_hash = f"{result_hash or 'unhashed'}:{selected_load_case.name}:pmm_3d"
-        if (
+    st.subheader("3D PMM Interaction View")
+    st.caption("3D PMM surface is a visualization aid generated from stored PMM result data and does not recompute capacity.")
+    st.checkbox(
+        "Show 3D PMM interaction",
+        value=False,
+        key=PMM_3D_MASTER_TOGGLE_KEY,
+        help="Rendering the 3D PMM surface can be expensive. It uses stored PMM result data and does not rerun the solver.",
+    )
+    if _pmm_3d_display_enabled_from_state(st.session_state):
+        opt_cols = st.columns(4)
+        with opt_cols[0]:
+            show_surface = st.checkbox("Show 3D PMM surface", value=True, key="show_pmm_3d_surface")
+        with opt_cols[1]:
+            show_raw_points = st.checkbox("Show PMM raw points", value=False, key="show_pmm_3d_raw_points")
+        with opt_cols[2]:
+            show_selected_point = st.checkbox("Show selected load point", value=True, key="show_pmm_3d_selected_point")
+        with opt_cols[3]:
+            show_all_load_points = st.checkbox("Show all ULS load points", value=False, key="show_pmm_3d_all_load_points")
+        has_3d_layer = _should_generate_pmm_3d_figure_from_state(st.session_state)
+        surface_fig: go.Figure | None = None
+        if not has_3d_layer:
+            st.info("Enable at least one 3D display layer to show the PMM interaction view.")
+        surface_figure_hash = (
+            f"{result_hash or 'unhashed'}:{selected_load_case.name}:pmm_3d:"
+            f"{show_surface}:{show_raw_points}:{show_selected_point}:{show_all_load_points}"
+        )
+        if has_3d_layer and (
             st.session_state.get("pmm_interaction_surface_figure_hash") == surface_figure_hash
             and isinstance(st.session_state.get("pmm_interaction_surface_figure"), go.Figure)
         ):
             surface_fig = st.session_state.get("pmm_interaction_surface_figure")
-        else:
+        elif has_3d_layer:
             surface_fig, surface_timing = timed_call(
                 "3D PMM Plotly figure generation",
                 make_pmm_3d_dashboard_figure,
@@ -956,15 +1161,57 @@ def _render_pmm_slice_dashboard(
                 demand_df,
                 selected_load_case,
                 dc_summary,
+                show_surface=show_surface,
+                show_raw_points=show_raw_points,
+                show_selected_load_point=show_selected_point,
+                show_all_uls_load_points=show_all_load_points,
             )
             _record_runtime_timing(surface_timing)
             st.session_state["pmm_interaction_surface_figure"] = surface_fig
             st.session_state["pmm_interaction_surface_figure_hash"] = surface_figure_hash
-        st.plotly_chart(
-            surface_fig,
-            use_container_width=True,
-            key="analysis_3d_dashboard_chart",
+        if isinstance(surface_fig, go.Figure):
+            st.plotly_chart(
+                surface_fig,
+                use_container_width=True,
+                key="analysis_3d_dashboard_chart",
+            )
+    else:
+        st.info("3D PMM interaction rendering is off. Enable it only when a 3D capacity view is needed.")
+
+    with st.expander("PMM Slice / Capacity Method Details", expanded=False):
+        st.write(f"PMM slice method: {slice_method}.")
+        for warning in selected_slice.attrs.get("warnings", []):
+            st.warning(f"PMM slice warning: {warning}")
+        st.write(
+            f"PMM envelope method: {selected_envelope.method}; "
+            f"valid: {'Yes' if selected_envelope.is_valid else 'No'}; "
+            f"convex hull fallback: {'Yes' if selected_envelope.used_convex_hull else 'No'}."
         )
+        for warning in selected_envelope.warnings:
+            st.warning(f"PMM envelope warning: {warning}")
+        for warning in dc_summary.warnings:
+            st.warning(f"D/C warning: {warning}")
+        for item in dc_summary.info:
+            st.info(f"D/C info: {item}")
+        export_cols = st.columns(2)
+        with export_cols[0]:
+            if not slice_export_df.empty:
+                st.download_button(
+                    "Download Selected PMM Slice CSV",
+                    data=slice_export_df.to_csv(index=False),
+                    file_name="selected_pmm_slice.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+        with export_cols[1]:
+            if not envelope_export_df.empty:
+                st.download_button(
+                    "Download Selected Slice Envelope CSV",
+                    data=envelope_export_df.to_csv(index=False),
+                    file_name="selected_pmm_slice_envelope.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
     st.subheader("Load Case D/C Ranking")
     ranking_df = rank_load_cases_by_dcr(dc_summary)
@@ -972,6 +1219,13 @@ def _render_pmm_slice_dashboard(
         st.info("No active ULS demand/capacity results are available to rank.")
     else:
         st.dataframe(ranking_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download ULS D/C Result CSV",
+            data=ranking_df.to_csv(index=False),
+            file_name="uls_demand_capacity_result.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 
 def _dc_status_map(summary: DemandCapacitySummary | None) -> dict[str, tuple[str | None, str]]:

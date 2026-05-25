@@ -403,6 +403,43 @@ def _dc_result_for(combo_name: str, dc_summary: DemandCapacitySummary | None):
     return None
 
 
+def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[list[float]], list[list[float]]] | None:
+    """Build a Plotly surface grid from stored PMM result points.
+
+    The grid is only a visualization layer. It uses the existing theta/c rows
+    from the stored PMM dataframe and does not trigger any capacity calculation.
+    """
+
+    required = {"theta_rad", "c_mm", "phiMnx_kNm", "phiMny_kNm"}
+    if not required.issubset(pmm_df.columns):
+        return None
+    p_column = _slice_p_column(pmm_df)
+    surface_df = pmm_df[["theta_rad", "c_mm", "phiMnx_kNm", "phiMny_kNm", p_column]].dropna().copy()
+    if surface_df.empty or surface_df["theta_rad"].nunique() < 3 or surface_df["c_mm"].nunique() < 2:
+        return None
+
+    surface_df = (
+        surface_df.groupby(["theta_rad", "c_mm"], as_index=False)[["phiMnx_kNm", "phiMny_kNm", p_column]]
+        .mean()
+        .sort_values(["theta_rad", "c_mm"])
+    )
+    x_grid = surface_df.pivot(index="theta_rad", columns="c_mm", values="phiMnx_kNm").sort_index().sort_index(axis=1)
+    y_grid = surface_df.pivot(index="theta_rad", columns="c_mm", values="phiMny_kNm").sort_index().sort_index(axis=1)
+    z_grid = surface_df.pivot(index="theta_rad", columns="c_mm", values=p_column).sort_index().sort_index(axis=1)
+    if x_grid.shape[0] < 3 or x_grid.shape[1] < 2:
+        return None
+
+    x_values = x_grid.to_numpy().tolist()
+    y_values = y_grid.to_numpy().tolist()
+    z_values = z_grid.to_numpy().tolist()
+    theta_values = list(x_grid.index)
+    if theta_values and abs((float(theta_values[-1]) - float(theta_values[0])) % (2.0 * math.pi)) > 1.0e-6:
+        x_values.append(x_values[0])
+        y_values.append(y_values[0])
+        z_values.append(z_values[0])
+    return x_values, y_values, z_values
+
+
 def pmm_slice_export_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
     """Return selected PMM slice data with stable review/export columns."""
 
@@ -551,26 +588,65 @@ def make_pmm_3d_dashboard_figure(
     demand_df: pd.DataFrame,
     selected_load_case: LoadCase | None = None,
     dc_summary: DemandCapacitySummary | None = None,
+    *,
+    show_surface: bool = True,
+    show_raw_points: bool = True,
+    show_selected_load_point: bool = True,
+    show_all_uls_load_points: bool = True,
 ) -> go.Figure:
     fig = go.Figure()
+    if show_surface and not pmm_df.empty:
+        surface_grid = _pmm_surface_grid(pmm_df)
+        if surface_grid is not None:
+            x_grid, y_grid, z_grid = surface_grid
+            fig.add_trace(
+                go.Surface(
+                    x=x_grid,
+                    y=y_grid,
+                    z=z_grid,
+                    opacity=0.42,
+                    colorscale="Viridis",
+                    showscale=False,
+                    name="PMM surface",
+                    hovertemplate=(
+                        "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                        "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
+                    ),
+                )
+            )
+        elif {"phiMnx_kNm", "phiMny_kNm", "phiPn_kN"}.issubset(pmm_df.columns) and len(pmm_df) >= 4:
+            fig.add_trace(
+                go.Mesh3d(
+                    x=pmm_df["phiMnx_kNm"],
+                    y=pmm_df["phiMny_kNm"],
+                    z=pmm_df["phiPn_kN"],
+                    alphahull=0,
+                    opacity=0.22,
+                    color="#7c9cff",
+                    name="PMM visual mesh",
+                    hoverinfo="skip",
+                )
+            )
+
     if not pmm_df.empty:
         hover = [
             f"P={row.phiPn_kN:.2f} kN<br>Mx={row.phiMnx_kNm:.2f} kN-m<br>My={row.phiMny_kNm:.2f} kN-m"
             f"<br>phi={getattr(row, 'phi', float('nan')):.3f}<br>{getattr(row, 'strain_condition', '')}"
             for row in pmm_df.itertuples()
         ]
-        fig.add_trace(
-            go.Scatter3d(
-                x=pmm_df["phiMnx_kNm"],
-                y=pmm_df["phiMny_kNm"],
-                z=pmm_df["phiPn_kN"],
-                mode="markers",
-                marker=dict(size=3, color=pmm_df["phiPn_kN"], colorscale="Viridis", opacity=0.45),
-                text=hover,
-                hoverinfo="text",
-                name="PMM points",
+        if show_raw_points:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=pmm_df["phiMnx_kNm"],
+                    y=pmm_df["phiMny_kNm"],
+                    z=pmm_df["phiPn_kN"],
+                    mode="markers",
+                    marker=dict(size=3, color=pmm_df["phiPn_kN"], colorscale="Viridis", opacity=0.42),
+                    text=hover,
+                    hoverinfo="text",
+                    name="PMM raw points",
+                )
             )
-        )
 
     if selected_load_case is not None:
         slice_df = pmm_slice_at_pu(pmm_df, N_to_kN(selected_load_case.Pu_N))
@@ -586,7 +662,7 @@ def make_pmm_3d_dashboard_figure(
                 )
             )
 
-    if not demand_df.empty:
+    if show_all_uls_load_points and not demand_df.empty:
         colors = [STATUS_COLORS.get(_status_for(str(row["Combo Name"]), dc_summary), STATUS_COLORS["NOT_CHECKED"]) for _, row in demand_df.iterrows()]
         fig.add_trace(
             go.Scatter3d(
@@ -594,14 +670,14 @@ def make_pmm_3d_dashboard_figure(
                 y=demand_df["Muy_kNm"],
                 z=demand_df["Pu_kN"],
                 mode="markers+text",
-                marker=dict(size=6, color=colors, symbol="diamond"),
+                marker=dict(size=6, color=colors, symbol="circle", line=dict(width=1, color="#111827")),
                 text=demand_df["Combo Name"],
                 textposition="top center",
                 name="All ULS load points",
             )
         )
 
-    if selected_load_case is not None:
+    if show_selected_load_point and selected_load_case is not None:
         status = _status_for(selected_load_case.name, dc_summary)
         color = STATUS_COLORS.get(status, STATUS_COLORS["NOT_CHECKED"])
         fig.add_trace(
@@ -610,7 +686,7 @@ def make_pmm_3d_dashboard_figure(
                 y=[Nmm_to_kNm(selected_load_case.Muy_Nmm)],
                 z=[N_to_kN(selected_load_case.Pu_N)],
                 mode="markers+text",
-                marker=dict(size=10, color=color, symbol="diamond", line=dict(width=2, color="#111827")),
+                marker=dict(size=10, color=color, symbol="circle", line=dict(width=3, color="#111827")),
                 text=[selected_load_case.name],
                 textposition="top center",
                 name="Selected load point",
@@ -618,13 +694,14 @@ def make_pmm_3d_dashboard_figure(
         )
 
     fig.update_layout(
-        title="PMM 3D Interaction Dashboard",
+        title="3D PMM Interaction View",
         scene=dict(
-            xaxis_title="phiMnx / Mux (kN-m)",
-            yaxis_title="phiMny / Muy (kN-m)",
-            zaxis_title="phiPn / Pu (kN)",
+            xaxis_title="Mux / phiMnx (kN-m)",
+            yaxis_title="Muy / phiMny (kN-m)",
+            zaxis_title="P / phiPn (kN)",
         ),
         legend=dict(orientation="h"),
+        margin=dict(l=0, r=0, t=45, b=0),
     )
     return fig
 

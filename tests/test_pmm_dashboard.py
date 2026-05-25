@@ -286,6 +286,65 @@ def test_make_pmm_3d_dashboard_figure_returns_plotly_figure() -> None:
     assert isinstance(fig, go.Figure)
 
 
+def test_make_pmm_3d_dashboard_figure_adds_surface_from_stored_pmm_grid() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(
+        _synthetic_interpolated_pmm_df(),
+        demand_df,
+        load_case,
+        _dc_summary(),
+        show_surface=True,
+        show_raw_points=False,
+        show_all_uls_load_points=False,
+    )
+
+    trace_types = [trace.type for trace in fig.data]
+    assert "surface" in trace_types
+    assert "scatter3d" in trace_types
+    assert any(trace.name == "Selected load point" for trace in fig.data)
+
+
+def test_make_pmm_3d_dashboard_figure_keeps_raw_point_layer_available() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(
+        _synthetic_interpolated_pmm_df(),
+        demand_df,
+        load_case,
+        _dc_summary(),
+        show_surface=False,
+        show_raw_points=True,
+        show_selected_load_point=False,
+        show_all_uls_load_points=False,
+    )
+
+    assert any(trace.name == "PMM raw points" for trace in fig.data)
+    assert all(trace.type != "surface" for trace in fig.data)
+
+
+def test_make_pmm_3d_dashboard_figure_can_show_all_uls_points() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    other_case = LoadCase(name="ULS-FAIL", Pu_N=1_000_000.0, Mux_Nmm=130_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case, other_case])
+
+    fig = make_pmm_3d_dashboard_figure(
+        _synthetic_interpolated_pmm_df(),
+        demand_df,
+        load_case,
+        _dc_summary(),
+        show_surface=False,
+        show_raw_points=False,
+        show_selected_load_point=True,
+        show_all_uls_load_points=True,
+    )
+
+    assert any(trace.name == "All ULS load points" for trace in fig.data)
+    assert any(trace.name == "Selected load point" for trace in fig.data)
+
+
 def test_analysis_page_imports_without_error_for_pmm_dashboard() -> None:
     from concrete_pmm_pro.ui import analysis_page
 

@@ -14,8 +14,13 @@ from shapely.geometry import Point, Polygon
 from concrete_pmm_pro.core.models import PrestressElement, SectionGeometry
 from concrete_pmm_pro.core.units import kN_to_N
 from concrete_pmm_pro.data.prestress_tendon_products import (
+    DEFAULT_STRAND_DIAMETER_MM,
+    DEFAULT_STRAND_EP_MPA,
+    DEFAULT_STRAND_FPY_MPA,
+    DEFAULT_STRAND_FPU_MPA,
     TendonProduct,
     apply_tendon_product_to_row,
+    equivalent_steel_diameter_mm,
     get_tendon_product,
     list_tendon_products,
     make_custom_tendon_product,
@@ -88,6 +93,7 @@ def _default_prestress_table(prestress_db: pd.DataFrame) -> pd.DataFrame:
                 "y_mm": -250.0,
                 "Area_mm2": float(first["area_mm2"]),
                 "Diameter_mm": float(first["diameter_mm"]),
+                "Eq Steel Dia_mm": None,
                 "fpy_MPa": float(first["fpy_MPa"]),
                 "fpu_MPa": float(first["fpu_MPa"]),
                 "Ep_MPa": float(first["Ep_MPa"]),
@@ -113,6 +119,7 @@ def _default_prestress_table(prestress_db: pd.DataFrame) -> pd.DataFrame:
                 "y_mm": -250.0,
                 "Area_mm2": float(second["area_mm2"]),
                 "Diameter_mm": float(second["diameter_mm"]),
+                "Eq Steel Dia_mm": None,
                 "fpy_MPa": float(second["fpy_MPa"]),
                 "fpu_MPa": float(second["fpu_MPa"]),
                 "Ep_MPa": float(second["Ep_MPa"]),
@@ -146,6 +153,7 @@ def _row_is_blank(row: pd.Series) -> bool:
         "y_mm",
         "Area_mm2",
         "Diameter_mm",
+        "Eq Steel Dia_mm",
         "fpy_MPa",
         "fpu_MPa",
         "Ep_MPa",
@@ -216,9 +224,10 @@ def _blank_prestress_row(label: str = "PS") -> dict[str, Any]:
         "y_mm": 0.0,
         "Area_mm2": None,
         "Diameter_mm": None,
+        "Eq Steel Dia_mm": None,
         "fpy_MPa": None,
-        "fpu_MPa": 1860.0,
-        "Ep_MPa": 195000.0,
+        "fpu_MPa": DEFAULT_STRAND_FPU_MPA,
+        "Ep_MPa": DEFAULT_STRAND_EP_MPA,
         "Input Mode": "Passive",
         "Pe_eff_kN": 0.0,
         "fpe_MPa": 0.0,
@@ -254,6 +263,61 @@ def _product_options_for_table(prestress_db: pd.DataFrame, prestress_table: pd.D
     if prestress_table is not None and "Product" in prestress_table.columns:
         options.extend(str(product).strip() for product in prestress_table["Product"].tolist() if not _is_blank(product))
     return list(dict.fromkeys(options))
+
+
+def _looks_like_15_2mm_tendon_group(row: pd.Series) -> bool:
+    steel_type = "" if _is_blank(row.get("Steel Type")) else str(row.get("Steel Type")).strip()
+    if steel_type != "tendon_group":
+        return False
+    product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
+    if get_tendon_product(product) is not None or product.startswith("6-"):
+        return True
+    strand_count = _to_float(row.get("Strand Count"))
+    strand_diameter = _to_float(row.get("Strand Diameter_mm"))
+    if strand_count is None:
+        return False
+    return strand_diameter is None or abs(strand_diameter - DEFAULT_STRAND_DIAMETER_MM) < 1e-6
+
+
+def _normalize_prestress_table_for_display(table: pd.DataFrame) -> pd.DataFrame:
+    normalized = pd.DataFrame(table).copy()
+    if normalized.empty:
+        return normalized
+    for column in ("Diameter_mm", "fpy_MPa", "fpu_MPa", "Ep_MPa", "Strand Count", "Strand Diameter_mm", "Strand Area_mm2", "Breaking Load_kN", "Duct Type", "Duct ID_mm"):
+        if column not in normalized.columns:
+            normalized[column] = None
+    normalized["Diameter_mm"] = normalized["Diameter_mm"].astype("object")
+    if "Eq Steel Dia_mm" not in normalized.columns:
+        insert_at = normalized.columns.get_loc("Diameter_mm") + 1 if "Diameter_mm" in normalized.columns else len(normalized.columns)
+        normalized.insert(insert_at, "Eq Steel Dia_mm", None)
+    for index, row in normalized.iterrows():
+        product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
+        tendon_product = get_tendon_product(product)
+        is_tendon_group = str(row.get("Steel Type") or "").strip() == "tendon_group" or tendon_product is not None
+        if is_tendon_group:
+            normalized.at[index, "Steel Type"] = "tendon_group"
+            normalized.at[index, "Diameter_mm"] = None
+            if tendon_product is not None:
+                normalized.at[index, "Area_mm2"] = tendon_product.tendon_area_mm2
+                normalized.at[index, "fpy_MPa"] = tendon_product.fpy_MPa
+                normalized.at[index, "fpu_MPa"] = tendon_product.fpu_MPa
+                normalized.at[index, "Ep_MPa"] = tendon_product.Ep_MPa
+                normalized.at[index, "Strand Count"] = tendon_product.strand_count
+                normalized.at[index, "Strand Diameter_mm"] = tendon_product.strand_diameter_mm
+                normalized.at[index, "Strand Area_mm2"] = tendon_product.strand_area_mm2
+                normalized.at[index, "Breaking Load_kN"] = tendon_product.breaking_load_kN
+                normalized.at[index, "Duct Type"] = tendon_product.duct_type or ""
+                normalized.at[index, "Duct ID_mm"] = tendon_product.duct_id_mm
+            elif _looks_like_15_2mm_tendon_group(normalized.loc[index]):
+                if _is_blank(normalized.at[index, "fpy_MPa"]):
+                    normalized.at[index, "fpy_MPa"] = DEFAULT_STRAND_FPY_MPA
+                if _is_blank(normalized.at[index, "fpu_MPa"]):
+                    normalized.at[index, "fpu_MPa"] = DEFAULT_STRAND_FPU_MPA
+                if _is_blank(normalized.at[index, "Ep_MPa"]):
+                    normalized.at[index, "Ep_MPa"] = DEFAULT_STRAND_EP_MPA
+        area_mm2 = _to_float(normalized.at[index, "Area_mm2"] if "Area_mm2" in normalized.columns else None)
+        normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(area_mm2) if is_tendon_group else None
+    return normalized
 
 
 def _tendon_product_summary_dataframe(products: list[TendonProduct]) -> pd.DataFrame:
@@ -297,9 +361,9 @@ def _resolve_product_values(row: pd.Series, prestress_db: pd.DataFrame, row_numb
                 "steel_type": "tendon_group",
                 "area_mm2": tendon_product.tendon_area_mm2,
                 "diameter_mm": None,
-                "fpy_mpa": None,
+                "fpy_mpa": tendon_product.fpy_MPa,
                 "fpu_mpa": tendon_product.fpu_MPa,
-                "ep_mpa": 195000.0,
+                "ep_mpa": tendon_product.Ep_MPa,
             }
         )
         return values, errors, warnings
@@ -326,6 +390,13 @@ def _resolve_product_values(row: pd.Series, prestress_db: pd.DataFrame, row_numb
         if values["area_mm2"] is not None:
             values["material_name"] = product
             if values["steel_type"] == "tendon_group" and not _is_blank(row.get("Strand Count")):
+                values["diameter_mm"] = None
+                if _looks_like_15_2mm_tendon_group(row):
+                    if values["fpy_mpa"] is None:
+                        values["fpy_mpa"] = DEFAULT_STRAND_FPY_MPA
+                    if values["fpu_mpa"] is None:
+                        values["fpu_mpa"] = DEFAULT_STRAND_FPU_MPA
+                    values["ep_mpa"] = values["ep_mpa"] or DEFAULT_STRAND_EP_MPA
                 return values, errors, warnings
             warnings.append(f"Row {row_number}: Product '{product}' is not in the database; using manual values as custom prestress steel.")
         else:
@@ -586,7 +657,7 @@ def _render_tendon_product_tools() -> None:
         st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
         row = apply_tendon_product_to_row(base_row, product)
         if st.button("Add standard tendon to table", use_container_width=True):
-            st.session_state["prestress_table"] = _append_prestress_row(pd.DataFrame(current_table), row)
+            st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
             st.success(f"Added tendon product {product.label}. Pe_eff remains user-controlled.")
         return
 
@@ -611,7 +682,7 @@ def _render_tendon_product_tools() -> None:
     st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
     row = apply_tendon_product_to_row(base_row, product)
     if st.button("Add custom tendon to table", use_container_width=True):
-        st.session_state["prestress_table"] = _append_prestress_row(pd.DataFrame(current_table), row)
+        st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
         st.success(f"Added custom tendon {product.label}. Pe_eff remains user-controlled.")
 
 
@@ -657,6 +728,7 @@ def render_prestress_page() -> None:
 
     if "prestress_table" not in st.session_state:
         st.session_state["prestress_table"] = _default_prestress_table(prestress_db)
+    st.session_state["prestress_table"] = _normalize_prestress_table_for_display(pd.DataFrame(st.session_state["prestress_table"]))
 
     _render_tendon_product_tools()
 
@@ -680,6 +752,7 @@ def render_prestress_page() -> None:
             "y_mm": st.column_config.NumberColumn("y_mm"),
             "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
             "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
+            "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
             "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
             "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
             "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
@@ -698,6 +771,7 @@ def render_prestress_page() -> None:
         },
         key="prestress_data_editor",
     )
+    edited_df = _normalize_prestress_table_for_display(edited_df)
     st.session_state["prestress_table"] = edited_df
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)

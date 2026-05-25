@@ -9,6 +9,7 @@ from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
+    _normalize_prestress_table_for_display,
     _product_options_for_table,
     load_prestress_steel_database,
     prestress_elements_from_dataframe,
@@ -197,6 +198,7 @@ def test_standard_tendon_product_row_parses_as_tendon_group_area_without_pe_over
     assert element.steel_type == "tendon_group"
     assert element.area_mm2 == pytest.approx(1680.0)
     assert element.diameter_mm is None
+    assert element.fpy_mpa == pytest.approx(1580.0)
     assert element.fpu_mpa == pytest.approx(1860.0)
     assert element.pe_eff_n == pytest.approx(500_000.0)
 
@@ -213,6 +215,8 @@ def test_custom_tendon_product_row_parses_without_using_duct_as_diameter() -> No
     assert element.steel_type == "tendon_group"
     assert element.area_mm2 == pytest.approx(3500.0)
     assert element.diameter_mm is None
+    assert element.fpy_mpa == pytest.approx(1580.0)
+    assert element.fpu_mpa == pytest.approx(1860.0)
     assert element.count == 1
 
 
@@ -237,6 +241,31 @@ def test_product_options_include_standard_products_and_current_custom_labels() -
 def test_product_creation_modes_exclude_manual_custom_table() -> None:
     assert TENDON_PRODUCT_CREATION_MODES == ["Standard tendon product", "Custom tendon"]
     assert "Manual / custom table" not in TENDON_PRODUCT_CREATION_MODES
+
+
+def test_tendon_group_table_display_normalizes_diameter_and_equivalent_diameter() -> None:
+    table = pd.DataFrame(
+        [
+            _row(
+                Product="6-25",
+                **{
+                    "Steel Type": "tendon_group",
+                    "Area_mm2": 3500.0,
+                    "Diameter_mm": 125.0,
+                    "Strand Count": 25,
+                    "fpy_MPa": None,
+                    "fpu_MPa": 1860.0,
+                },
+            )
+        ]
+    )
+
+    normalized = _normalize_prestress_table_for_display(table)
+
+    assert normalized.loc[0, "Diameter_mm"] is None
+    assert normalized.loc[0, "Eq Steel Dia_mm"] == pytest.approx(66.8, abs=0.05)
+    assert normalized.loc[0, "fpy_MPa"] == pytest.approx(1580.0)
+    assert normalized.loc[0, "Count"] == 1
 
 
 def test_inactive_rows_are_ignored() -> None:

@@ -106,7 +106,7 @@ def test_project_to_json_returns_valid_json() -> None:
     parsed = json.loads(json_text)
 
     assert parsed["project_name"] == "Bridge Pier P1"
-    assert parsed["version"] == "PS.DB1.1"
+    assert parsed["version"] == "PS.DB1.2"
     assert parsed["analysis_mode_settings"]["member_type"] == "general_section"
     assert parsed["include_default_stress_check_points"] is False
     assert parsed["custom_stress_check_points"][1]["active"] is False
@@ -236,6 +236,10 @@ def test_prestress_to_table_restores_standard_tendon_metadata_from_product_label
     assert row["Steel Type"] == "tendon_group"
     assert row["Area_mm2"] == pytest.approx(1680.0)
     assert row["Diameter_mm"] is None
+    assert row["Eq Steel Dia_mm"] == pytest.approx(46.27, abs=0.03)
+    assert row["fpy_MPa"] == pytest.approx(1580.0)
+    assert row["fpu_MPa"] == pytest.approx(1860.0)
+    assert row["Ep_MPa"] == pytest.approx(195000.0)
     assert row["Strand Count"] == 12
     assert row["Breaking Load_kN"] == pytest.approx(3120.0)
     assert row["Duct ID_mm"] == pytest.approx(80.0)
@@ -271,6 +275,10 @@ def test_prestress_to_table_preserves_custom_tendon_metadata_without_inventing_d
     assert row["Product"] == "6-25"
     assert row["Area_mm2"] == pytest.approx(3500.0)
     assert row["Diameter_mm"] is None
+    assert row["Eq Steel Dia_mm"] == pytest.approx(66.8, abs=0.05)
+    assert row["fpy_MPa"] == pytest.approx(1580.0)
+    assert row["fpu_MPa"] == pytest.approx(1860.0)
+    assert row["Ep_MPa"] == pytest.approx(195000.0)
     assert row["Strand Count"] == 25
     assert row["Breaking Load_kN"] == pytest.approx(6500.0)
     assert row["Duct Type"] == ""
@@ -298,6 +306,9 @@ def test_project_from_session_state_stores_prestress_table_metadata_for_reload()
                     "Product": "6-25",
                     "Steel Type": "tendon_group",
                     "Area_mm2": 3500.0,
+                    "fpy_MPa": 1580.0,
+                    "fpu_MPa": 1860.0,
+                    "Ep_MPa": 195000.0,
                     "Strand Count": 25,
                     "Breaking Load_kN": 6500.0,
                     "Duct Type": "Round duct",
@@ -309,6 +320,7 @@ def test_project_from_session_state_stores_prestress_table_metadata_for_reload()
 
     metadata = project.metadata["prestress_table_metadata"][0]
     assert metadata["Product"] == "6-25"
+    assert metadata["fpy_MPa"] == pytest.approx(1580.0)
     assert metadata["Strand Count"] == 25
     assert metadata["Breaking Load_kN"] == pytest.approx(6500.0)
     assert metadata["Duct ID_mm"] == pytest.approx(125.0)

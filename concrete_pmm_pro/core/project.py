@@ -34,7 +34,7 @@ class ProjectModel(BaseModel):
     description: str | None = None
     unit_system: str = "mm-MPa-N"
     code: str = "ACI 318"
-    version: str = "PS.DB1.1"
+    version: str = "PS.DB1.2"
 
     section_preset_key: str | None = None
     section_preset_name: str | None = None

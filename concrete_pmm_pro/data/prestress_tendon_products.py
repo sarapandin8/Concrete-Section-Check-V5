@@ -8,12 +8,15 @@ only; effective prestress remains a user-controlled input.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import pi, sqrt
 from typing import Any
 
 
 DEFAULT_STRAND_DIAMETER_MM = 15.2
 DEFAULT_STRAND_AREA_MM2 = 140.0
+DEFAULT_STRAND_FPY_MPA = 1580.0
 DEFAULT_STRAND_FPU_MPA = 1860.0
+DEFAULT_STRAND_EP_MPA = 195000.0
 DEFAULT_BREAKING_LOAD_PER_STRAND_KN = 260.0
 
 
@@ -26,7 +29,9 @@ class TendonProduct:
     strand_area_mm2: float = DEFAULT_STRAND_AREA_MM2
     tendon_area_mm2: float = DEFAULT_STRAND_AREA_MM2
     breaking_load_kN: float = DEFAULT_BREAKING_LOAD_PER_STRAND_KN
+    fpy_MPa: float = DEFAULT_STRAND_FPY_MPA
     fpu_MPa: float = DEFAULT_STRAND_FPU_MPA
+    Ep_MPa: float = DEFAULT_STRAND_EP_MPA
     duct_type: str | None = None
     duct_id_mm: float | None = None
     typical_use: str | None = None
@@ -40,7 +45,9 @@ class TendonProduct:
             "strand_area_mm2": self.strand_area_mm2,
             "tendon_area_mm2": self.tendon_area_mm2,
             "breaking_load_kN": self.breaking_load_kN,
+            "fpy_MPa": self.fpy_MPa,
             "fpu_MPa": self.fpu_MPa,
+            "Ep_MPa": self.Ep_MPa,
             "duct_type": self.duct_type,
             "duct_id_mm": self.duct_id_mm,
             "typical_use": self.typical_use,
@@ -109,13 +116,21 @@ def get_tendon_product(label: str) -> TendonProduct | None:
     return None
 
 
+def equivalent_steel_diameter_mm(area_mm2: float | None) -> float | None:
+    if area_mm2 is None or area_mm2 <= 0:
+        return None
+    return sqrt(4.0 * area_mm2 / pi)
+
+
 def make_custom_tendon_product(
     strand_count: int,
     label: str | None = None,
     strand_area_mm2: float = DEFAULT_STRAND_AREA_MM2,
     breaking_load_per_strand_kN: float = DEFAULT_BREAKING_LOAD_PER_STRAND_KN,
     strand_diameter_mm: float = DEFAULT_STRAND_DIAMETER_MM,
+    fpy_MPa: float = DEFAULT_STRAND_FPY_MPA,
     fpu_MPa: float = DEFAULT_STRAND_FPU_MPA,
+    Ep_MPa: float = DEFAULT_STRAND_EP_MPA,
     duct_id_mm: float | None = None,
     duct_type: str | None = None,
 ) -> TendonProduct:
@@ -127,8 +142,14 @@ def make_custom_tendon_product(
         raise ValueError("breaking_load_per_strand_kN must be positive")
     if strand_diameter_mm <= 0:
         raise ValueError("strand_diameter_mm must be positive")
+    if fpy_MPa <= 0:
+        raise ValueError("fpy_MPa must be positive")
     if fpu_MPa <= 0:
         raise ValueError("fpu_MPa must be positive")
+    if fpy_MPa >= fpu_MPa:
+        raise ValueError("fpy_MPa must be less than fpu_MPa")
+    if Ep_MPa <= 0:
+        raise ValueError("Ep_MPa must be positive")
     resolved_label = str(label).strip() if label and str(label).strip() else f"6-{strand_count}"
     return TendonProduct(
         label=resolved_label,
@@ -138,7 +159,9 @@ def make_custom_tendon_product(
         strand_area_mm2=strand_area_mm2,
         tendon_area_mm2=strand_count * strand_area_mm2,
         breaking_load_kN=strand_count * breaking_load_per_strand_kN,
+        fpy_MPa=fpy_MPa,
         fpu_MPa=fpu_MPa,
+        Ep_MPa=Ep_MPa,
         duct_type=duct_type,
         duct_id_mm=duct_id_mm,
     )
@@ -153,9 +176,10 @@ def apply_tendon_product_to_row(row: dict[str, Any], product_label_or_product: s
     updated["Product"] = product.label
     updated["Area_mm2"] = product.tendon_area_mm2
     updated["Diameter_mm"] = None
+    updated["Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(product.tendon_area_mm2)
+    updated["fpy_MPa"] = product.fpy_MPa
     updated["fpu_MPa"] = product.fpu_MPa
-    if updated.get("Ep_MPa") is None:
-        updated["Ep_MPa"] = 195000.0
+    updated["Ep_MPa"] = product.Ep_MPa
     updated.setdefault("Count", 1)
     updated["Strand Count"] = product.strand_count
     updated["Strand Diameter_mm"] = product.strand_diameter_mm

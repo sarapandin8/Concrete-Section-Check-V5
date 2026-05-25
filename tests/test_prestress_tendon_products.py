@@ -99,7 +99,10 @@ def test_apply_standard_tendon_product_to_row_updates_area_and_reference_fields(
     assert updated["Breaking Load_kN"] == pytest.approx(3120.0)
     assert updated["Duct ID_mm"] == pytest.approx(80.0)
     assert updated["Diameter_mm"] is None
+    assert updated["Count"] == 1
+    assert updated["Strand Count"] == 12
     assert updated["Pe_eff_kN"] == pytest.approx(123.0)
+    assert updated["Pe_eff_kN"] != pytest.approx(updated["Breaking Load_kN"])
 
 
 def test_apply_custom_tendon_product_to_row_updates_area_without_pe_overwrite() -> None:
@@ -113,5 +116,8 @@ def test_apply_custom_tendon_product_to_row_updates_area_without_pe_overwrite() 
     assert updated["Duct Type"] == "Round duct"
     assert updated["Duct ID_mm"] == pytest.approx(125.0)
     assert updated["Diameter_mm"] is None
+    assert updated["Count"] == 1
+    assert updated["Strand Count"] == 25
     assert updated["Pe_eff_kN"] == pytest.approx(0.0)
     assert updated["fpe_MPa"] == pytest.approx(900.0)
+    assert updated["Pe_eff_kN"] != pytest.approx(updated["Breaking Load_kN"])

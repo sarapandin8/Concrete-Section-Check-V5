@@ -8,6 +8,8 @@ from concrete_pmm_pro.data.prestress_tendon_products import apply_tendon_product
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
     PrestressParseResult,
+    TENDON_PRODUCT_CREATION_MODES,
+    _product_options_for_table,
     load_prestress_steel_database,
     prestress_elements_from_dataframe,
     prestress_summary_dataframe,
@@ -211,6 +213,30 @@ def test_custom_tendon_product_row_parses_without_using_duct_as_diameter() -> No
     assert element.steel_type == "tendon_group"
     assert element.area_mm2 == pytest.approx(3500.0)
     assert element.diameter_mm is None
+    assert element.count == 1
+
+
+def test_product_options_include_standard_products_and_current_custom_labels() -> None:
+    prestress_db = load_prestress_steel_database()
+    table = pd.DataFrame(
+        [
+            _row(Product="6-25", **{"Steel Type": "tendon_group", "Strand Count": 25}),
+            _row(Product=""),
+            _row(Product=None),
+        ]
+    )
+
+    options = _product_options_for_table(prestress_db, table)
+
+    assert options[:2] == ["", "Custom"]
+    assert "15.2mm strand" in options
+    assert "6-12" in options
+    assert "6-25" in options
+
+
+def test_product_creation_modes_exclude_manual_custom_table() -> None:
+    assert TENDON_PRODUCT_CREATION_MODES == ["Standard tendon product", "Custom tendon"]
+    assert "Manual / custom table" not in TENDON_PRODUCT_CREATION_MODES
 
 
 def test_inactive_rows_are_ignored() -> None:

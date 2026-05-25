@@ -29,6 +29,7 @@ DEFAULT_PRESTRESS_DB_PATH = REPO_ROOT / "data" / "prestress_steel_database.csv"
 
 STEEL_TYPE_OPTIONS = ["wire", "strand", "prestressing_bar", "tendon_group", "custom"]
 INPUT_MODE_OPTIONS = ["Passive", "Effective Force Pe", "Effective Stress fpe", "Jacking Stress + Losses"]
+TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,16 @@ def _append_prestress_row(table: pd.DataFrame, row: dict[str, Any]) -> pd.DataFr
     for column in row_columns:
         expanded[column] = None
     return pd.concat([expanded, pd.DataFrame([row], columns=columns)], ignore_index=True)
+
+
+def _product_options_for_table(prestress_db: pd.DataFrame, prestress_table: pd.DataFrame | None) -> list[str]:
+    options: list[str] = ["", "Custom"]
+    if "name" in prestress_db.columns:
+        options.extend(str(name).strip() for name in prestress_db["name"].tolist() if not _is_blank(name))
+    options.extend(tendon_product_options())
+    if prestress_table is not None and "Product" in prestress_table.columns:
+        options.extend(str(product).strip() for product in prestress_table["Product"].tolist() if not _is_blank(product))
+    return list(dict.fromkeys(options))
 
 
 def _tendon_product_summary_dataframe(products: list[TendonProduct]) -> pd.DataFrame:
@@ -546,24 +557,21 @@ def prestress_summary_dataframe(elements: list[PrestressElement]) -> pd.DataFram
 
 
 def _render_tendon_product_tools() -> None:
-    st.subheader("Tendon Product Generator")
+    st.subheader("Tendon Product Creation")
     st.info(
         "Tendon product selection populates nominal strand count, steel area, fpu, breaking load, and duct information. "
         "Effective prestress Pe_eff or fpe must still be specified by the user according to the analysis stage and prestress losses. "
         "Duct ID is reference information only and is not used as steel diameter."
     )
     mode = st.radio(
-        "Tendon product mode",
-        ["Standard tendon product", "Custom tendon", "Manual / custom table"],
+        "Product creation mode",
+        TENDON_PRODUCT_CREATION_MODES,
         horizontal=True,
         key="prestress_tendon_product_mode",
     )
     products = list_tendon_products()
     with st.expander("Standard tendon product database", expanded=False):
         st.dataframe(_tendon_product_summary_dataframe(products), use_container_width=True, hide_index=True)
-    if mode == "Manual / custom table":
-        st.info("Manual table editing remains available below.")
-        return
 
     current_table = st.session_state.get("prestress_table")
     if current_table is None:
@@ -633,7 +641,6 @@ def _render_validation(result: PrestressParseResult, geometry_errors: list[str],
 def render_prestress_page() -> None:
     st.subheader("Prestress")
     prestress_db = _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", []))
-    product_options = ["", "Custom"] + [str(name) for name in prestress_db["name"].tolist()]
     input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
 
     st.info("Future milestones will use project-defined prestress material lists more deeply. For now, project prestress materials are available in the Product dropdown.")
@@ -653,7 +660,12 @@ def render_prestress_page() -> None:
 
     _render_tendon_product_tools()
 
-    product_options = list(dict.fromkeys([*product_options, *tendon_product_options()]))
+    st.subheader("Advanced Prestress Table")
+    st.info(
+        "Use the advanced table to review and edit prestress element locations, effective prestress, bonded flag, and notes. "
+        "Tendon product selection only helps populate product geometry/material reference data."
+    )
+    product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
     edited_df = st.data_editor(
         st.session_state["prestress_table"],
         num_rows="dynamic",

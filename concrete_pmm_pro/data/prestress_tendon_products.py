@@ -154,7 +154,9 @@ def apply_tendon_product_to_row(row: dict[str, Any], product_label_or_product: s
     updated["Area_mm2"] = product.tendon_area_mm2
     updated["Diameter_mm"] = None
     updated["fpu_MPa"] = product.fpu_MPa
-    updated.setdefault("Ep_MPa", 195000.0)
+    if updated.get("Ep_MPa") is None:
+        updated["Ep_MPa"] = 195000.0
+    updated.setdefault("Count", 1)
     updated["Strand Count"] = product.strand_count
     updated["Strand Diameter_mm"] = product.strand_diameter_mm
     updated["Strand Area_mm2"] = product.strand_area_mm2

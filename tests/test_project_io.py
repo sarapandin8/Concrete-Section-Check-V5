@@ -10,6 +10,7 @@ from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.geometry.generators import rectangle
 from concrete_pmm_pro.io.project_io import (
     ProjectIOError,
+    _prestress_to_table,
     apply_project_to_session_state,
     project_from_json,
     project_from_session_state,
@@ -105,7 +106,7 @@ def test_project_to_json_returns_valid_json() -> None:
     parsed = json.loads(json_text)
 
     assert parsed["project_name"] == "Bridge Pier P1"
-    assert parsed["version"] == "P.1"
+    assert parsed["version"] == "PS.DB1.1"
     assert parsed["analysis_mode_settings"]["member_type"] == "general_section"
     assert parsed["include_default_stress_check_points"] is False
     assert parsed["custom_stress_check_points"][1]["active"] is False
@@ -212,6 +213,105 @@ def test_apply_project_to_session_state_restores_core_objects() -> None:
     assert "loads_table" in session_state
     assert "rebar_table" in session_state
     assert "prestress_table" in session_state
+
+
+def test_prestress_to_table_restores_standard_tendon_metadata_from_product_label() -> None:
+    table = _prestress_to_table(
+        [
+            PrestressElement(
+                x_mm=0.0,
+                y_mm=-200.0,
+                area_mm2=1680.0,
+                steel_type="tendon_group",
+                material_name="6-12",
+                fpu_mpa=1860.0,
+                count=1,
+                label="T12",
+            )
+        ]
+    )
+
+    row = table.iloc[0]
+    assert row["Product"] == "6-12"
+    assert row["Steel Type"] == "tendon_group"
+    assert row["Area_mm2"] == pytest.approx(1680.0)
+    assert row["Diameter_mm"] is None
+    assert row["Strand Count"] == 12
+    assert row["Breaking Load_kN"] == pytest.approx(3120.0)
+    assert row["Duct ID_mm"] == pytest.approx(80.0)
+    assert row["Count"] == 1
+
+
+def test_prestress_to_table_preserves_custom_tendon_metadata_without_inventing_duct_info() -> None:
+    table = _prestress_to_table(
+        [
+            PrestressElement(
+                x_mm=0.0,
+                y_mm=-200.0,
+                area_mm2=3500.0,
+                steel_type="tendon_group",
+                material_name="6-25",
+                fpu_mpa=1860.0,
+                count=1,
+                label="T25",
+            )
+        ],
+        [
+            {
+                "Label": "T25",
+                "Product": "6-25",
+                "Steel Type": "tendon_group",
+                "Strand Count": 25,
+                "Breaking Load_kN": 6500.0,
+            }
+        ],
+    )
+
+    row = table.iloc[0]
+    assert row["Product"] == "6-25"
+    assert row["Area_mm2"] == pytest.approx(3500.0)
+    assert row["Diameter_mm"] is None
+    assert row["Strand Count"] == 25
+    assert row["Breaking Load_kN"] == pytest.approx(6500.0)
+    assert row["Duct Type"] == ""
+    assert row["Duct ID_mm"] is None
+    assert row["Count"] == 1
+
+
+def test_project_from_session_state_stores_prestress_table_metadata_for_reload() -> None:
+    element = PrestressElement(
+        x_mm=0.0,
+        y_mm=-200.0,
+        area_mm2=3500.0,
+        steel_type="tendon_group",
+        material_name="6-25",
+        fpu_mpa=1860.0,
+        count=1,
+        label="T25",
+    )
+    project = project_from_session_state(
+        {
+            "prestress_elements": [element],
+            "prestress_table": [
+                {
+                    "Label": "T25",
+                    "Product": "6-25",
+                    "Steel Type": "tendon_group",
+                    "Area_mm2": 3500.0,
+                    "Strand Count": 25,
+                    "Breaking Load_kN": 6500.0,
+                    "Duct Type": "Round duct",
+                    "Duct ID_mm": 125.0,
+                }
+            ],
+        }
+    )
+
+    metadata = project.metadata["prestress_table_metadata"][0]
+    assert metadata["Product"] == "6-25"
+    assert metadata["Strand Count"] == 25
+    assert metadata["Breaking Load_kN"] == pytest.approx(6500.0)
+    assert metadata["Duct ID_mm"] == pytest.approx(125.0)
 
 
 def test_old_project_json_without_custom_stress_points_loads_safely() -> None:

@@ -13,6 +13,7 @@ from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSetting
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
+from concrete_pmm_pro.data.prestress_tendon_products import get_tendon_product
 from concrete_pmm_pro.serviceability.models import ServiceabilitySettings
 from concrete_pmm_pro.serviceability.points import stress_check_points_to_dataframe
 
@@ -35,12 +36,60 @@ def _coerce_list(value: Any) -> list[Any]:
     return list(value)
 
 
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and pd.isna(value)) or str(value).strip() == ""
+
+
+def _clean_table_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
+    table = _get_session_value(session_state, "prestress_table", None)
+    if table is None:
+        return []
+    df = pd.DataFrame(table)
+    if df.empty:
+        return []
+    metadata_columns = [
+        "Label",
+        "Steel Type",
+        "Product",
+        "Area_mm2",
+        "Diameter_mm",
+        "Strand Count",
+        "Strand Diameter_mm",
+        "Strand Area_mm2",
+        "Breaking Load_kN",
+        "Duct Type",
+        "Duct ID_mm",
+        "Tendon Description",
+        "Typical Use",
+        "Note",
+    ]
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        entry = {column: _clean_table_value(row.get(column)) for column in metadata_columns if column in df.columns}
+        if any(not _is_blank(value) for value in entry.values()):
+            rows.append(entry)
+    return rows
+
+
 def project_from_session_state(session_state: Any) -> ProjectModel:
     metadata = dict(_get_session_value(session_state, "project_metadata", {}) or {})
     for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis"):
         flag_value = _get_session_value(session_state, flag_name, None)
         if flag_value is not None:
             metadata[flag_name] = flag_value
+    prestress_table_metadata = _prestress_table_metadata_from_session(session_state)
+    if prestress_table_metadata:
+        metadata["prestress_table_metadata"] = prestress_table_metadata
 
     return ProjectModel(
         project_name=_get_session_value(session_state, "project_name", "Untitled Project") or "Untitled Project",
@@ -161,33 +210,96 @@ def _rebars_to_table(rebars: list[Rebar]) -> pd.DataFrame:
     )
 
 
-def _prestress_to_table(elements: list[PrestressElement]) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "Active": True,
-                "Label": element.label or f"PS{index}",
-                "Steel Type": element.steel_type,
-                "Product": element.material_name or "Custom",
-                "x_mm": element.x_mm,
-                "y_mm": element.y_mm,
-                "Area_mm2": element.area_mm2,
-                "Diameter_mm": element.diameter_mm,
-                "fpy_MPa": element.fpy_mpa,
-                "fpu_MPa": element.fpu_mpa,
-                "Ep_MPa": element.ep_mpa,
-                "Input Mode": "Effective Force Pe" if element.pe_eff_n > 0 else "Passive",
-                "Pe_eff_kN": N_to_kN(element.pe_eff_n),
-                "fpe_MPa": element.initial_stress_mpa or 0.0,
-                "fpj_ratio": 0.75,
-                "loss_percent": 15.0,
-                "Bonded": element.bonded,
-                "Count": element.count,
-                "Note": "",
-            }
-            for index, element in enumerate(elements, start=1)
-        ]
-    )
+def _prestress_metadata_for_row(
+    table_metadata: list[dict[str, Any]],
+    index: int,
+    label: str,
+) -> dict[str, Any]:
+    for row in table_metadata:
+        if str(row.get("Label") or "").strip() == label:
+            return row
+    if index - 1 < len(table_metadata):
+        return table_metadata[index - 1]
+    return {}
+
+
+def _restore_tendon_product_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    product = str(row.get("Product") or "").strip()
+    tendon_product = get_tendon_product(product)
+    if tendon_product is None:
+        return row
+    restored = dict(row)
+    restored["Steel Type"] = "tendon_group"
+    restored["Area_mm2"] = tendon_product.tendon_area_mm2
+    restored["Diameter_mm"] = None
+    restored["fpu_MPa"] = tendon_product.fpu_MPa
+    restored["Strand Count"] = tendon_product.strand_count
+    restored["Strand Diameter_mm"] = tendon_product.strand_diameter_mm
+    restored["Strand Area_mm2"] = tendon_product.strand_area_mm2
+    restored["Breaking Load_kN"] = tendon_product.breaking_load_kN
+    restored["Duct Type"] = tendon_product.duct_type or ""
+    restored["Duct ID_mm"] = tendon_product.duct_id_mm
+    restored["Tendon Description"] = tendon_product.description
+    restored["Typical Use"] = tendon_product.typical_use or ""
+    return restored
+
+
+def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[dict[str, Any]] | None = None) -> pd.DataFrame:
+    metadata_rows = table_metadata or []
+    rows: list[dict[str, Any]] = []
+    for index, element in enumerate(elements, start=1):
+        label = element.label or f"PS{index}"
+        row = {
+            "Active": True,
+            "Label": label,
+            "Steel Type": element.steel_type,
+            "Product": element.material_name or "Custom",
+            "x_mm": element.x_mm,
+            "y_mm": element.y_mm,
+            "Area_mm2": element.area_mm2,
+            "Diameter_mm": element.diameter_mm,
+            "fpy_MPa": element.fpy_mpa,
+            "fpu_MPa": element.fpu_mpa,
+            "Ep_MPa": element.ep_mpa,
+            "Input Mode": "Effective Force Pe" if element.pe_eff_n > 0 else "Passive",
+            "Pe_eff_kN": N_to_kN(element.pe_eff_n),
+            "fpe_MPa": element.initial_stress_mpa or 0.0,
+            "fpj_ratio": 0.75,
+            "loss_percent": 15.0,
+            "Bonded": element.bonded,
+            "Count": element.count,
+            "Strand Count": None,
+            "Strand Diameter_mm": None,
+            "Strand Area_mm2": None,
+            "Breaking Load_kN": None,
+            "Duct Type": "",
+            "Duct ID_mm": None,
+            "Tendon Description": "",
+            "Typical Use": "",
+            "Note": "",
+        }
+        row = _restore_tendon_product_metadata(row)
+        metadata = _prestress_metadata_for_row(metadata_rows, index, label)
+        for column in (
+            "Product",
+            "Steel Type",
+            "Strand Count",
+            "Strand Diameter_mm",
+            "Strand Area_mm2",
+            "Breaking Load_kN",
+            "Duct Type",
+            "Duct ID_mm",
+            "Tendon Description",
+            "Typical Use",
+            "Note",
+        ):
+            value = metadata.get(column)
+            if not _is_blank(value):
+                row[column] = value
+        if str(row.get("Steel Type") or "").strip() == "tendon_group":
+            row["Diameter_mm"] = None
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def apply_project_to_session_state(project: ProjectModel, session_state: MutableMapping[str, Any]) -> None:
@@ -223,7 +335,10 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
 
     session_state["loads_table"] = _loads_to_table(project.loads)
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
-    session_state["prestress_table"] = _prestress_to_table(project.prestress_elements)
+    session_state["prestress_table"] = _prestress_to_table(
+        project.prestress_elements,
+        _coerce_list(project.metadata.get("prestress_table_metadata")),
+    )
     session_state["custom_stress_check_points_table"] = stress_check_points_to_dataframe(project.custom_stress_check_points)
 
     for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis"):

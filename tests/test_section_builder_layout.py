@@ -15,6 +15,8 @@ def test_section_builder_professional_layout_sections_are_present() -> None:
     assert "Section Definition" in source
     assert "Live Section Preview" in source
     assert "Section Properties" in source
+    assert "Key Properties" in source
+    assert "Geometry Context" in source
     assert "Geometry Parameters" in source
     assert "st.sidebar" not in source
 
@@ -39,11 +41,18 @@ def test_rectangle_width_height_remain_section_builder_parameters() -> None:
     assert "Height H (mm)" in labels
 
 
-def test_section_builder_summary_helpers_escape_values() -> None:
-    html = section_builder._metric_card_html(
-        section_builder.SectionMetric("Area <gross>", "400 > 300", "safe & escaped", "info", strong=True)
+def test_section_builder_status_panel_helper_escapes_values() -> None:
+    html = section_builder._status_panel_html(
+        [section_builder.SectionMetric("Area <gross>", "400 > 300", "safe & escaped", "info", strong=True)]
     )
 
     assert "Area &lt;gross&gt;" in html
     assert "400 &gt; 300" in html
-    assert "safe &amp; escaped" in html
+
+
+def test_section_builder_validation_summary_is_compact_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "No validation errors" not in source
+    assert "WARNING: none" not in source
+    assert "_status_panel_html" in source

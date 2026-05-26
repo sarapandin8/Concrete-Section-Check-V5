@@ -7,16 +7,16 @@ from concrete_pmm_pro.core.models import PrestressElement
 from concrete_pmm_pro.data.prestress_tendon_products import apply_tendon_product_to_row, make_custom_tendon_product
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
+    INPUT_MODE_OPTIONS,
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
     _build_prestress_status_rows,
     _build_prestress_summary_metrics,
     _engineering_notes_html,
     _normalize_prestress_table_for_display,
-    _normalize_prestress_table_for_editor,
-    _visible_prestress_table_changed,
     _product_options_for_table,
     load_prestress_steel_database,
+    normalize_prestress_table_for_effective_input_sync,
     prestress_elements_from_dataframe,
     prestress_summary_dataframe,
     prestress_valid_for_analysis,
@@ -248,6 +248,141 @@ def test_product_creation_modes_exclude_manual_custom_table() -> None:
     assert "Manual / custom table" not in TENDON_PRODUCT_CREATION_MODES
 
 
+def test_effective_input_mode_options_are_user_facing_modes() -> None:
+    assert INPUT_MODE_OPTIONS == ["Passive", "Pe_eff", "fpe"]
+
+
+def test_effective_input_sync_passive_sets_zero_force_and_stress() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "Passive", "Pe_eff_kN": 1848.0, "fpe_MPa": 1100.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(0.0)
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(0.0)
+
+
+def test_effective_input_sync_pe_eff_mode_computes_fpe() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "Pe_eff", "Area_mm2": 1680.0, "Pe_eff_kN": 1848.0, "fpe_MPa": 0.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1848.0)
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(1100.0)
+
+
+def test_effective_input_sync_fpe_mode_computes_pe_eff() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "fpe", "Area_mm2": 1680.0, "Pe_eff_kN": 0.0, "fpe_MPa": 1100.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(1100.0)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1848.0)
+
+
+def test_effective_input_sync_product_area_change_preserves_pe_eff_and_recomputes_fpe() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(Product="6-25", **{"Steel Type": "tendon_group", "Input Mode": "Pe_eff", "Area_mm2": 1680.0, "Pe_eff_kN": 1848.0, "fpe_MPa": 1100.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Area_mm2"] == pytest.approx(3500.0)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1848.0)
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(528.0)
+    assert normalized.loc[0, "Breaking Load_kN"] == pytest.approx(6500.0)
+    assert normalized.loc[0, "Pe_eff_kN"] != pytest.approx(normalized.loc[0, "Breaking Load_kN"])
+
+
+def test_effective_input_sync_product_area_change_preserves_fpe_and_recomputes_pe_eff() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(Product="6-25", **{"Steel Type": "tendon_group", "Input Mode": "fpe", "Area_mm2": 1680.0, "Pe_eff_kN": 1680.0, "fpe_MPa": 1000.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Area_mm2"] == pytest.approx(3500.0)
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(1000.0)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(3500.0)
+    assert normalized.loc[0, "Pe_eff_kN"] != pytest.approx(normalized.loc[0, "Breaking Load_kN"])
+
+
+def test_effective_input_sync_standard_tendon_fields_remain_intact() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(Product="6-12", **{"Steel Type": "tendon_group", "Input Mode": "Pe_eff", "Pe_eff_kN": 1848.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Product"] == "6-12"
+    assert normalized.loc[0, "Area_mm2"] == pytest.approx(1680.0)
+    assert normalized.loc[0, "fpy_MPa"] == pytest.approx(1580.0)
+    assert normalized.loc[0, "fpu_MPa"] == pytest.approx(1860.0)
+    assert normalized.loc[0, "Ep_MPa"] == pytest.approx(195000.0)
+    assert normalized.loc[0, "Strand Count"] == 12
+    assert normalized.loc[0, "Diameter_mm"] is None
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1848.0)
+
+
+def test_effective_input_sync_ps_bar_database_product_fields_remain_intact() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(Product="PS Bar 32 - 1080/1230", **{"Input Mode": "Pe_eff", "Pe_eff_kN": 100.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Steel Type"] == "prestressing_bar"
+    assert normalized.loc[0, "Diameter_mm"] == pytest.approx(32.0)
+    assert normalized.loc[0, "Area_mm2"] == pytest.approx(804.2)
+    assert normalized.loc[0, "fpy_MPa"] == pytest.approx(1080.0)
+    assert normalized.loc[0, "fpu_MPa"] == pytest.approx(1230.0)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(100.0)
+
+
+def test_effective_input_sync_is_idempotent_after_dependent_field_update() -> None:
+    prestress_db = load_prestress_steel_database()
+    first = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "fpe", "Area_mm2": 1680.0, "Pe_eff_kN": 0.0, "fpe_MPa": 1000.0})]),
+        prestress_db,
+    )
+    second = normalize_prestress_table_for_effective_input_sync(first, prestress_db)
+
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_total_pe_summary_uses_normalized_effective_force() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "fpe", "Area_mm2": 1680.0, "fpe_MPa": 1000.0, "Count": 2})]),
+        load_prestress_steel_database(),
+    )
+    result = prestress_elements_from_dataframe(normalized, load_prestress_steel_database())
+
+    metrics = {metric.title: metric for metric in _build_prestress_summary_metrics(result, [], True)}
+
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0)
+    assert metrics["Total Pe_eff"].value == "3,360.0 kN"
+
+
+def test_effective_input_validation_warns_for_zero_pe_eff_mode() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "Pe_eff", "Area_mm2": 1680.0, "Pe_eff_kN": 0.0})]),
+        load_prestress_steel_database(),
+    )
+    result = prestress_elements_from_dataframe(normalized, load_prestress_steel_database())
+
+    assert not result.errors
+    assert any("zero Pe_eff_kN" in warning for warning in result.warnings)
+
+
+def test_effective_input_validation_warns_above_seventy_five_percent_fpu() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": "fpe", "Area_mm2": 1680.0, "fpe_MPa": 1400.0, "fpu_MPa": 1860.0})]),
+        load_prestress_steel_database(),
+    )
+    result = prestress_elements_from_dataframe(normalized, load_prestress_steel_database())
+
+    assert not result.errors
+    assert any("0.75 x fpu_MPa" in warning for warning in result.warnings)
+
+
 def test_tendon_group_table_display_normalizes_diameter_and_equivalent_diameter() -> None:
     table = pd.DataFrame(
         [
@@ -439,66 +574,9 @@ def test_prestress_status_rows_include_geometry_warning_without_validation_logic
 def test_engineering_notes_preserve_prestress_safeguards() -> None:
     html = _engineering_notes_html()
 
-    assert "product breaking load is reference data only" in html
+    assert "Product breaking load is reference data only" in html
+    assert "Choose Pe_eff to enter effective force directly" in html
+    assert "Choose fpe to enter effective stress" in html
     assert "Duct ID is duct reference information and is not steel diameter" in html
     assert "Area_mm2 controls steel area" in html
     assert "not external Pu demand" in html
-
-
-def test_prestress_editor_sync_updates_database_product_defaults_immediately() -> None:
-    prestress_db = load_prestress_steel_database()
-    before = pd.DataFrame([_row(Product="15.2mm strand", **{"_last_product": "15.2mm strand"})])
-    edited = before.copy()
-    edited.loc[0, "Product"] = "PS Bar 32 - 1080/1230"
-
-    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
-
-    assert synced.loc[0, "Steel Type"] == "prestressing_bar"
-    assert synced.loc[0, "Diameter_mm"] == pytest.approx(32.0)
-    assert synced.loc[0, "Area_mm2"] == pytest.approx(804.2)
-    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1080.0)
-    assert synced.loc[0, "fpu_MPa"] == pytest.approx(1230.0)
-    assert _visible_prestress_table_changed(edited, synced)
-
-
-def test_prestress_editor_sync_updates_tendon_product_without_pe_override() -> None:
-    prestress_db = load_prestress_steel_database()
-    edited = pd.DataFrame([_row(Product="6-12", Pe_eff_kN=123.0, **{"_last_product": "Custom"})])
-
-    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
-
-    assert synced.loc[0, "Steel Type"] == "tendon_group"
-    assert synced.loc[0, "Area_mm2"] == pytest.approx(1680.0)
-    assert synced.loc[0, "Diameter_mm"] is None
-    assert synced.loc[0, "Eq Steel Dia_mm"] == pytest.approx(46.3, abs=0.05)
-    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1580.0)
-    assert synced.loc[0, "fpu_MPa"] == pytest.approx(1860.0)
-    assert synced.loc[0, "Ep_MPa"] == pytest.approx(195000.0)
-    assert synced.loc[0, "Strand Count"] == 12
-    assert synced.loc[0, "Pe_eff_kN"] == pytest.approx(123.0)
-    assert synced.loc[0, "Breaking Load_kN"] != pytest.approx(synced.loc[0, "Pe_eff_kN"])
-
-
-def test_prestress_editor_sync_preserves_manual_override_when_product_unchanged() -> None:
-    prestress_db = load_prestress_steel_database()
-    edited = pd.DataFrame(
-        [
-            _row(
-                Product="PS Bar 32 - 1080/1230",
-                **{
-                    "Steel Type": "prestressing_bar",
-                    "Diameter_mm": 33.0,
-                    "Area_mm2": 900.0,
-                    "fpy_MPa": 1100.0,
-                    "_last_product": "PS Bar 32 - 1080/1230",
-                },
-            )
-        ]
-    )
-
-    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
-
-    assert synced.loc[0, "Diameter_mm"] == pytest.approx(33.0)
-    assert synced.loc[0, "Area_mm2"] == pytest.approx(900.0)
-    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1100.0)
-    assert not _visible_prestress_table_changed(edited, synced)

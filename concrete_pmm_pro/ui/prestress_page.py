@@ -34,14 +34,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRESTRESS_DB_PATH = REPO_ROOT / "data" / "prestress_steel_database.csv"
 
 STEEL_TYPE_OPTIONS = ["wire", "strand", "prestressing_bar", "tendon_group", "custom"]
-INPUT_MODE_OPTIONS = ["Passive", "Effective Force Pe", "Effective Stress fpe", "Jacking Stress + Losses"]
+INPUT_MODE_OPTIONS = ["Passive", "Pe_eff", "fpe"]
+LEGACY_INPUT_MODE_ALIASES = {
+    "Effective Force Pe": "Pe_eff",
+    "Effective Stress fpe": "fpe",
+}
+LEGACY_INPUT_MODE_OPTIONS = ["Jacking Stress + Losses"]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
-
-# Internal editor bookkeeping columns.  They are kept out of the visible
-# Streamlit table, but let us detect a true Product change so automatic
-# product defaults do not overwrite deliberate user overrides on every rerun.
-_INTERNAL_PRESTRESS_COLUMNS = ["_last_product"]
-
 
 
 @dataclass(frozen=True)
@@ -336,6 +335,15 @@ def _to_count(value: Any) -> int | None:
     return int(parsed)
 
 
+def _normalize_input_mode_label(value: Any) -> str:
+    mode = "Passive" if _is_blank(value) else str(value).strip()
+    return LEGACY_INPUT_MODE_ALIASES.get(mode, mode)
+
+
+def _effective_prestress_columns() -> list[str]:
+    return ["Input Mode", "Pe_eff_kN", "fpe_MPa"]
+
+
 def _product_row(product: str, prestress_db: pd.DataFrame) -> pd.Series | None:
     if _is_blank(product) or product == "Custom":
         return None
@@ -396,6 +404,37 @@ def _product_options_for_table(prestress_db: pd.DataFrame, prestress_table: pd.D
     return list(dict.fromkeys(options))
 
 
+def _custom_tendon_product_from_label(product: str, row: pd.Series | None = None) -> TendonProduct | None:
+    label = str(product).strip()
+    if not label.startswith("6-"):
+        return None
+    try:
+        strand_count = int(label.split("-", 1)[1])
+    except (TypeError, ValueError):
+        return None
+    if strand_count < 1:
+        return None
+    duct_id = _to_float(row.get("Duct ID_mm")) if row is not None else None
+    duct_type = None if row is None or _is_blank(row.get("Duct Type")) else str(row.get("Duct Type")).strip()
+    return make_custom_tendon_product(strand_count, label=label, duct_id_mm=duct_id, duct_type=duct_type)
+
+
+def _apply_database_product_to_display_row(normalized: pd.DataFrame, index: Any, database_row: pd.Series) -> None:
+    normalized.at[index, "Steel Type"] = str(database_row["type"])
+    normalized.at[index, "Area_mm2"] = float(database_row["area_mm2"])
+    normalized.at[index, "Diameter_mm"] = None if pd.isna(database_row["diameter_mm"]) else float(database_row["diameter_mm"])
+    normalized.at[index, "Eq Steel Dia_mm"] = None
+    normalized.at[index, "fpy_MPa"] = None if pd.isna(database_row["fpy_MPa"]) else float(database_row["fpy_MPa"])
+    normalized.at[index, "fpu_MPa"] = None if pd.isna(database_row["fpu_MPa"]) else float(database_row["fpu_MPa"])
+    normalized.at[index, "Ep_MPa"] = float(database_row["Ep_MPa"])
+    normalized.at[index, "Strand Count"] = None
+    normalized.at[index, "Strand Diameter_mm"] = None
+    normalized.at[index, "Strand Area_mm2"] = None
+    normalized.at[index, "Breaking Load_kN"] = None
+    normalized.at[index, "Duct Type"] = ""
+    normalized.at[index, "Duct ID_mm"] = None
+
+
 def _looks_like_15_2mm_tendon_group(row: pd.Series) -> bool:
     steel_type = "" if _is_blank(row.get("Steel Type")) else str(row.get("Steel Type")).strip()
     if steel_type != "tendon_group":
@@ -410,20 +449,66 @@ def _looks_like_15_2mm_tendon_group(row: pd.Series) -> bool:
     return strand_diameter is None or abs(strand_diameter - DEFAULT_STRAND_DIAMETER_MM) < 1e-6
 
 
-def _normalize_prestress_table_for_display(table: pd.DataFrame) -> pd.DataFrame:
+def _sync_effective_inputs_for_row(normalized: pd.DataFrame, index: Any) -> None:
+    mode = _normalize_input_mode_label(normalized.at[index, "Input Mode"] if "Input Mode" in normalized.columns else "Passive")
+    if mode not in INPUT_MODE_OPTIONS and mode not in LEGACY_INPUT_MODE_OPTIONS:
+        return
+    if mode in INPUT_MODE_OPTIONS:
+        normalized.at[index, "Input Mode"] = mode
+    area_mm2 = _to_float(normalized.at[index, "Area_mm2"] if "Area_mm2" in normalized.columns else None)
+    pe_kn = _pe_eff_kn_from_row(normalized.loc[index])
+    fpe_mpa = _to_float(normalized.at[index, "fpe_MPa"] if "fpe_MPa" in normalized.columns else None)
+
+    if mode == "Passive":
+        normalized.at[index, "Pe_eff_kN"] = 0.0
+        normalized.at[index, "fpe_MPa"] = 0.0
+        return
+
+    if mode == "Pe_eff":
+        pe_kn = pe_kn if pe_kn is not None else 0.0
+        normalized.at[index, "Pe_eff_kN"] = pe_kn
+        normalized.at[index, "fpe_MPa"] = (pe_kn * 1000.0 / area_mm2) if area_mm2 and area_mm2 > 0 else None
+        return
+
+    if mode == "fpe":
+        fpe_mpa = fpe_mpa if fpe_mpa is not None else 0.0
+        normalized.at[index, "fpe_MPa"] = fpe_mpa
+        normalized.at[index, "Pe_eff_kN"] = (area_mm2 * fpe_mpa / 1000.0) if area_mm2 and area_mm2 > 0 else None
+
+
+def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd.DataFrame | None = None) -> pd.DataFrame:
     normalized = pd.DataFrame(table).copy()
     if normalized.empty:
         return normalized
-    for column in ("Diameter_mm", "fpy_MPa", "fpu_MPa", "Ep_MPa", "Strand Count", "Strand Diameter_mm", "Strand Area_mm2", "Breaking Load_kN", "Duct Type", "Duct ID_mm"):
+    for column in (
+        "Diameter_mm",
+        "fpy_MPa",
+        "fpu_MPa",
+        "Ep_MPa",
+        "Input Mode",
+        "Pe_eff_kN",
+        "fpe_MPa",
+        "Strand Count",
+        "Strand Diameter_mm",
+        "Strand Area_mm2",
+        "Breaking Load_kN",
+        "Duct Type",
+        "Duct ID_mm",
+    ):
         if column not in normalized.columns:
             normalized[column] = None
+    if "Pe_eff_kN" in normalized.columns and "Pe_eff" in normalized.columns:
+        missing_pe = normalized["Pe_eff_kN"].map(_is_blank)
+        normalized.loc[missing_pe, "Pe_eff_kN"] = normalized.loc[missing_pe, "Pe_eff"]
     normalized["Diameter_mm"] = normalized["Diameter_mm"].astype("object")
     if "Eq Steel Dia_mm" not in normalized.columns:
         insert_at = normalized.columns.get_loc("Diameter_mm") + 1 if "Diameter_mm" in normalized.columns else len(normalized.columns)
         normalized.insert(insert_at, "Eq Steel Dia_mm", None)
     for index, row in normalized.iterrows():
+        normalized.at[index, "Input Mode"] = _normalize_input_mode_label(row.get("Input Mode"))
         product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
-        tendon_product = get_tendon_product(product)
+        tendon_product = get_tendon_product(product) or _custom_tendon_product_from_label(product, row)
+        database_row = _product_row(product, prestress_db) if prestress_db is not None else None
         is_tendon_group = str(row.get("Steel Type") or "").strip() == "tendon_group" or tendon_product is not None
         if is_tendon_group:
             normalized.at[index, "Steel Type"] = "tendon_group"
@@ -446,174 +531,33 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame) -> pd.DataFrame:
                     normalized.at[index, "fpu_MPa"] = DEFAULT_STRAND_FPU_MPA
                 if _is_blank(normalized.at[index, "Ep_MPa"]):
                     normalized.at[index, "Ep_MPa"] = DEFAULT_STRAND_EP_MPA
+        elif database_row is not None:
+            _apply_database_product_to_display_row(normalized, index, database_row)
         area_mm2 = _to_float(normalized.at[index, "Area_mm2"] if "Area_mm2" in normalized.columns else None)
         normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(area_mm2) if is_tendon_group else None
+        _sync_effective_inputs_for_row(normalized, index)
     return normalized
 
 
-_PRESTRESS_EDITOR_COLUMNS = [
-    "Active",
-    "Label",
-    "Steel Type",
-    "Product",
-    "x_mm",
-    "y_mm",
-    "Area_mm2",
-    "Diameter_mm",
-    "Eq Steel Dia_mm",
-    "fpy_MPa",
-    "fpu_MPa",
-    "Ep_MPa",
-    "Input Mode",
-    "Pe_eff_kN",
-    "fpe_MPa",
-    "fpj_ratio",
-    "loss_percent",
-    "Bonded",
-    "Count",
-    "Strand Count",
-    "Breaking Load_kN",
-    "Duct Type",
-    "Duct ID_mm",
-    "Note",
-]
+def normalize_prestress_table_for_effective_input_sync(table: pd.DataFrame, prestress_db: pd.DataFrame) -> pd.DataFrame:
+    """Synchronize product defaults and effective prestress display fields.
 
-
-def _ensure_prestress_editor_columns(table: pd.DataFrame) -> pd.DataFrame:
-    """Return a table with all user-facing and internal editor columns present.
-
-    Streamlit's data editor reruns after each edit.  Keeping a stable column set
-    avoids columns appearing/disappearing between reruns and lets us hide the
-    internal Product-tracking column without losing it from session state.
+    Product data controls area/material reference values. Input Mode controls
+    only the dependent Pe_eff/fpe display value; it never derives prestress
+    from product breaking load.
     """
-    normalized = pd.DataFrame(table).copy()
-    for column in _PRESTRESS_EDITOR_COLUMNS:
-        if column not in normalized.columns:
-            normalized[column] = None
-    for column in _INTERNAL_PRESTRESS_COLUMNS:
-        if column not in normalized.columns:
-            normalized[column] = None
-    ordered = [column for column in [*_PRESTRESS_EDITOR_COLUMNS, *_INTERNAL_PRESTRESS_COLUMNS] if column in normalized.columns]
-    extra = [column for column in normalized.columns if column not in ordered]
-    return normalized[[*ordered, *extra]]
+
+    return _normalize_prestress_table_for_display(table, prestress_db)
 
 
-def _fill_from_database_product(
-    normalized: pd.DataFrame,
-    index: Any,
-    database_row: pd.Series,
-    *,
-    force: bool,
-) -> None:
-    """Populate row fields from a catalog prestress product.
-
-    Product changes should fill the dependent fields immediately.  When the
-    Product is unchanged, blanks may still be backfilled, but deliberate user
-    overrides are preserved.
-    """
-    defaults = {
-        "Steel Type": str(database_row["type"]),
-        "Area_mm2": float(database_row["area_mm2"]),
-        "Diameter_mm": None if pd.isna(database_row["diameter_mm"]) else float(database_row["diameter_mm"]),
-        "fpy_MPa": None if pd.isna(database_row["fpy_MPa"]) else float(database_row["fpy_MPa"]),
-        "fpu_MPa": None if pd.isna(database_row["fpu_MPa"]) else float(database_row["fpu_MPa"]),
-        "Ep_MPa": float(database_row["Ep_MPa"]),
-    }
-    for column, value in defaults.items():
-        if force or _is_blank(normalized.at[index, column]):
-            normalized.at[index, column] = value
-    normalized.at[index, "Eq Steel Dia_mm"] = None
-
-
-def _fill_from_tendon_product(
-    normalized: pd.DataFrame,
-    index: Any,
-    product: TendonProduct,
-    *,
-    force: bool,
-) -> None:
-    """Populate a tendon_group row from standard/custom tendon reference data.
-
-    Duct ID and breaking load are reference metadata only.  Pe_eff/fpe are not
-    touched here; they remain user-controlled engineering inputs.
-    """
-    defaults = {
-        "Steel Type": "tendon_group",
-        "Area_mm2": product.tendon_area_mm2,
-        "Diameter_mm": None,
-        "fpy_MPa": product.fpy_MPa,
-        "fpu_MPa": product.fpu_MPa,
-        "Ep_MPa": product.Ep_MPa,
-        "Strand Count": product.strand_count,
-        "Strand Diameter_mm": product.strand_diameter_mm,
-        "Strand Area_mm2": product.strand_area_mm2,
-        "Breaking Load_kN": product.breaking_load_kN,
-        "Duct Type": product.duct_type or "",
-        "Duct ID_mm": product.duct_id_mm,
-    }
-    for column, value in defaults.items():
-        if column == "Diameter_mm" or force or _is_blank(normalized.at[index, column]):
-            normalized.at[index, column] = value
-    normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(_to_float(normalized.at[index, "Area_mm2"]))
-
-
-def _normalize_prestress_table_for_editor(table: pd.DataFrame, prestress_db: pd.DataFrame) -> pd.DataFrame:
-    """Normalize the Advanced Prestress Table for immediate UI feedback.
-
-    The critical Streamlit detail is timing: if a user changes Product in
-    st.data_editor, dependent columns (Area, Diameter, material strengths, duct
-    metadata) must be pushed back into session_state and rerun immediately.
-    This function is intentionally UI/data-normalization only.  It does not
-    compute Pe_eff from breaking load and does not change solver behavior.
-    """
-    normalized = _ensure_prestress_editor_columns(table)
-    normalized["Diameter_mm"] = normalized["Diameter_mm"].astype("object")
-
-    for index, row in normalized.iterrows():
-        product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
-        last_product = "" if _is_blank(row.get("_last_product")) else str(row.get("_last_product")).strip()
-        product_changed = product != last_product
-        tendon_product = get_tendon_product(product)
-        database_row = _product_row(product, prestress_db)
-
-        if tendon_product is not None:
-            _fill_from_tendon_product(normalized, index, tendon_product, force=product_changed)
-        elif database_row is not None:
-            _fill_from_database_product(normalized, index, database_row, force=product_changed)
-        else:
-            steel_type = "" if _is_blank(normalized.at[index, "Steel Type"]) else str(normalized.at[index, "Steel Type"]).strip()
-            is_tendon_group = steel_type == "tendon_group" or _looks_like_15_2mm_tendon_group(normalized.loc[index])
-            if is_tendon_group:
-                normalized.at[index, "Steel Type"] = "tendon_group"
-                normalized.at[index, "Diameter_mm"] = None
-                if _is_blank(normalized.at[index, "fpy_MPa"]):
-                    normalized.at[index, "fpy_MPa"] = DEFAULT_STRAND_FPY_MPA
-                if _is_blank(normalized.at[index, "fpu_MPa"]):
-                    normalized.at[index, "fpu_MPa"] = DEFAULT_STRAND_FPU_MPA
-                if _is_blank(normalized.at[index, "Ep_MPa"]):
-                    normalized.at[index, "Ep_MPa"] = DEFAULT_STRAND_EP_MPA
-                normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(_to_float(normalized.at[index, "Area_mm2"]))
-            else:
-                normalized.at[index, "Eq Steel Dia_mm"] = None
-
-        # Keep internal tracking after all product-driven defaults are applied.
-        normalized.at[index, "_last_product"] = product
-
-    return normalized
-
-
-def _visible_prestress_table_changed(before: pd.DataFrame, after: pd.DataFrame) -> bool:
-    """Return True when the user-visible editor values changed after sync.
-
-    Hidden bookkeeping columns should not trigger reruns by themselves.  This
-    avoids infinite rerun loops while still refreshing the table immediately
-    when Product selection fills dependent visible fields.
-    """
-    before_visible = _ensure_prestress_editor_columns(before)[_PRESTRESS_EDITOR_COLUMNS].reset_index(drop=True)
-    after_visible = _ensure_prestress_editor_columns(after)[_PRESTRESS_EDITOR_COLUMNS].reset_index(drop=True)
-    return not before_visible.astype("object").where(pd.notna(before_visible), None).equals(
-        after_visible.astype("object").where(pd.notna(after_visible), None)
-    )
+def _dataframes_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
+    left_norm = pd.DataFrame(left).reset_index(drop=True).astype("object")
+    right_norm = pd.DataFrame(right).reset_index(drop=True).astype("object")
+    left_norm = left_norm.where(pd.notna(left_norm), None)
+    right_norm = right_norm.where(pd.notna(right_norm), None)
+    if list(left_norm.columns) != list(right_norm.columns):
+        return False
+    return left_norm.equals(right_norm)
 
 
 def _tendon_product_summary_dataframe(products: list[TendonProduct]) -> pd.DataFrame:
@@ -621,7 +565,7 @@ def _tendon_product_summary_dataframe(products: list[TendonProduct]) -> pd.DataF
 
 
 def _product_from_row_label(product: str) -> TendonProduct | None:
-    return get_tendon_product(product)
+    return get_tendon_product(product) or _custom_tendon_product_from_label(product)
 
 
 def _pe_eff_kn_from_row(row: pd.Series) -> float | None:
@@ -714,22 +658,25 @@ def _resolve_initial_state(
     area_mm2 = float(values["area_mm2"] or 0.0)
     ep_mpa = float(values["ep_mpa"] or 195000.0)
     fpu_mpa = values.get("fpu_mpa")
-    input_mode = str(row.get("Input Mode") or "Passive").strip()
+    input_mode = _normalize_input_mode_label(row.get("Input Mode"))
 
-    if input_mode not in INPUT_MODE_OPTIONS:
+    if input_mode not in INPUT_MODE_OPTIONS and input_mode not in LEGACY_INPUT_MODE_OPTIONS:
         errors.append(f"Row {row_number}: Input Mode must be one of {', '.join(INPUT_MODE_OPTIONS)}.")
         return 0.0, 0.0, 0.0, errors, warnings, info
 
     if input_mode == "Passive":
         return 0.0, 0.0, 0.0, errors, warnings, info
 
-    if input_mode == "Effective Force Pe":
+    if input_mode == "Pe_eff":
         pe_kn = _pe_eff_kn_from_row(row)
         if pe_kn is None:
-            errors.append(f"Row {row_number}: Pe_eff_kN must be numeric for Effective Force Pe mode.")
-            return 0.0, 0.0, 0.0, errors, warnings, info
+            warnings.append(f"Row {row_number}: Pe_eff mode has blank Pe_eff_kN; using zero effective prestress.")
+            pe_kn = 0.0
         if pe_kn < 0:
             errors.append(f"Row {row_number}: Pe_eff_kN must be greater than or equal to zero.")
+            return 0.0, 0.0, 0.0, errors, warnings, info
+        if area_mm2 <= 0:
+            errors.append(f"Row {row_number}: Area_mm2 must be positive for Pe_eff mode.")
             return 0.0, 0.0, 0.0, errors, warnings, info
         pe_eff_n = kN_to_N(pe_kn)
         initial_stress_mpa = pe_eff_n / area_mm2
@@ -738,26 +685,35 @@ def _resolve_initial_state(
             if initial_stress_mpa > fpu_value:
                 errors.append(f"Row {row_number}: Initial prestress stress from Pe_eff exceeds fpu_MPa.")
                 return 0.0, 0.0, 0.0, errors, warnings, info
-            if initial_stress_mpa > 0.85 * fpu_value:
+            if initial_stress_mpa > 0.75 * fpu_value:
                 warnings.append(
-                    f"Row {row_number}: Initial prestress stress is high relative to fpu_MPa. "
-                    "Please verify jacking and loss assumptions."
+                    f"Row {row_number}: Effective prestress stress is greater than 0.75 x fpu_MPa; "
+                    "high relative to fpu_MPa; verify effective prestress and loss assumptions."
                 )
         if pe_eff_n == 0:
-            info.append(f"Row {row_number}: Pe_eff is zero; element is effectively passive.")
+            warnings.append(f"Row {row_number}: Pe_eff mode has zero Pe_eff_kN.")
         return pe_eff_n, initial_stress_mpa, initial_stress_mpa / ep_mpa, errors, warnings, info
 
-    if input_mode == "Effective Stress fpe":
+    if input_mode == "fpe":
         fpe_mpa = _to_float(row.get("fpe_MPa"))
         if fpe_mpa is None:
-            errors.append(f"Row {row_number}: fpe_MPa must be numeric for Effective Stress fpe mode.")
-            return 0.0, 0.0, 0.0, errors, warnings, info
+            warnings.append(f"Row {row_number}: fpe mode has blank fpe_MPa; using zero effective prestress.")
+            fpe_mpa = 0.0
         if fpe_mpa < 0:
             errors.append(f"Row {row_number}: fpe_MPa must be greater than or equal to zero.")
+        if area_mm2 <= 0:
+            errors.append(f"Row {row_number}: Area_mm2 must be positive for fpe mode.")
         if fpu_mpa is not None and fpe_mpa > float(fpu_mpa):
             errors.append(f"Row {row_number}: fpe_MPa must not exceed fpu_MPa.")
+        if fpu_mpa is not None and fpe_mpa > 0.75 * float(fpu_mpa):
+            warnings.append(
+                f"Row {row_number}: fpe_MPa is greater than 0.75 x fpu_MPa; "
+                "verify effective prestress and loss assumptions."
+            )
         if errors:
             return 0.0, 0.0, 0.0, errors, warnings, info
+        if fpe_mpa == 0:
+            warnings.append(f"Row {row_number}: fpe mode has zero fpe_MPa.")
         return area_mm2 * fpe_mpa, fpe_mpa, fpe_mpa / ep_mpa, errors, warnings, info
 
     fpj_ratio = _to_float(row.get("fpj_ratio"))
@@ -969,7 +925,9 @@ def _message_list_html(messages: list[str]) -> str:
 
 def _engineering_notes_html() -> str:
     notes = [
-        "Pe_eff and fpe are user-entered effective prestress inputs; product breaking load is reference data only.",
+        "Choose Passive for non-prestressed steel contribution. Choose Pe_eff to enter effective force directly.",
+        "Choose fpe to enter effective stress and compute Pe_eff from Area_mm2; Pe_eff is after selected losses.",
+        "Product breaking load is reference data only and is never used as Pe_eff.",
         "Duct ID is duct reference information and is not steel diameter.",
         "For tendon_group rows, Area_mm2 controls steel area; Eq Steel Dia_mm is display and preview information only.",
         "Prestress is treated as internal section action, not external Pu demand.",
@@ -994,6 +952,7 @@ def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_erro
         PrestressMetric("Analysis readiness", "Yes" if valid_for_analysis else "No", status="ready" if valid_for_analysis else "danger", strong=True),
         PrestressMetric("Tendon groups", f"{tendon_group_count:,}", detail=f"Strand/PT bars: {strand_pt_count:,}"),
         PrestressMetric("Bonded state", f"{bonded_count:,} / {unbonded_count:,}", detail="bonded / unbonded", status="warning" if unbonded_count else "neutral"),
+        PrestressMetric("Input modes", "See table", detail="Passive / Pe_eff / fpe"),
         PrestressMetric("Validation", f"{error_count:,} error(s)", detail=f"{warning_count:,} warning(s)", status="danger" if error_count else ("warning" if warning_count else "ready"), strong=bool(error_count)),
     ]
 
@@ -1061,11 +1020,7 @@ def _render_tendon_product_tools() -> None:
         st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
         row = apply_tendon_product_to_row(base_row, product)
         if st.button("Add standard tendon to table", use_container_width=True):
-            st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
-                _append_prestress_row(pd.DataFrame(current_table), row),
-                _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", [])),
-            )
-            st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+            st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
             st.success(f"Added tendon product {product.label}. Pe_eff remains user-controlled.")
         return
 
@@ -1090,11 +1045,7 @@ def _render_tendon_product_tools() -> None:
     st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
     row = apply_tendon_product_to_row(base_row, product)
     if st.button("Add custom tendon to table", use_container_width=True):
-        st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
-            _append_prestress_row(pd.DataFrame(current_table), row),
-            _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", [])),
-        )
-        st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+        st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
         st.success(f"Added custom tendon {product.label}. Pe_eff remains user-controlled.")
 
 
@@ -1123,12 +1074,8 @@ def render_prestress_page() -> None:
 
     if "prestress_table" not in st.session_state:
         st.session_state["prestress_table"] = _default_prestress_table(prestress_db)
-    if "prestress_editor_revision" not in st.session_state:
-        st.session_state["prestress_editor_revision"] = 0
-    st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
-        pd.DataFrame(st.session_state["prestress_table"]),
-        prestress_db,
-    )
+    st.session_state["prestress_table"] = normalize_prestress_table_for_effective_input_sync(pd.DataFrame(st.session_state["prestress_table"]), prestress_db)
+    st.session_state.setdefault("prestress_editor_revision", 0)
 
     summary_slot = st.empty()
     main_col, side_col = st.columns([0.68, 0.32], gap="large")
@@ -1150,13 +1097,12 @@ def render_prestress_page() -> None:
             unsafe_allow_html=True,
         )
         product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
-        editor_key = f"prestress_data_editor_{st.session_state.get('prestress_editor_revision', 0)}"
+        editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
         edited_df = st.data_editor(
             st.session_state["prestress_table"],
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
-            column_order=_PRESTRESS_EDITOR_COLUMNS,
             column_config={
                 "Active": st.column_config.CheckboxColumn("Active"),
                 "Label": st.column_config.TextColumn("Label"),
@@ -1182,16 +1128,14 @@ def render_prestress_page() -> None:
                 "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
                 "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
                 "Note": st.column_config.TextColumn("Note"),
-                "_last_product": None,
             },
             key=editor_key,
         )
-        synced_df = _normalize_prestress_table_for_editor(edited_df, prestress_db)
-        if _visible_prestress_table_changed(edited_df, synced_df):
-            st.session_state["prestress_table"] = synced_df
-            st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+        edited_df = normalize_prestress_table_for_effective_input_sync(edited_df, prestress_db)
+        if not _dataframes_equal(edited_df, pd.DataFrame(st.session_state["prestress_table"])):
+            st.session_state["prestress_table"] = edited_df
+            st.session_state["prestress_editor_revision"] += 1
             st.rerun()
-        edited_df = synced_df
         st.session_state["prestress_table"] = edited_df
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)

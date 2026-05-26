@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,118 @@ class RebarParseResult:
     errors: list[str]
     warnings: list[str]
     info: list[str]
+
+
+@dataclass(frozen=True)
+class RebarMetric:
+    title: str
+    value: str
+    detail: str = ""
+    status: str = "neutral"
+    strong: bool = False
+
+
+_REBAR_PAGE_CSS = """
+<style>
+.cpmm-rebar-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+.cpmm-rebar-chip {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.58rem 0.7rem;
+  min-height: 76px;
+}
+.cpmm-rebar-chip-label {
+  color: #667085;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  margin-bottom: 0.18rem;
+}
+.cpmm-rebar-chip-value {
+  color: #101828;
+  font-size: 0.96rem;
+  font-weight: 720;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+.cpmm-rebar-chip-detail {
+  color: #667085;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  margin-top: 0.16rem;
+}
+.cpmm-rebar-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.cpmm-rebar-badge.ready { color: #1f5f2a; background: #e7f5e8; }
+.cpmm-rebar-badge.warning { color: #7a4b00; background: #fff4d6; }
+.cpmm-rebar-badge.danger { color: #9f1f17; background: #fde8e7; }
+.cpmm-rebar-badge.info { color: #1849a9; background: #e8f1ff; }
+.cpmm-rebar-badge.neutral { color: #475467; background: #eef1f5; }
+.cpmm-rebar-kv-panel {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.64rem 0.84rem;
+}
+.cpmm-rebar-kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.8rem;
+  border-bottom: 1px solid #edf0f5;
+  padding: 0.32rem 0;
+}
+.cpmm-rebar-kv-row:last-child { border-bottom: 0; }
+.cpmm-rebar-kv-label {
+  color: #667085;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.cpmm-rebar-kv-value {
+  color: #101828;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.cpmm-rebar-note {
+  color: #667085;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.cpmm-rebar-message-list {
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 0.62rem 0.78rem;
+  margin-top: 0.55rem;
+}
+.cpmm-rebar-message-item {
+  color: #475467;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  padding: 0.18rem 0;
+}
+@media (max-width: 1250px) {
+  .cpmm-rebar-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .cpmm-rebar-strip { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+"""
 
 
 def load_rebar_database(path: Path | str = DEFAULT_REBAR_DB_PATH) -> pd.DataFrame:
@@ -203,62 +316,184 @@ def rebar_summary_dataframe(rebars: list[Rebar]) -> pd.DataFrame:
     )
 
 
-def _render_validation(result: RebarParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
-    st.subheader("Rebar Validation")
-    all_errors = [*result.errors, *geometry_errors]
-    if all_errors:
-        for error in all_errors:
-            st.error(f"ERROR: {error}")
-    else:
-        st.success("No validation errors")
+def _safe_status(status: str) -> str:
+    return status if status in {"ready", "warning", "danger", "info", "neutral"} else "neutral"
 
+
+def _strip_html(metrics: list[RebarMetric]) -> str:
+    chips: list[str] = []
+    for metric in metrics:
+        status = _safe_status(metric.status)
+        value_html = (
+            f'<span class="cpmm-rebar-badge {status}">{escape(metric.value)}</span>'
+            if metric.strong
+            else escape(metric.value)
+        )
+        detail_html = f'<div class="cpmm-rebar-chip-detail">{escape(metric.detail)}</div>' if metric.detail else ""
+        chips.append(
+            '<div class="cpmm-rebar-chip">'
+            f'<div class="cpmm-rebar-chip-label">{escape(metric.title)}</div>'
+            f'<div class="cpmm-rebar-chip-value">{value_html}</div>'
+            f"{detail_html}"
+            "</div>"
+        )
+    return '<div class="cpmm-rebar-strip">' + "".join(chips) + "</div>"
+
+
+def _kv_panel_html(rows: list[tuple[str, str]]) -> str:
+    row_html = []
+    for label, value in rows:
+        row_html.append(
+            '<div class="cpmm-rebar-kv-row">'
+            f'<div class="cpmm-rebar-kv-label">{escape(label)}</div>'
+            f'<div class="cpmm-rebar-kv-value">{escape(value)}</div>'
+            "</div>"
+        )
+    return '<div class="cpmm-rebar-kv-panel">' + "".join(row_html) + "</div>"
+
+
+def _message_list_html(messages: list[str]) -> str:
+    items = "".join(f'<div class="cpmm-rebar-message-item">{escape(message)}</div>' for message in messages)
+    return f'<div class="cpmm-rebar-message-list">{items}</div>'
+
+
+def _total_as_mm2(rebars: list[Rebar]) -> float:
+    return sum(rebar.area_mm2 for rebar in rebars)
+
+
+def _dominant_material_label(rebars: list[Rebar], fallback: str | None = None) -> str:
+    if not rebars:
+        return fallback or "N/A"
+    materials = sorted({rebar.material_name for rebar in rebars if rebar.material_name})
+    if not materials:
+        return fallback or "N/A"
+    if len(materials) == 1:
+        return materials[0]
+    return f"{len(materials)} materials"
+
+
+def _reinforcement_ratio_label(total_as_mm2: float, geometry: SectionGeometry | None) -> str:
+    if geometry is None:
+        return "N/A"
+    area_mm2 = float(to_shapely_polygon(geometry).area)
+    if area_mm2 <= 0:
+        return "N/A"
+    return f"{100.0 * total_as_mm2 / area_mm2:.3f}%"
+
+
+def _valid_status(valid_for_analysis: bool) -> str:
+    return "ready" if valid_for_analysis else "danger"
+
+
+def _render_summary_strip(
+    result: RebarParseResult,
+    geometry: SectionGeometry | None,
+    input_mode: str,
+    valid_for_analysis: bool,
+    active_material_name: str | None,
+) -> None:
+    total_as = _total_as_mm2(result.rebars)
+    st.markdown(
+        _strip_html(
+            [
+                RebarMetric("Active Bars", f"{len(result.rebars):,}", "Expanded by Count"),
+                RebarMetric("Total As", f"{total_as:,.1f} mm^2"),
+                RebarMetric("Valid for Analysis", "Yes" if valid_for_analysis else "No", "", _valid_status(valid_for_analysis), True),
+                RebarMetric("Material", _dominant_material_label(result.rebars, active_material_name)),
+                RebarMetric("Rebar Ratio", _reinforcement_ratio_label(total_as, geometry), "As / concrete area"),
+                RebarMetric("Input Mode", input_mode),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_validation(result: RebarParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
+    st.markdown("#### Rebar Status")
+    all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
+    st.markdown(
+        _kv_panel_html(
+            [
+                ("Validation", "OK" if not all_errors else "Error"),
+                ("Warnings", f"{len(warnings):,}"),
+                ("Active bars", f"{len(result.rebars):,}"),
+                ("Total As", f"{_total_as_mm2(result.rebars):,.1f} mm^2"),
+                ("Valid for analysis", "Yes" if valid_for_analysis else "No"),
+                ("Material", _dominant_material_label(result.rebars)),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if all_errors:
+        for error in all_errors:
+            st.error(f"ERROR: {error}")
+
     if warnings:
         for warning in warnings:
             st.warning(f"WARNING: {warning}")
-    else:
-        st.info("WARNING: none")
 
-    for info in result.info:
-        st.info(f"INFO: {info}")
-    st.info(f"INFO: Rebars valid for analysis: {'Yes' if valid_for_analysis else 'No'}")
+    if result.info and (all_errors or warnings):
+        st.markdown(_message_list_html([f"INFO: {info}" for info in result.info]), unsafe_allow_html=True)
+
+
+def _rebar_column_config(bar_size_options: list[str]) -> dict[str, Any]:
+    return {
+        "Active": st.column_config.CheckboxColumn("Active", width="small"),
+        "Label": st.column_config.TextColumn("Label", width="small"),
+        "x_mm": st.column_config.NumberColumn("x_mm", help="x coordinate in section axes, mm", width="small"),
+        "y_mm": st.column_config.NumberColumn("y_mm", help="y coordinate in section axes, mm", width="small"),
+        "Bar Size": st.column_config.SelectboxColumn("Bar Size", options=bar_size_options, width="medium"),
+        "Diameter_mm": st.column_config.NumberColumn("Diameter_mm", help="Used for Custom or blank Bar Size.", width="small"),
+        "Material": st.column_config.TextColumn("Material", width="small"),
+        "Count": st.column_config.NumberColumn("Count", min_value=1, step=1, width="small"),
+        "Note": st.column_config.TextColumn("Note", width="medium"),
+    }
+
+
+def _render_rebar_editor(table: pd.DataFrame, bar_size_options: list[str]) -> pd.DataFrame:
+    return st.data_editor(
+        table,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=_rebar_column_config(bar_size_options),
+        key="rebar_data_editor",
+    )
 
 
 def render_rebar_page() -> None:
+    st.markdown(_REBAR_PAGE_CSS, unsafe_allow_html=True)
     st.subheader("Rebar")
     rebar_db = load_rebar_database()
     bar_size_options = ["", "Custom"] + [str(name) for name in rebar_db["name"].tolist()]
-    input_mode = st.selectbox("Rebar input mode", ["Manual table", "Rectangular perimeter layout", "Circular layout"])
-    st.info("If Bar Size is selected, database diameter is used. Leave Bar Size blank or choose Custom to use manual Diameter_mm.")
-    st.info("Future milestones will allow rebar selection from project-defined material lists. This tab continues to use the rebar database for bar sizes.")
+    active_material_name = st.session_state.get("active_rebar_material_name")
 
-    if input_mode != "Manual table":
-        st.info("Automatic rebar layouts are planned for a later milestone. Use Manual table for now.")
-        return
+    st.caption("Define ordinary reinforcement coordinates, bar sizes, and materials used by the active section analysis.")
 
     if "rebar_table" not in st.session_state:
         st.session_state["rebar_table"] = _default_rebar_table(rebar_db)
 
-    edited_df = st.data_editor(
-        st.session_state["rebar_table"],
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Active": st.column_config.CheckboxColumn("Active"),
-            "Label": st.column_config.TextColumn("Label"),
-            "x_mm": st.column_config.NumberColumn("x_mm"),
-            "y_mm": st.column_config.NumberColumn("y_mm"),
-            "Bar Size": st.column_config.SelectboxColumn("Bar Size", options=bar_size_options),
-            "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
-            "Material": st.column_config.TextColumn("Material"),
-            "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
-            "Note": st.column_config.TextColumn("Note"),
-        },
-        key="rebar_data_editor",
-    )
+    input_mode = "Manual table"
+    edited_df = st.session_state["rebar_table"]
+
+    input_col, status_col = st.columns([1.45, 0.85], gap="large")
+    with input_col:
+        with st.container(border=True):
+            st.markdown("#### Rebar Input")
+            input_mode = st.selectbox("Rebar input mode", ["Manual table", "Rectangular perimeter layout", "Circular layout"])
+            st.markdown(
+                '<div class="cpmm-rebar-note">Bar Size uses the database diameter. Leave Bar Size blank or choose Custom to use manual Diameter_mm.</div>',
+                unsafe_allow_html=True,
+            )
+            if input_mode != "Manual table":
+                st.info("Automatic rebar layouts are planned for a later milestone. Use Manual table for now.")
+            else:
+                edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options)
+
     st.session_state["rebar_table"] = edited_df
 
     result = rebars_from_dataframe(edited_df, rebar_db)
@@ -268,12 +503,15 @@ def render_rebar_page() -> None:
     st.session_state["rebars"] = result.rebars
     st.session_state["rebars_valid_for_analysis"] = valid_for_analysis
 
-    _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+    _render_summary_strip(result, geometry, input_mode, valid_for_analysis, active_material_name)
 
-    total_as = sum(rebar.area_mm2 for rebar in st.session_state["rebars"])
-    metric_cols = st.columns(2)
-    metric_cols[0].metric("Active bars", f"{len(st.session_state['rebars']):,}")
-    metric_cols[1].metric("Total As", f"{total_as:,.1f} mm^2")
+    with status_col:
+        with st.container(border=True):
+            _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+            st.markdown(
+                '<div class="cpmm-rebar-note">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
+                unsafe_allow_html=True,
+            )
 
     st.subheader("Rebar Summary")
     st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)

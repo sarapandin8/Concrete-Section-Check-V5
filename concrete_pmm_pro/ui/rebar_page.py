@@ -27,6 +27,22 @@ REBAR_DEFAULT_MATERIAL_BY_SIZE = {
     "DB32": "SD50",
 }
 
+# Keep the editor column contract centralized.  The same ordered column list is
+# used when creating the default table, normalizing data_editor output, comparing
+# edited rows, and feeding the Rebar parser.  This avoids subtle Streamlit rerun
+# bugs caused by missing columns or inconsistent column order.
+REBAR_TABLE_COLUMNS = [
+    "Active",
+    "Label",
+    "x_mm",
+    "y_mm",
+    "Bar Size",
+    "Diameter_mm",
+    "Material",
+    "Count",
+    "Note",
+]
+
 
 @dataclass(frozen=True)
 class RebarParseResult:
@@ -234,6 +250,62 @@ def _previous_bar_size(previous_df: pd.DataFrame | None, index: Any) -> str:
     return _normalized_bar_size(previous_df.at[index, "Bar Size"] if "Bar Size" in previous_df.columns else "")
 
 
+def _ensure_rebar_table_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with the full editor column contract and stable order."""
+    table = df.copy()
+    for column in REBAR_TABLE_COLUMNS:
+        if column not in table.columns:
+            table[column] = None
+    return table[REBAR_TABLE_COLUMNS]
+
+
+def _editor_cell_equal(left: Any, right: Any, numeric: bool = False, boolean: bool = False) -> bool:
+    """Compare data_editor cells without false mismatches from type coercion.
+
+    Streamlit may round-trip ``32`` as ``32.0`` or preserve blank cells as
+    ``None``/``NaN`` depending on the edit path.  This comparator keeps the
+    immediate-sync guard from triggering an unnecessary rerun loop while still
+    detecting real Bar Size → Diameter/Material updates.
+    """
+    if _is_blank(left) and _is_blank(right):
+        return True
+    if boolean:
+        return _to_bool(left) == _to_bool(right)
+    if numeric:
+        left_number = _to_float(left)
+        right_number = _to_float(right)
+        if left_number is None or right_number is None:
+            return left_number is right_number
+        return abs(left_number - right_number) <= 1e-9
+    return str(left).strip() == str(right).strip()
+
+
+def rebar_editor_tables_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
+    """Return True when two editor tables are equivalent for the visible UI.
+
+    This is intentionally stricter than object identity and looser than
+    ``DataFrame.equals``.  It prevents rerun loops caused only by pandas/Streamlit
+    dtype differences, while still detecting when the auto-sync has changed
+    Diameter_mm or Material after a Bar Size edit.
+    """
+    left_table = _ensure_rebar_table_columns(left).reset_index(drop=True)
+    right_table = _ensure_rebar_table_columns(right).reset_index(drop=True)
+    if left_table.shape != right_table.shape:
+        return False
+
+    numeric_columns = {"x_mm", "y_mm", "Diameter_mm", "Count"}
+    for row_index in range(len(left_table)):
+        for column in REBAR_TABLE_COLUMNS:
+            if not _editor_cell_equal(
+                left_table.at[row_index, column],
+                right_table.at[row_index, column],
+                numeric=column in numeric_columns,
+                boolean=column == "Active",
+            ):
+                return False
+    return True
+
+
 def normalize_rebar_table_for_bar_size_sync(edited_df: pd.DataFrame, previous_df: pd.DataFrame | None, rebar_db: pd.DataFrame) -> pd.DataFrame:
     """Apply database defaults only when Bar Size changes or dependent cells are blank.
 
@@ -241,10 +313,7 @@ def normalize_rebar_table_for_bar_size_sync(edited_df: pd.DataFrame, previous_df
     across reruns while still making size dropdown changes immediately consistent
     with the engineering database/default material rules.
     """
-    normalized = edited_df.copy()
-    for column in ["Active", "Label", "x_mm", "y_mm", "Bar Size", "Diameter_mm", "Material", "Count", "Note"]:
-        if column not in normalized.columns:
-            normalized[column] = None
+    normalized = _ensure_rebar_table_columns(edited_df)
 
     for index, row in normalized.iterrows():
         bar_size = _normalized_bar_size(row.get("Bar Size"))
@@ -521,14 +590,14 @@ def _rebar_column_config(bar_size_options: list[str]) -> dict[str, Any]:
     }
 
 
-def _render_rebar_editor(table: pd.DataFrame, bar_size_options: list[str]) -> pd.DataFrame:
+def _render_rebar_editor(table: pd.DataFrame, bar_size_options: list[str], editor_key: str) -> pd.DataFrame:
     return st.data_editor(
-        table,
+        _ensure_rebar_table_columns(table),
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
         column_config=_rebar_column_config(bar_size_options),
-        key="rebar_data_editor",
+        key=editor_key,
     )
 
 
@@ -543,25 +612,50 @@ def render_rebar_page() -> None:
 
     if "rebar_table" not in st.session_state:
         st.session_state["rebar_table"] = _default_rebar_table(rebar_db)
+    st.session_state["rebar_table"] = _ensure_rebar_table_columns(st.session_state["rebar_table"])
+    if "rebar_editor_revision" not in st.session_state:
+        st.session_state["rebar_editor_revision"] = 0
 
     input_mode = "Manual table"
     edited_df = st.session_state["rebar_table"]
 
     input_col, status_col = st.columns([1.45, 0.85], gap="large")
+    summary_slot = None
     with input_col:
         with st.container(border=True):
             st.markdown("#### Rebar Input")
+            # Keep the summary visually above the editor.  The placeholder is filled
+            # after data_editor returns so the metrics still use the normalized table
+            # from the current rerun instead of stale pre-edit values.
+            summary_slot = st.empty()
             input_mode = st.selectbox("Rebar input mode", ["Manual table", "Rectangular perimeter layout", "Circular layout"])
             st.markdown(
                 '<div class="cpmm-rebar-note">Selecting a database bar size fills Diameter and default Material. Diameter and Material remain editable for project-specific overrides.</div>',
                 unsafe_allow_html=True,
             )
             if input_mode != "Manual table":
-                st.info("Automatic rebar layouts are planned for a later milestone. Use Manual table for now.")
-            else:
-                edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options)
+                st.info("Automatic rebar layouts are planned for a later milestone. The editable Manual table remains active for engineering traceability.")
 
-    normalized_df = normalize_rebar_table_for_bar_size_sync(edited_df, st.session_state.get("rebar_table"), rebar_db)
+            # The editable table is always shown.  Until automatic generators exist,
+            # hiding this table would hide the actual reinforcement model sent to
+            # PMM/SLS analysis and make bar-size synchronization hard to verify.
+            editor_key = f"rebar_data_editor_{st.session_state['rebar_editor_revision']}"
+            edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options, editor_key)
+
+    previous_table = st.session_state.get("rebar_table")
+    normalized_df = normalize_rebar_table_for_bar_size_sync(edited_df, previous_table, rebar_db)
+
+    if not rebar_editor_tables_equal(normalized_df, edited_df):
+        # A database Bar Size edit changed dependent cells such as Diameter_mm
+        # or Material.  Updating only the backing dataframe after the widget has
+        # rendered leaves the visible data_editor one rerun behind.  Bump the
+        # editor key and rerun once so the user sees DB25→25/SD40 or DB32→32/SD50
+        # immediately, while manual overrides remain stable when Bar Size is
+        # unchanged.
+        st.session_state["rebar_table"] = normalized_df
+        st.session_state["rebar_editor_revision"] += 1
+        st.rerun()
+
     st.session_state["rebar_table"] = normalized_df
 
     result = rebars_from_dataframe(normalized_df, rebar_db)
@@ -571,7 +665,9 @@ def render_rebar_page() -> None:
     st.session_state["rebars"] = result.rebars
     st.session_state["rebars_valid_for_analysis"] = valid_for_analysis
 
-    _render_summary_strip(result, geometry, input_mode, valid_for_analysis, active_material_name)
+    if summary_slot is not None:
+        with summary_slot:
+            _render_summary_strip(result, geometry, input_mode, valid_for_analysis, active_material_name)
 
     with status_col:
         with st.container(border=True):
@@ -581,19 +677,24 @@ def render_rebar_page() -> None:
                 unsafe_allow_html=True,
             )
 
-    st.subheader("Rebar Summary")
-    st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
+    summary_col, preview_col = st.columns([0.58, 0.42], gap="large")
+    with summary_col:
+        st.subheader("Rebar Summary")
+        st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
 
     if geometry is not None:
-        st.subheader("Section Preview with Rebar")
-        st.plotly_chart(
-            create_section_preview(
+        with preview_col:
+            st.subheader("Section Preview with Rebar")
+            preview_fig = create_section_preview(
                 geometry,
                 st.session_state.get("section_dimensions", []),
                 "symbol_value",
                 st.session_state["rebars"],
                 st.session_state.get("prestress_elements", []),
-            ),
-            use_container_width=True,
-            key="rebar_section_preview",
-        )
+            )
+            preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=36, b=10))
+            st.plotly_chart(
+                preview_fig,
+                use_container_width=True,
+                key="rebar_section_preview",
+            )

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Any
+import re
 
 import pandas as pd
 import streamlit as st
@@ -208,6 +209,32 @@ _PRESTRESS_PAGE_CSS = """
   color: #667085;
   font-size: 0.80rem;
   line-height: 1.35;
+}
+.cpmm-prestress-mode-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0.55rem 0 0.65rem 0;
+}
+.cpmm-prestress-mode-card {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.52rem 0.65rem;
+}
+.cpmm-prestress-mode-title {
+  color: #101828;
+  font-size: 0.82rem;
+  font-weight: 720;
+  margin-bottom: 0.16rem;
+}
+.cpmm-prestress-mode-text {
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.32;
+}
+@media (max-width: 980px) {
+  .cpmm-prestress-mode-guide { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 1320px) {
   .cpmm-prestress-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -751,7 +778,13 @@ def _resolve_initial_state(
         if fpu_mpa is not None:
             fpu_value = float(fpu_mpa)
             if initial_stress_mpa > fpu_value:
-                errors.append(f"Row {row_number}: Initial prestress stress from Pe_eff exceeds fpu_MPa.")
+                max_pe_eff_kn = area_mm2 * fpu_value / 1000.0
+                errors.append(
+                    f"Row {row_number}: Initial prestress stress from Pe_eff exceeds fpu_MPa "
+                    f"({initial_stress_mpa:,.1f} > {fpu_value:,.1f} MPa). "
+                    f"Maximum Pe_eff for Area_mm2 and fpu_MPa is {max_pe_eff_kn:,.1f} kN; "
+                    "this row is excluded from the analysis summary until corrected."
+                )
                 return 0.0, 0.0, 0.0, errors, warnings, info
             if initial_stress_mpa > 0.75 * fpu_value:
                 warnings.append(
@@ -1004,6 +1037,59 @@ def _engineering_notes_html() -> str:
     return f'<div class="cpmm-prestress-note-panel">{items}</div>'
 
 
+def _input_mode_guide_html() -> str:
+    cards = [
+        ("Passive", "No effective prestress force. The steel is included as passive high-strength steel only."),
+        ("Pe_eff", "Enter effective prestress force in kN after losses. fpe is computed from Pe_eff / Area."),
+        ("fpe", "Enter effective prestress stress in MPa after losses. Pe_eff is computed from Area x fpe."),
+    ]
+    card_html = "".join(
+        '<div class="cpmm-prestress-mode-card">'
+        f'<div class="cpmm-prestress-mode-title">{escape(title)}</div>'
+        f'<div class="cpmm-prestress-mode-text">{escape(text)}</div>'
+        '</div>'
+        for title, text in cards
+    )
+    return f'<div class="cpmm-prestress-mode-guide">{card_html}</div>'
+
+
+def _row_numbers_from_errors(errors: list[str]) -> set[int]:
+    row_numbers: set[int] = set()
+    for message in errors:
+        match = re.match(r"Row\s+(\d+):", message)
+        if match:
+            row_numbers.add(int(match.group(1)))
+    return row_numbers
+
+
+def _invalid_prestress_rows_dataframe(table: pd.DataFrame, errors: list[str]) -> pd.DataFrame:
+    """Return user-facing rows excluded from analysis because of validation errors."""
+
+    row_numbers = _row_numbers_from_errors(errors)
+    if not row_numbers:
+        return pd.DataFrame()
+    source = pd.DataFrame(table).reset_index(drop=True)
+    rows: list[dict[str, Any]] = []
+    for row_number in sorted(row_numbers):
+        if row_number < 1 or row_number > len(source):
+            continue
+        row = source.iloc[row_number - 1]
+        reasons = [message for message in errors if message.startswith(f"Row {row_number}:")]
+        rows.append(
+            {
+                "Row": row_number,
+                "Label": row.get("Label"),
+                "Product": row.get("Product"),
+                "Input Mode": row.get("Input Mode"),
+                "Area_mm2": row.get("Area_mm2"),
+                "Pe_eff_kN": row.get("Pe_eff_kN"),
+                "fpe_MPa": row.get("fpe_MPa"),
+                "Reason excluded": " | ".join(reasons),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_errors: list[str], valid_for_analysis: bool) -> list[PrestressMetric]:
     total_aps = sum(element.total_area_mm2 for element in result.elements)
     total_pe_kn = sum(element.pe_eff_n * element.count for element in result.elements) / 1000.0
@@ -1014,9 +1100,9 @@ def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_erro
     error_count = len(result.errors) + len(geometry_errors)
     warning_count = len(result.warnings)
     return [
-        PrestressMetric("Active elements", f"{len(result.elements):,}", status="info"),
+        PrestressMetric("Valid elements", f"{len(result.elements):,}", detail="used in analysis", status="info"),
         PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
-        PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN"),
+        PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN", detail="valid rows only"),
         PrestressMetric("Analysis readiness", "Yes" if valid_for_analysis else "No", status="ready" if valid_for_analysis else "danger", strong=True),
         PrestressMetric("Tendon groups", f"{tendon_group_count:,}", detail=f"Strand/PT bars: {strand_pt_count:,}"),
         PrestressMetric("Bonded state", f"{bonded_count:,} / {unbonded_count:,}", detail="bonded / unbonded", status="warning" if unbonded_count else "neutral"),
@@ -1044,9 +1130,9 @@ def _build_prestress_status_rows(
         PrestressMetric("Overall readiness", "Ready" if valid_for_analysis else "Not ready", status="ready" if valid_for_analysis else "danger", strong=True),
         PrestressMetric("Validation errors", f"{len(all_errors):,}", status="danger" if all_errors else "ready", strong=bool(all_errors)),
         PrestressMetric("Warnings", f"{len(warnings):,}", status="warning" if warnings else "ready", strong=bool(warnings)),
-        PrestressMetric("Active elements", f"{len(result.elements):,}"),
+        PrestressMetric("Valid elements", f"{len(result.elements):,}"),
         PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
-        PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN"),
+        PrestressMetric("Valid Pe_eff", f"{total_pe_kn:,.1f} kN"),
         PrestressMetric("Tendon groups", f"{tendon_group_count:,}"),
         PrestressMetric("Bonded / unbonded", f"{bonded_count:,} / {unbonded_count:,}"),
     ]
@@ -1171,6 +1257,7 @@ def render_prestress_page() -> None:
             "</div>",
             unsafe_allow_html=True,
         )
+        st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
         product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
         show_full_engineering_columns = st.checkbox(
             "Show full engineering columns",
@@ -1199,9 +1286,19 @@ def render_prestress_page() -> None:
                 "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
                 "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
                 "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
-                "Input Mode": st.column_config.SelectboxColumn("Input Mode", options=INPUT_MODE_OPTIONS),
-                "Pe_eff_kN": st.column_config.NumberColumn("Pe_eff_kN"),
-                "fpe_MPa": st.column_config.NumberColumn("fpe_MPa"),
+                "Input Mode": st.column_config.SelectboxColumn(
+                    "Input Mode",
+                    options=INPUT_MODE_OPTIONS,
+                    help="Passive = no effective prestress; Pe_eff = enter effective force in kN; fpe = enter effective stress in MPa.",
+                ),
+                "Pe_eff_kN": st.column_config.NumberColumn(
+                    "Pe_eff_kN",
+                    help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
+                ),
+                "fpe_MPa": st.column_config.NumberColumn(
+                    "fpe_MPa",
+                    help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
+                ),
                 "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
                 "loss_percent": st.column_config.NumberColumn("loss_percent"),
                 "Bonded": st.column_config.CheckboxColumn("Bonded"),
@@ -1246,7 +1343,16 @@ def render_prestress_page() -> None:
         _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
         _render_engineering_notes()
 
+    invalid_rows_df = _invalid_prestress_rows_dataframe(edited_df, result.errors)
+    if not invalid_rows_df.empty:
+        st.markdown("#### Rows Excluded from Analysis")
+        st.warning(
+            "Rows listed below have validation errors and are not included in Valid elements, Total Aps, Total Pe_eff, Prestress Summary, or PMM/SLS analysis."
+        )
+        st.dataframe(invalid_rows_df, use_container_width=True, hide_index=True)
+
     st.markdown("#### Prestress Summary")
+    st.caption("Only valid active prestress rows used by analysis are shown here. Rows with validation errors are excluded until corrected.")
     st.dataframe(prestress_summary_dataframe(result.elements), use_container_width=True, hide_index=True)
 
     if geometry is not None:

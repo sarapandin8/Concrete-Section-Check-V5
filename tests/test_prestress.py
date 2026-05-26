@@ -13,6 +13,8 @@ from concrete_pmm_pro.ui.prestress_page import (
     _build_prestress_summary_metrics,
     _engineering_notes_html,
     _normalize_prestress_table_for_display,
+    _normalize_prestress_table_for_editor,
+    _visible_prestress_table_changed,
     _product_options_for_table,
     load_prestress_steel_database,
     prestress_elements_from_dataframe,
@@ -441,3 +443,62 @@ def test_engineering_notes_preserve_prestress_safeguards() -> None:
     assert "Duct ID is duct reference information and is not steel diameter" in html
     assert "Area_mm2 controls steel area" in html
     assert "not external Pu demand" in html
+
+
+def test_prestress_editor_sync_updates_database_product_defaults_immediately() -> None:
+    prestress_db = load_prestress_steel_database()
+    before = pd.DataFrame([_row(Product="15.2mm strand", **{"_last_product": "15.2mm strand"})])
+    edited = before.copy()
+    edited.loc[0, "Product"] = "PS Bar 32 - 1080/1230"
+
+    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
+
+    assert synced.loc[0, "Steel Type"] == "prestressing_bar"
+    assert synced.loc[0, "Diameter_mm"] == pytest.approx(32.0)
+    assert synced.loc[0, "Area_mm2"] == pytest.approx(804.2)
+    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1080.0)
+    assert synced.loc[0, "fpu_MPa"] == pytest.approx(1230.0)
+    assert _visible_prestress_table_changed(edited, synced)
+
+
+def test_prestress_editor_sync_updates_tendon_product_without_pe_override() -> None:
+    prestress_db = load_prestress_steel_database()
+    edited = pd.DataFrame([_row(Product="6-12", Pe_eff_kN=123.0, **{"_last_product": "Custom"})])
+
+    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
+
+    assert synced.loc[0, "Steel Type"] == "tendon_group"
+    assert synced.loc[0, "Area_mm2"] == pytest.approx(1680.0)
+    assert synced.loc[0, "Diameter_mm"] is None
+    assert synced.loc[0, "Eq Steel Dia_mm"] == pytest.approx(46.3, abs=0.05)
+    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1580.0)
+    assert synced.loc[0, "fpu_MPa"] == pytest.approx(1860.0)
+    assert synced.loc[0, "Ep_MPa"] == pytest.approx(195000.0)
+    assert synced.loc[0, "Strand Count"] == 12
+    assert synced.loc[0, "Pe_eff_kN"] == pytest.approx(123.0)
+    assert synced.loc[0, "Breaking Load_kN"] != pytest.approx(synced.loc[0, "Pe_eff_kN"])
+
+
+def test_prestress_editor_sync_preserves_manual_override_when_product_unchanged() -> None:
+    prestress_db = load_prestress_steel_database()
+    edited = pd.DataFrame(
+        [
+            _row(
+                Product="PS Bar 32 - 1080/1230",
+                **{
+                    "Steel Type": "prestressing_bar",
+                    "Diameter_mm": 33.0,
+                    "Area_mm2": 900.0,
+                    "fpy_MPa": 1100.0,
+                    "_last_product": "PS Bar 32 - 1080/1230",
+                },
+            )
+        ]
+    )
+
+    synced = _normalize_prestress_table_for_editor(edited, prestress_db)
+
+    assert synced.loc[0, "Diameter_mm"] == pytest.approx(33.0)
+    assert synced.loc[0, "Area_mm2"] == pytest.approx(900.0)
+    assert synced.loc[0, "fpy_MPa"] == pytest.approx(1100.0)
+    assert not _visible_prestress_table_changed(edited, synced)

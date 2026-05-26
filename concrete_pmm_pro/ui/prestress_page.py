@@ -37,6 +37,12 @@ STEEL_TYPE_OPTIONS = ["wire", "strand", "prestressing_bar", "tendon_group", "cus
 INPUT_MODE_OPTIONS = ["Passive", "Effective Force Pe", "Effective Stress fpe", "Jacking Stress + Losses"]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
 
+# Internal editor bookkeeping columns.  They are kept out of the visible
+# Streamlit table, but let us detect a true Product change so automatic
+# product defaults do not overwrite deliberate user overrides on every rerun.
+_INTERNAL_PRESTRESS_COLUMNS = ["_last_product"]
+
+
 
 @dataclass(frozen=True)
 class PrestressParseResult:
@@ -443,6 +449,171 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame) -> pd.DataFrame:
         area_mm2 = _to_float(normalized.at[index, "Area_mm2"] if "Area_mm2" in normalized.columns else None)
         normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(area_mm2) if is_tendon_group else None
     return normalized
+
+
+_PRESTRESS_EDITOR_COLUMNS = [
+    "Active",
+    "Label",
+    "Steel Type",
+    "Product",
+    "x_mm",
+    "y_mm",
+    "Area_mm2",
+    "Diameter_mm",
+    "Eq Steel Dia_mm",
+    "fpy_MPa",
+    "fpu_MPa",
+    "Ep_MPa",
+    "Input Mode",
+    "Pe_eff_kN",
+    "fpe_MPa",
+    "fpj_ratio",
+    "loss_percent",
+    "Bonded",
+    "Count",
+    "Strand Count",
+    "Breaking Load_kN",
+    "Duct Type",
+    "Duct ID_mm",
+    "Note",
+]
+
+
+def _ensure_prestress_editor_columns(table: pd.DataFrame) -> pd.DataFrame:
+    """Return a table with all user-facing and internal editor columns present.
+
+    Streamlit's data editor reruns after each edit.  Keeping a stable column set
+    avoids columns appearing/disappearing between reruns and lets us hide the
+    internal Product-tracking column without losing it from session state.
+    """
+    normalized = pd.DataFrame(table).copy()
+    for column in _PRESTRESS_EDITOR_COLUMNS:
+        if column not in normalized.columns:
+            normalized[column] = None
+    for column in _INTERNAL_PRESTRESS_COLUMNS:
+        if column not in normalized.columns:
+            normalized[column] = None
+    ordered = [column for column in [*_PRESTRESS_EDITOR_COLUMNS, *_INTERNAL_PRESTRESS_COLUMNS] if column in normalized.columns]
+    extra = [column for column in normalized.columns if column not in ordered]
+    return normalized[[*ordered, *extra]]
+
+
+def _fill_from_database_product(
+    normalized: pd.DataFrame,
+    index: Any,
+    database_row: pd.Series,
+    *,
+    force: bool,
+) -> None:
+    """Populate row fields from a catalog prestress product.
+
+    Product changes should fill the dependent fields immediately.  When the
+    Product is unchanged, blanks may still be backfilled, but deliberate user
+    overrides are preserved.
+    """
+    defaults = {
+        "Steel Type": str(database_row["type"]),
+        "Area_mm2": float(database_row["area_mm2"]),
+        "Diameter_mm": None if pd.isna(database_row["diameter_mm"]) else float(database_row["diameter_mm"]),
+        "fpy_MPa": None if pd.isna(database_row["fpy_MPa"]) else float(database_row["fpy_MPa"]),
+        "fpu_MPa": None if pd.isna(database_row["fpu_MPa"]) else float(database_row["fpu_MPa"]),
+        "Ep_MPa": float(database_row["Ep_MPa"]),
+    }
+    for column, value in defaults.items():
+        if force or _is_blank(normalized.at[index, column]):
+            normalized.at[index, column] = value
+    normalized.at[index, "Eq Steel Dia_mm"] = None
+
+
+def _fill_from_tendon_product(
+    normalized: pd.DataFrame,
+    index: Any,
+    product: TendonProduct,
+    *,
+    force: bool,
+) -> None:
+    """Populate a tendon_group row from standard/custom tendon reference data.
+
+    Duct ID and breaking load are reference metadata only.  Pe_eff/fpe are not
+    touched here; they remain user-controlled engineering inputs.
+    """
+    defaults = {
+        "Steel Type": "tendon_group",
+        "Area_mm2": product.tendon_area_mm2,
+        "Diameter_mm": None,
+        "fpy_MPa": product.fpy_MPa,
+        "fpu_MPa": product.fpu_MPa,
+        "Ep_MPa": product.Ep_MPa,
+        "Strand Count": product.strand_count,
+        "Strand Diameter_mm": product.strand_diameter_mm,
+        "Strand Area_mm2": product.strand_area_mm2,
+        "Breaking Load_kN": product.breaking_load_kN,
+        "Duct Type": product.duct_type or "",
+        "Duct ID_mm": product.duct_id_mm,
+    }
+    for column, value in defaults.items():
+        if column == "Diameter_mm" or force or _is_blank(normalized.at[index, column]):
+            normalized.at[index, column] = value
+    normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(_to_float(normalized.at[index, "Area_mm2"]))
+
+
+def _normalize_prestress_table_for_editor(table: pd.DataFrame, prestress_db: pd.DataFrame) -> pd.DataFrame:
+    """Normalize the Advanced Prestress Table for immediate UI feedback.
+
+    The critical Streamlit detail is timing: if a user changes Product in
+    st.data_editor, dependent columns (Area, Diameter, material strengths, duct
+    metadata) must be pushed back into session_state and rerun immediately.
+    This function is intentionally UI/data-normalization only.  It does not
+    compute Pe_eff from breaking load and does not change solver behavior.
+    """
+    normalized = _ensure_prestress_editor_columns(table)
+    normalized["Diameter_mm"] = normalized["Diameter_mm"].astype("object")
+
+    for index, row in normalized.iterrows():
+        product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
+        last_product = "" if _is_blank(row.get("_last_product")) else str(row.get("_last_product")).strip()
+        product_changed = product != last_product
+        tendon_product = get_tendon_product(product)
+        database_row = _product_row(product, prestress_db)
+
+        if tendon_product is not None:
+            _fill_from_tendon_product(normalized, index, tendon_product, force=product_changed)
+        elif database_row is not None:
+            _fill_from_database_product(normalized, index, database_row, force=product_changed)
+        else:
+            steel_type = "" if _is_blank(normalized.at[index, "Steel Type"]) else str(normalized.at[index, "Steel Type"]).strip()
+            is_tendon_group = steel_type == "tendon_group" or _looks_like_15_2mm_tendon_group(normalized.loc[index])
+            if is_tendon_group:
+                normalized.at[index, "Steel Type"] = "tendon_group"
+                normalized.at[index, "Diameter_mm"] = None
+                if _is_blank(normalized.at[index, "fpy_MPa"]):
+                    normalized.at[index, "fpy_MPa"] = DEFAULT_STRAND_FPY_MPA
+                if _is_blank(normalized.at[index, "fpu_MPa"]):
+                    normalized.at[index, "fpu_MPa"] = DEFAULT_STRAND_FPU_MPA
+                if _is_blank(normalized.at[index, "Ep_MPa"]):
+                    normalized.at[index, "Ep_MPa"] = DEFAULT_STRAND_EP_MPA
+                normalized.at[index, "Eq Steel Dia_mm"] = equivalent_steel_diameter_mm(_to_float(normalized.at[index, "Area_mm2"]))
+            else:
+                normalized.at[index, "Eq Steel Dia_mm"] = None
+
+        # Keep internal tracking after all product-driven defaults are applied.
+        normalized.at[index, "_last_product"] = product
+
+    return normalized
+
+
+def _visible_prestress_table_changed(before: pd.DataFrame, after: pd.DataFrame) -> bool:
+    """Return True when the user-visible editor values changed after sync.
+
+    Hidden bookkeeping columns should not trigger reruns by themselves.  This
+    avoids infinite rerun loops while still refreshing the table immediately
+    when Product selection fills dependent visible fields.
+    """
+    before_visible = _ensure_prestress_editor_columns(before)[_PRESTRESS_EDITOR_COLUMNS].reset_index(drop=True)
+    after_visible = _ensure_prestress_editor_columns(after)[_PRESTRESS_EDITOR_COLUMNS].reset_index(drop=True)
+    return not before_visible.astype("object").where(pd.notna(before_visible), None).equals(
+        after_visible.astype("object").where(pd.notna(after_visible), None)
+    )
 
 
 def _tendon_product_summary_dataframe(products: list[TendonProduct]) -> pd.DataFrame:
@@ -890,7 +1061,11 @@ def _render_tendon_product_tools() -> None:
         st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
         row = apply_tendon_product_to_row(base_row, product)
         if st.button("Add standard tendon to table", use_container_width=True):
-            st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
+            st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
+                _append_prestress_row(pd.DataFrame(current_table), row),
+                _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", [])),
+            )
+            st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
             st.success(f"Added tendon product {product.label}. Pe_eff remains user-controlled.")
         return
 
@@ -915,7 +1090,11 @@ def _render_tendon_product_tools() -> None:
     st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)
     row = apply_tendon_product_to_row(base_row, product)
     if st.button("Add custom tendon to table", use_container_width=True):
-        st.session_state["prestress_table"] = _normalize_prestress_table_for_display(_append_prestress_row(pd.DataFrame(current_table), row))
+        st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
+            _append_prestress_row(pd.DataFrame(current_table), row),
+            _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", [])),
+        )
+        st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
         st.success(f"Added custom tendon {product.label}. Pe_eff remains user-controlled.")
 
 
@@ -944,7 +1123,12 @@ def render_prestress_page() -> None:
 
     if "prestress_table" not in st.session_state:
         st.session_state["prestress_table"] = _default_prestress_table(prestress_db)
-    st.session_state["prestress_table"] = _normalize_prestress_table_for_display(pd.DataFrame(st.session_state["prestress_table"]))
+    if "prestress_editor_revision" not in st.session_state:
+        st.session_state["prestress_editor_revision"] = 0
+    st.session_state["prestress_table"] = _normalize_prestress_table_for_editor(
+        pd.DataFrame(st.session_state["prestress_table"]),
+        prestress_db,
+    )
 
     summary_slot = st.empty()
     main_col, side_col = st.columns([0.68, 0.32], gap="large")
@@ -966,11 +1150,13 @@ def render_prestress_page() -> None:
             unsafe_allow_html=True,
         )
         product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+        editor_key = f"prestress_data_editor_{st.session_state.get('prestress_editor_revision', 0)}"
         edited_df = st.data_editor(
             st.session_state["prestress_table"],
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
+            column_order=_PRESTRESS_EDITOR_COLUMNS,
             column_config={
                 "Active": st.column_config.CheckboxColumn("Active"),
                 "Label": st.column_config.TextColumn("Label"),
@@ -996,10 +1182,16 @@ def render_prestress_page() -> None:
                 "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
                 "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
                 "Note": st.column_config.TextColumn("Note"),
+                "_last_product": None,
             },
-            key="prestress_data_editor",
+            key=editor_key,
         )
-        edited_df = _normalize_prestress_table_for_display(edited_df)
+        synced_df = _normalize_prestress_table_for_editor(edited_df, prestress_db)
+        if _visible_prestress_table_changed(edited_df, synced_df):
+            st.session_state["prestress_table"] = synced_df
+            st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+            st.rerun()
+        edited_df = synced_df
         st.session_state["prestress_table"] = edited_df
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)

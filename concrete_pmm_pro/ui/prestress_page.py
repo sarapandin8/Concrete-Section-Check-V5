@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,130 @@ class PrestressParseResult:
     errors: list[str]
     warnings: list[str]
     info: list[str]
+
+
+@dataclass(frozen=True)
+class PrestressMetric:
+    title: str
+    value: str
+    detail: str = ""
+    status: str = "neutral"
+    strong: bool = False
+
+
+_PRESTRESS_PAGE_CSS = """
+<style>
+.cpmm-prestress-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+.cpmm-prestress-chip {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.58rem 0.7rem;
+  min-height: 76px;
+}
+.cpmm-prestress-chip-label {
+  color: #667085;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  margin-bottom: 0.18rem;
+}
+.cpmm-prestress-chip-value {
+  color: #101828;
+  font-size: 0.96rem;
+  font-weight: 720;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+.cpmm-prestress-chip-detail {
+  color: #667085;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  margin-top: 0.16rem;
+}
+.cpmm-prestress-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.cpmm-prestress-badge.ready { color: #1f5f2a; background: #e7f5e8; }
+.cpmm-prestress-badge.warning { color: #7a4b00; background: #fff4d6; }
+.cpmm-prestress-badge.danger { color: #9f1f17; background: #fde8e7; }
+.cpmm-prestress-badge.info { color: #1849a9; background: #e8f1ff; }
+.cpmm-prestress-badge.neutral { color: #475467; background: #eef1f5; }
+.cpmm-prestress-kv-panel {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.64rem 0.84rem;
+}
+.cpmm-prestress-kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.8rem;
+  border-bottom: 1px solid #edf0f5;
+  padding: 0.32rem 0;
+}
+.cpmm-prestress-kv-row:last-child { border-bottom: 0; }
+.cpmm-prestress-kv-label {
+  color: #667085;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.cpmm-prestress-kv-value {
+  color: #101828;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.cpmm-prestress-note-panel {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 0.68rem 0.84rem;
+}
+.cpmm-prestress-note-item {
+  color: #475467;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  padding: 0.2rem 0;
+}
+.cpmm-prestress-message-list {
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 0.62rem 0.78rem;
+  margin-top: 0.55rem;
+}
+.cpmm-prestress-message-item {
+  color: #475467;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  padding: 0.18rem 0;
+}
+.cpmm-prestress-quiet-note {
+  color: #667085;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+@media (max-width: 1320px) {
+  .cpmm-prestress-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .cpmm-prestress-strip { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+"""
 
 
 def load_prestress_steel_database(path: Path | str = DEFAULT_PRESTRESS_DB_PATH) -> pd.DataFrame:
@@ -627,12 +752,120 @@ def prestress_summary_dataframe(elements: list[PrestressElement]) -> pd.DataFram
     )
 
 
+def _safe_status(status: str) -> str:
+    return status if status in {"ready", "warning", "danger", "info", "neutral"} else "neutral"
+
+
+def _badge_html(value: str, status: str) -> str:
+    return f'<span class="cpmm-prestress-badge {_safe_status(status)}">{escape(value)}</span>'
+
+
+def _metric_strip_html(metrics: list[PrestressMetric]) -> str:
+    chips: list[str] = []
+    for metric in metrics:
+        status = _safe_status(metric.status)
+        value_html = _badge_html(metric.value, status) if metric.strong else escape(metric.value)
+        detail_html = f'<div class="cpmm-prestress-chip-detail">{escape(metric.detail)}</div>' if metric.detail else ""
+        chips.append(
+            '<div class="cpmm-prestress-chip">'
+            f'<div class="cpmm-prestress-chip-label">{escape(metric.title)}</div>'
+            f'<div class="cpmm-prestress-chip-value">{value_html}</div>'
+            f"{detail_html}"
+            "</div>"
+        )
+    return '<div class="cpmm-prestress-strip">' + "".join(chips) + "</div>"
+
+
+def _status_panel_html(rows: list[PrestressMetric]) -> str:
+    row_html: list[str] = []
+    for row in rows:
+        value_html = _badge_html(row.value, row.status) if row.strong else escape(row.value)
+        row_html.append(
+            '<div class="cpmm-prestress-kv-row">'
+            f'<div class="cpmm-prestress-kv-label">{escape(row.title)}</div>'
+            f'<div class="cpmm-prestress-kv-value">{value_html}</div>'
+            "</div>"
+        )
+    return '<div class="cpmm-prestress-kv-panel">' + "".join(row_html) + "</div>"
+
+
+def _message_list_html(messages: list[str]) -> str:
+    if not messages:
+        return ""
+    items = "".join(f'<div class="cpmm-prestress-message-item">{escape(message)}</div>' for message in messages)
+    return f'<div class="cpmm-prestress-message-list">{items}</div>'
+
+
+def _engineering_notes_html() -> str:
+    notes = [
+        "Pe_eff and fpe are user-entered effective prestress inputs; product breaking load is reference data only.",
+        "Duct ID is duct reference information and is not steel diameter.",
+        "For tendon_group rows, Area_mm2 controls steel area; Eq Steel Dia_mm is display and preview information only.",
+        "Prestress is treated as internal section action, not external Pu demand.",
+    ]
+    items = "".join(f'<div class="cpmm-prestress-note-item">{escape(note)}</div>' for note in notes)
+    return f'<div class="cpmm-prestress-note-panel">{items}</div>'
+
+
+def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_errors: list[str], valid_for_analysis: bool) -> list[PrestressMetric]:
+    total_aps = sum(element.total_area_mm2 for element in result.elements)
+    total_pe_kn = sum(element.pe_eff_n * element.count for element in result.elements) / 1000.0
+    tendon_group_count = sum(1 for element in result.elements if element.steel_type == "tendon_group")
+    strand_pt_count = sum(1 for element in result.elements if element.steel_type in {"strand", "prestressing_bar"})
+    bonded_count = sum(1 for element in result.elements if element.bonded)
+    unbonded_count = sum(1 for element in result.elements if not element.bonded)
+    error_count = len(result.errors) + len(geometry_errors)
+    warning_count = len(result.warnings)
+    return [
+        PrestressMetric("Active elements", f"{len(result.elements):,}", status="info"),
+        PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
+        PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN"),
+        PrestressMetric("Analysis readiness", "Yes" if valid_for_analysis else "No", status="ready" if valid_for_analysis else "danger", strong=True),
+        PrestressMetric("Tendon groups", f"{tendon_group_count:,}", detail=f"Strand/PT bars: {strand_pt_count:,}"),
+        PrestressMetric("Bonded state", f"{bonded_count:,} / {unbonded_count:,}", detail="bonded / unbonded", status="warning" if unbonded_count else "neutral"),
+        PrestressMetric("Validation", f"{error_count:,} error(s)", detail=f"{warning_count:,} warning(s)", status="danger" if error_count else ("warning" if warning_count else "ready"), strong=bool(error_count)),
+    ]
+
+
+def _build_prestress_status_rows(
+    result: PrestressParseResult,
+    geometry_errors: list[str],
+    geometry_available: bool,
+    valid_for_analysis: bool,
+) -> list[PrestressMetric]:
+    all_errors = [*result.errors, *geometry_errors]
+    warnings = list(result.warnings)
+    if not geometry_available:
+        warnings.append("Section geometry is not available yet.")
+    total_aps = sum(element.total_area_mm2 for element in result.elements)
+    total_pe_kn = sum(element.pe_eff_n * element.count for element in result.elements) / 1000.0
+    tendon_group_count = sum(1 for element in result.elements if element.steel_type == "tendon_group")
+    bonded_count = sum(1 for element in result.elements if element.bonded)
+    unbonded_count = sum(1 for element in result.elements if not element.bonded)
+    return [
+        PrestressMetric("Overall readiness", "Ready" if valid_for_analysis else "Not ready", status="ready" if valid_for_analysis else "danger", strong=True),
+        PrestressMetric("Validation errors", f"{len(all_errors):,}", status="danger" if all_errors else "ready", strong=bool(all_errors)),
+        PrestressMetric("Warnings", f"{len(warnings):,}", status="warning" if warnings else "ready", strong=bool(warnings)),
+        PrestressMetric("Active elements", f"{len(result.elements):,}"),
+        PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
+        PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN"),
+        PrestressMetric("Tendon groups", f"{tendon_group_count:,}"),
+        PrestressMetric("Bonded / unbonded", f"{bonded_count:,} / {unbonded_count:,}"),
+    ]
+
+
+def _render_prestress_summary_strip(result: PrestressParseResult, geometry_errors: list[str], valid_for_analysis: bool) -> None:
+    st.markdown(_metric_strip_html(_build_prestress_summary_metrics(result, geometry_errors, valid_for_analysis)), unsafe_allow_html=True)
+
+
 def _render_tendon_product_tools() -> None:
-    st.subheader("Tendon Product Creation")
-    st.info(
-        "Tendon product selection populates nominal strand count, steel area, fpu, breaking load, and duct information. "
-        "Effective prestress Pe_eff or fpe must still be specified by the user according to the analysis stage and prestress losses. "
-        "Duct ID is reference information only and is not used as steel diameter."
+    st.markdown("#### Tendon Product Creation")
+    st.markdown(
+        '<div class="cpmm-prestress-quiet-note">'
+        "Select a standard or custom 15.2 mm tendon product to populate product metadata and total tendon steel area. "
+        "Effective prestress remains controlled in the Advanced Prestress Table."
+        "</div>",
+        unsafe_allow_html=True,
     )
     mode = st.radio(
         "Product creation mode",
@@ -687,92 +920,87 @@ def _render_tendon_product_tools() -> None:
 
 
 def _render_validation(result: PrestressParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
-    st.subheader("Prestress Validation")
+    st.markdown("#### Prestress Status")
     all_errors = [*result.errors, *geometry_errors]
-    if all_errors:
-        for error in all_errors:
-            st.error(f"ERROR: {error}")
-    else:
-        st.success("No validation errors")
-
     warnings = list(result.warnings)
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
-    if warnings:
-        for warning in warnings:
-            st.warning(f"WARNING: {warning}")
-    else:
-        st.info("WARNING: none")
+    st.markdown(_status_panel_html(_build_prestress_status_rows(result, geometry_errors, geometry_available, valid_for_analysis)), unsafe_allow_html=True)
+    messages = [f"ERROR: {error}" for error in all_errors] or ["No validation errors."]
+    messages.extend(f"WARNING: {warning}" for warning in warnings)
+    messages.extend(f"INFO: {item}" for item in result.info)
+    st.markdown(_message_list_html(messages), unsafe_allow_html=True)
 
-    for item in result.info:
-        st.info(f"INFO: {item}")
-    st.info(f"INFO: Prestress valid for analysis: {'Yes' if valid_for_analysis else 'No'}")
+
+def _render_engineering_notes() -> None:
+    st.markdown("#### Engineering Notes")
+    st.markdown(_engineering_notes_html(), unsafe_allow_html=True)
 
 
 def render_prestress_page() -> None:
     st.subheader("Prestress")
+    st.markdown(_PRESTRESS_PAGE_CSS, unsafe_allow_html=True)
     prestress_db = _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", []))
-    input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
-
-    st.info("Future milestones will use project-defined prestress material lists more deeply. For now, project prestress materials are available in the Product dropdown.")
-    st.info("Passive mode means Pe_eff = 0.")
-    st.info("Effective Force Pe is entered as Pe_eff_kN in kN. Effective Stress fpe is entered in MPa.")
-    st.info("Jacking Stress + Losses uses fpj_ratio x fpu and loss_percent.")
-    st.info("Pe_eff and fpe affect the future PMM surface because they define initial prestress strain.")
-    st.info("Bonded prestress is used by the Milestone 3.1 prototype strain compatibility model. Unbonded prestress requires a future separate model.")
-    st.info("Bonded defaults to True. Select False only for unbonded prestressing steel.")
-
-    if input_mode != "Manual table":
-        st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
-        return
 
     if "prestress_table" not in st.session_state:
         st.session_state["prestress_table"] = _default_prestress_table(prestress_db)
     st.session_state["prestress_table"] = _normalize_prestress_table_for_display(pd.DataFrame(st.session_state["prestress_table"]))
 
-    _render_tendon_product_tools()
+    summary_slot = st.empty()
+    main_col, side_col = st.columns([0.68, 0.32], gap="large")
 
-    st.subheader("Advanced Prestress Table")
-    st.info(
-        "Use the advanced table to review and edit prestress element locations, effective prestress, bonded flag, and notes. "
-        "Tendon product selection only helps populate product geometry/material reference data."
-    )
-    product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
-    edited_df = st.data_editor(
-        st.session_state["prestress_table"],
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Active": st.column_config.CheckboxColumn("Active"),
-            "Label": st.column_config.TextColumn("Label"),
-            "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
-            "Product": st.column_config.SelectboxColumn("Product", options=product_options),
-            "x_mm": st.column_config.NumberColumn("x_mm"),
-            "y_mm": st.column_config.NumberColumn("y_mm"),
-            "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
-            "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
-            "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
-            "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
-            "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
-            "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
-            "Input Mode": st.column_config.SelectboxColumn("Input Mode", options=INPUT_MODE_OPTIONS),
-            "Pe_eff_kN": st.column_config.NumberColumn("Pe_eff_kN"),
-            "fpe_MPa": st.column_config.NumberColumn("fpe_MPa"),
-            "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
-            "loss_percent": st.column_config.NumberColumn("loss_percent"),
-            "Bonded": st.column_config.CheckboxColumn("Bonded"),
-            "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
-            "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
-            "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
-            "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
-            "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
-            "Note": st.column_config.TextColumn("Note"),
-        },
-        key="prestress_data_editor",
-    )
-    edited_df = _normalize_prestress_table_for_display(edited_df)
-    st.session_state["prestress_table"] = edited_df
+    with main_col:
+        st.markdown("#### Prestress Input Workflow")
+        input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
+        if input_mode != "Manual table":
+            st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
+
+        _render_tendon_product_tools()
+
+        st.markdown("#### Advanced Prestress Table")
+        st.markdown(
+            '<div class="cpmm-prestress-quiet-note">'
+            "Review and edit prestress element locations, effective prestress, bonded flag, material values, and notes. "
+            "Product selection only helps populate product geometry and material reference data."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+        edited_df = st.data_editor(
+            st.session_state["prestress_table"],
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Active": st.column_config.CheckboxColumn("Active"),
+                "Label": st.column_config.TextColumn("Label"),
+                "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
+                "Product": st.column_config.SelectboxColumn("Product", options=product_options),
+                "x_mm": st.column_config.NumberColumn("x_mm"),
+                "y_mm": st.column_config.NumberColumn("y_mm"),
+                "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
+                "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
+                "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
+                "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
+                "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
+                "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
+                "Input Mode": st.column_config.SelectboxColumn("Input Mode", options=INPUT_MODE_OPTIONS),
+                "Pe_eff_kN": st.column_config.NumberColumn("Pe_eff_kN"),
+                "fpe_MPa": st.column_config.NumberColumn("fpe_MPa"),
+                "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
+                "loss_percent": st.column_config.NumberColumn("loss_percent"),
+                "Bonded": st.column_config.CheckboxColumn("Bonded"),
+                "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
+                "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
+                "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
+                "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
+                "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
+                "Note": st.column_config.TextColumn("Note"),
+            },
+            key="prestress_data_editor",
+        )
+        edited_df = _normalize_prestress_table_for_display(edited_df)
+        st.session_state["prestress_table"] = edited_df
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)
     geometry = st.session_state.get("section_geometry")
@@ -781,24 +1009,18 @@ def render_prestress_page() -> None:
     st.session_state["prestress_elements"] = result.elements
     st.session_state["prestress_valid_for_analysis"] = valid_for_analysis
 
-    _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+    with summary_slot.container():
+        _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis)
 
-    total_aps = sum(element.total_area_mm2 for element in result.elements)
-    total_pe = sum(element.pe_eff_n * element.count for element in result.elements)
-    bonded_count = sum(1 for element in result.elements if element.bonded)
-    unbonded_count = sum(1 for element in result.elements if not element.bonded)
-    metric_cols = st.columns(5)
-    metric_cols[0].metric("Active elements", f"{len(result.elements):,}")
-    metric_cols[1].metric("Total Aps", f"{total_aps:,.1f} mm^2")
-    metric_cols[2].metric("Total Pe_eff", f"{total_pe:,.1f} N")
-    metric_cols[3].metric("Bonded", f"{bonded_count:,}")
-    metric_cols[4].metric("Unbonded", f"{unbonded_count:,}")
+    with side_col:
+        _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+        _render_engineering_notes()
 
-    st.subheader("Prestress Summary")
+    st.markdown("#### Prestress Summary")
     st.dataframe(prestress_summary_dataframe(result.elements), use_container_width=True, hide_index=True)
 
     if geometry is not None:
-        st.subheader("Section Preview with Prestress")
+        st.markdown("#### Section Preview with Prestress")
         st.plotly_chart(
             create_section_preview(
                 geometry,

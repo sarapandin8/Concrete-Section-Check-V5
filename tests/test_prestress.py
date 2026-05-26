@@ -9,6 +9,9 @@ from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
+    _build_prestress_status_rows,
+    _build_prestress_summary_metrics,
+    _engineering_notes_html,
     _normalize_prestress_table_for_display,
     _product_options_for_table,
     load_prestress_steel_database,
@@ -397,3 +400,44 @@ def test_prestress_summary_includes_total_area_and_total_force() -> None:
     assert "total_pe_eff_n" in summary.columns
     assert summary.loc[0, "total_area_mm2"] == pytest.approx(300.0)
     assert summary.loc[0, "total_pe_eff_n"] == pytest.approx(150_000.0)
+
+
+def test_prestress_summary_metrics_count_active_types_and_force() -> None:
+    result = PrestressParseResult(
+        elements=[
+            PrestressElement(x_mm=0, y_mm=0, area_mm2=100.0, steel_type="tendon_group", pe_eff_n=50_000.0, count=2, bonded=True),
+            PrestressElement(x_mm=0, y_mm=0, area_mm2=140.0, steel_type="strand", pe_eff_n=10_000.0, count=1, bonded=False),
+        ],
+        errors=[],
+        warnings=[],
+        info=[],
+    )
+
+    metrics = {metric.title: metric for metric in _build_prestress_summary_metrics(result, [], True)}
+
+    assert metrics["Active elements"].value == "2"
+    assert metrics["Total Aps"].value == "340.0 mm2"
+    assert metrics["Total Pe_eff"].value == "110.0 kN"
+    assert metrics["Analysis readiness"].value == "Yes"
+    assert metrics["Tendon groups"].value == "1"
+    assert metrics["Tendon groups"].detail == "Strand/PT bars: 1"
+    assert metrics["Bonded state"].value == "1 / 1"
+
+
+def test_prestress_status_rows_include_geometry_warning_without_validation_logic_change() -> None:
+    result = PrestressParseResult(elements=[], errors=[], warnings=[], info=[])
+
+    rows = {row.title: row for row in _build_prestress_status_rows(result, [], False, True)}
+
+    assert rows["Overall readiness"].value == "Ready"
+    assert rows["Warnings"].value == "1"
+    assert rows["Warnings"].status == "warning"
+
+
+def test_engineering_notes_preserve_prestress_safeguards() -> None:
+    html = _engineering_notes_html()
+
+    assert "product breaking load is reference data only" in html
+    assert "Duct ID is duct reference information and is not steel diameter" in html
+    assert "Area_mm2 controls steel area" in html
+    assert "not external Pu demand" in html

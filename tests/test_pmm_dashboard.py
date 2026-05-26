@@ -349,8 +349,39 @@ def test_make_pmm_3d_dashboard_figure_adds_surface_from_stored_pmm_grid() -> Non
 
     trace_types = [trace.type for trace in fig.data]
     assert "surface" in trace_types
+    assert "mesh3d" in trace_types
     assert "scatter3d" in trace_types
+    assert fig.layout.meta["pmm_surface_diagnostics"]["surface_trace_type"] == "Surface+Mesh3d"
     assert any(trace.name == "Selected load point" for trace in fig.data)
+
+
+def test_make_pmm_3d_dashboard_uses_professional_camera_and_surface_style() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(_synthetic_interpolated_pmm_df(), demand_df, load_case, _dc_summary())
+
+    surface_trace = next(trace for trace in fig.data if trace.name == "PMM surface")
+    assert 0.35 <= surface_trace.opacity <= 0.45
+    assert fig.layout.scene.aspectmode == "cube"
+    assert fig.layout.scene.camera.eye.x == pytest.approx(1.65)
+    assert fig.layout.scene.camera.eye.y == pytest.approx(-1.75)
+    assert fig.layout.scene.camera.eye.z == pytest.approx(1.28)
+    assert fig.layout.legend.orientation == "h"
+
+
+def test_make_pmm_3d_dashboard_legend_excludes_hidden_support_mesh_and_raw_points() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    demand_df = demand_load_cases_to_display_dataframe([load_case])
+
+    fig = make_pmm_3d_dashboard_figure(_synthetic_interpolated_pmm_df(), demand_df, load_case, _dc_summary())
+
+    legend_names = [trace.name for trace in fig.data if trace.showlegend is not False]
+    assert "PMM surface" in legend_names
+    assert "Current Pu slice" in legend_names
+    assert "Selected load point" in legend_names
+    assert "PMM surface mesh" not in legend_names
+    assert "PMM raw points" not in legend_names
 
 
 def test_make_pmm_3d_dashboard_figure_keeps_raw_point_layer_available() -> None:

@@ -17,13 +17,20 @@ from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
 STATUS_COLORS = {
     "PASS": "#16a34a",
     "FAIL": "#dc2626",
-    "OUT_OF_RANGE": "#f97316",
+    "OUT_OF_RANGE": "#b42318",
     "NOT_CHECKED": "#6b7280",
 }
 
 PMM_P_COLUMN_CANDIDATES = ("phiPn_kN", "phiPn_capped_kN", "P_kN", "Pu_kN", "P")
 PMM_MX_COLUMN_CANDIDATES = ("phiMnx_kNm", "Mx_kNm", "Mux_kNm", "Mnx_kNm")
 PMM_MY_COLUMN_CANDIDATES = ("phiMny_kNm", "My_kNm", "Muy_kNm", "Mny_kNm")
+PMM_SURFACE_COLORSCALE = [[0.0, "#d8dee9"], [0.52, "#a8b8cc"], [1.0, "#6f879f"]]
+PMM_SURFACE_COLOR = "#7d92aa"
+PMM_SLICE_LINE_COLOR = "#c47a2c"
+PMM_SCENE_CAMERA = {
+    "eye": {"x": 1.65, "y": -1.75, "z": 1.28},
+    "up": {"x": 0.0, "y": 0.0, "z": 1.0},
+}
 
 
 def get_active_uls_load_cases(load_cases: list[LoadCase]) -> list[LoadCase]:
@@ -490,20 +497,9 @@ def _pmm_surface_grid(pmm_df: pd.DataFrame) -> tuple[list[list[float]], list[lis
 
 
 def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics: dict[str, Any]) -> None:
-    """Add a visible PMM capacity body trace from stored PMM points.
-
-    A light grid Surface is kept when theta/c data are available because it is
-    useful for report/tests, but a Mesh3d capacity body is added as the primary
-    visible object.  This avoids the real-app symptom where a Surface trace can
-    render too faintly or not communicate a body, leaving only the Pu slice line.
-    This function is visualization-only and never recomputes capacity.
-    """
     if surface_df.empty:
         diagnostics.setdefault("fallback_reason", "No valid PMM points were available for surface generation.")
-        diagnostics["surface_generated"] = False
-        diagnostics["surface_trace_type"] = "None"
         return
-
     surface_grid = _pmm_surface_grid(surface_df)
     if surface_grid is not None:
         x_grid, y_grid, z_grid = surface_grid
@@ -512,32 +508,48 @@ def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics
                 x=x_grid,
                 y=y_grid,
                 z=z_grid,
-                opacity=0.20,
-                colorscale=[[0.0, "#cbd7e6"], [0.5, "#7f9bbf"], [1.0, "#426799"]],
+                opacity=0.40,
+                colorscale=PMM_SURFACE_COLORSCALE,
                 showscale=False,
-                name="PMM surface grid",
-                showlegend=False,
+                showlegend=True,
+                name="PMM surface",
                 hovertemplate=(
                     "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
                     "<br>phiPn=%{z:.2f} kN<extra>PMM surface</extra>"
                 ),
             )
         )
-
-    mesh_df = surface_df[["phiMnx_kNm", "phiMny_kNm", "phiPn_kN"]].dropna().copy()
-    diagnostics["valid_point_count"] = int(len(mesh_df))
-    if len(mesh_df) >= 8:
         fig.add_trace(
             go.Mesh3d(
-                x=mesh_df["phiMnx_kNm"],
-                y=mesh_df["phiMny_kNm"],
-                z=mesh_df["phiPn_kN"],
+                x=surface_df["phiMnx_kNm"],
+                y=surface_df["phiMny_kNm"],
+                z=surface_df["phiPn_kN"],
                 alphahull=0,
-                opacity=0.42,
-                color="#6f8fb6",
+                opacity=0.16,
+                color=PMM_SURFACE_COLOR,
                 flatshading=False,
-                lighting=dict(ambient=0.55, diffuse=0.75, specular=0.18, roughness=0.72, fresnel=0.05),
-                lightposition=dict(x=100, y=200, z=400),
+                lighting=dict(ambient=0.72, diffuse=0.55, specular=0.12, roughness=0.85),
+                name="PMM surface mesh",
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        diagnostics["surface_generated"] = True
+        diagnostics["surface_trace_type"] = "Surface+Mesh3d"
+        diagnostics["fallback_reason"] = ""
+        return
+
+    if len(surface_df) >= 8:
+        fig.add_trace(
+            go.Mesh3d(
+                x=surface_df["phiMnx_kNm"],
+                y=surface_df["phiMny_kNm"],
+                z=surface_df["phiPn_kN"],
+                alphahull=0,
+                opacity=0.40,
+                color=PMM_SURFACE_COLOR,
+                flatshading=False,
+                lighting=dict(ambient=0.72, diffuse=0.55, specular=0.12, roughness=0.85),
                 name="PMM surface",
                 showlegend=True,
                 hovertemplate=(
@@ -547,21 +559,12 @@ def _add_pmm_surface_trace(fig: go.Figure, surface_df: pd.DataFrame, diagnostics
             )
         )
         diagnostics["surface_generated"] = True
-        diagnostics["surface_trace_type"] = "Surface+Mesh3d" if surface_grid is not None else "Mesh3d"
-        diagnostics["fallback_reason"] = "Mesh3d capacity body generated from stored PMM capacity points."
+        diagnostics["surface_trace_type"] = "Mesh3d"
+        diagnostics["fallback_reason"] = "theta/c grid unavailable; Mesh3d generated from stored PMM point cloud."
         return
 
-    if surface_grid is not None:
-        diagnostics["surface_generated"] = True
-        diagnostics["surface_trace_type"] = "Surface"
-        diagnostics["fallback_reason"] = "Surface generated from theta/c grid; insufficient points for Mesh3d body."
-        return
+    diagnostics["fallback_reason"] = f"Only {len(surface_df)} valid PMM points were available; at least 8 are required for Mesh3d."
 
-    diagnostics["surface_generated"] = False
-    diagnostics["surface_trace_type"] = "None"
-    diagnostics["fallback_reason"] = (
-        f"Only {len(mesh_df)} valid PMM points were available; at least 8 are required for Mesh3d."
-    )
 
 def _closed_pu_slice_dataframe(slice_df: pd.DataFrame) -> pd.DataFrame:
     if slice_df.empty:
@@ -774,7 +777,7 @@ def make_pmm_3d_dashboard_figure(
                     y=slice_line_df["phiMny_kNm"],
                     z=slice_line_df["phiPn_kN"],
                     mode="lines",
-                    line=dict(color="#d97706", width=5),
+                    line=dict(color=PMM_SLICE_LINE_COLOR, width=5),
                     name="Current Pu slice",
                     hovertemplate=(
                         "phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
@@ -842,9 +845,17 @@ def make_pmm_3d_dashboard_figure(
             xaxis_title="Mux / phiMnx (kN-m)",
             yaxis_title="Muy / phiMny (kN-m)",
             zaxis_title="P / phiPn (kN)",
+            aspectmode="cube",
+            camera=PMM_SCENE_CAMERA,
+            bgcolor="#ffffff",
+            xaxis=dict(showbackground=True, backgroundcolor="#f7f9fc", gridcolor="#d9dee7", zerolinecolor="#98a2b3"),
+            yaxis=dict(showbackground=True, backgroundcolor="#f7f9fc", gridcolor="#d9dee7", zerolinecolor="#98a2b3"),
+            zaxis=dict(showbackground=True, backgroundcolor="#f7f9fc", gridcolor="#d9dee7", zerolinecolor="#98a2b3"),
         ),
-        legend=dict(orientation="h"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=0, r=0, t=45, b=0),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
         meta={"pmm_surface_diagnostics": surface_diagnostics},
     )
     return fig

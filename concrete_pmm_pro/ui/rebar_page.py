@@ -17,6 +17,15 @@ from concrete_pmm_pro.visualization import create_section_preview
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REBAR_DB_PATH = REPO_ROOT / "data" / "rebar_database.csv"
+REBAR_DEFAULT_MATERIAL_BY_SIZE = {
+    "DB10": "SD40",
+    "DB12": "SD40",
+    "DB16": "SD40",
+    "DB20": "SD40",
+    "DB25": "SD40",
+    "DB28": "SD40",
+    "DB32": "SD50",
+}
 
 
 @dataclass(frozen=True)
@@ -129,56 +138,6 @@ _REBAR_PAGE_CSS = """
   line-height: 1.35;
   padding: 0.18rem 0;
 }
-
-.cpmm-rebar-status-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 0.55rem;
-}
-.cpmm-rebar-status-title {
-  color: #101828;
-  font-size: 0.98rem;
-  font-weight: 750;
-}
-.cpmm-rebar-status-subtitle {
-  color: #667085;
-  font-size: 0.78rem;
-  line-height: 1.25;
-  margin-top: 0.1rem;
-}
-.cpmm-rebar-status-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.45rem 0.65rem;
-  margin-top: 0.55rem;
-}
-.cpmm-rebar-status-item {
-  border: 1px solid #edf0f5;
-  border-radius: 7px;
-  background: #fbfcfe;
-  padding: 0.42rem 0.52rem;
-}
-.cpmm-rebar-status-label {
-  color: #667085;
-  font-size: 0.70rem;
-  font-weight: 650;
-  margin-bottom: 0.12rem;
-}
-.cpmm-rebar-status-value {
-  color: #101828;
-  font-size: 0.86rem;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-.cpmm-rebar-lower-grid-note {
-  color: #667085;
-  font-size: 0.78rem;
-  line-height: 1.30;
-  margin-top: -0.20rem;
-  margin-bottom: 0.45rem;
-}
 @media (max-width: 1250px) {
   .cpmm-rebar-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
@@ -196,12 +155,13 @@ def load_rebar_database(path: Path | str = DEFAULT_REBAR_DB_PATH) -> pd.DataFram
 def _default_rebar_table(rebar_db: pd.DataFrame) -> pd.DataFrame:
     default_size = "DB20" if "DB20" in set(rebar_db["name"]) else str(rebar_db.iloc[0]["name"])
     default_diameter = float(rebar_db.loc[rebar_db["name"] == default_size, "diameter_mm"].iloc[0])
+    default_material = default_material_for_bar_size(default_size)
     return pd.DataFrame(
         [
-            {"Active": True, "Label": "B1", "x_mm": -150.0, "y_mm": -250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": "SD40", "Count": 1, "Note": ""},
-            {"Active": True, "Label": "B2", "x_mm": 150.0, "y_mm": -250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": "SD40", "Count": 1, "Note": ""},
-            {"Active": True, "Label": "B3", "x_mm": 150.0, "y_mm": 250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": "SD40", "Count": 1, "Note": ""},
-            {"Active": True, "Label": "B4", "x_mm": -150.0, "y_mm": 250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": "SD40", "Count": 1, "Note": ""},
+            {"Active": True, "Label": "B1", "x_mm": -150.0, "y_mm": -250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": default_material, "Count": 1, "Note": ""},
+            {"Active": True, "Label": "B2", "x_mm": 150.0, "y_mm": -250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": default_material, "Count": 1, "Note": ""},
+            {"Active": True, "Label": "B3", "x_mm": 150.0, "y_mm": 250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": default_material, "Count": 1, "Note": ""},
+            {"Active": True, "Label": "B4", "x_mm": -150.0, "y_mm": 250.0, "Bar Size": default_size, "Diameter_mm": default_diameter, "Material": default_material, "Count": 1, "Note": ""},
         ]
     )
 
@@ -253,6 +213,58 @@ def _diameter_from_database(bar_size: str, rebar_db: pd.DataFrame) -> float | No
     return float(matches.iloc[0])
 
 
+def default_material_for_bar_size(bar_size: str) -> str:
+    return REBAR_DEFAULT_MATERIAL_BY_SIZE.get(str(bar_size).strip(), "SD40")
+
+
+def bar_size_defaults(bar_size: str, rebar_db: pd.DataFrame) -> tuple[float, str] | None:
+    diameter = _diameter_from_database(bar_size, rebar_db)
+    if diameter is None:
+        return None
+    return diameter, default_material_for_bar_size(bar_size)
+
+
+def _normalized_bar_size(value: Any) -> str:
+    return "" if _is_blank(value) else str(value).strip()
+
+
+def _previous_bar_size(previous_df: pd.DataFrame | None, index: Any) -> str:
+    if previous_df is None or index not in previous_df.index:
+        return ""
+    return _normalized_bar_size(previous_df.at[index, "Bar Size"] if "Bar Size" in previous_df.columns else "")
+
+
+def normalize_rebar_table_for_bar_size_sync(edited_df: pd.DataFrame, previous_df: pd.DataFrame | None, rebar_db: pd.DataFrame) -> pd.DataFrame:
+    """Apply database defaults only when Bar Size changes or dependent cells are blank.
+
+    This keeps Streamlit data_editor manual Diameter_mm/Material overrides stable
+    across reruns while still making size dropdown changes immediately consistent
+    with the engineering database/default material rules.
+    """
+    normalized = edited_df.copy()
+    for column in ["Active", "Label", "x_mm", "y_mm", "Bar Size", "Diameter_mm", "Material", "Count", "Note"]:
+        if column not in normalized.columns:
+            normalized[column] = None
+
+    for index, row in normalized.iterrows():
+        bar_size = _normalized_bar_size(row.get("Bar Size"))
+        if not bar_size or bar_size == "Custom":
+            continue
+        defaults = bar_size_defaults(bar_size, rebar_db)
+        if defaults is None:
+            continue
+        default_diameter, default_material = defaults
+        previous_bar_size = _previous_bar_size(previous_df, index)
+        bar_size_changed = bar_size != previous_bar_size
+
+        if bar_size_changed or _is_blank(row.get("Diameter_mm")):
+            normalized.at[index, "Diameter_mm"] = default_diameter
+        if bar_size_changed or _is_blank(row.get("Material")):
+            normalized.at[index, "Material"] = default_material
+
+    return normalized
+
+
 def _resolve_diameter(row: pd.Series, rebar_db: pd.DataFrame, row_number: int) -> tuple[float | None, list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -262,7 +274,12 @@ def _resolve_diameter(row: pd.Series, rebar_db: pd.DataFrame, row_number: int) -
     if bar_size and bar_size != "Custom":
         database_diameter = _diameter_from_database(bar_size, rebar_db)
         if database_diameter is not None:
-            return database_diameter, errors, warnings
+            if manual_diameter is None:
+                return database_diameter, errors, warnings
+            if manual_diameter <= 0:
+                errors.append(f"Row {row_number}: Diameter_mm must be positive.")
+                return None, errors, warnings
+            return manual_diameter, errors, warnings
         if manual_diameter is not None:
             warnings.append(f"Row {row_number}: Bar Size '{bar_size}' is not in the database; using manual Diameter_mm as custom.")
             if manual_diameter <= 0:
@@ -459,51 +476,24 @@ def _render_summary_strip(
 
 
 def _render_validation(result: RebarParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
-    """Render compact rebar validation without the heavy table-like status block.
-
-    The editable rebar table is the primary artifact on this tab. The status panel
-    should therefore summarize readiness and point to problems without competing
-    visually with the table or repeating the summary strip.
-    """
+    st.markdown("#### Rebar Status")
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
-
-    status = "ready" if valid_for_analysis else "danger"
-    status_text = "READY" if valid_for_analysis else "CHECK INPUT"
-    validation_text = "OK" if not all_errors else f"{len(all_errors):,} error(s)"
-
     st.markdown(
-        """
-        <div class="cpmm-rebar-status-header">
-          <div>
-            <div class="cpmm-rebar-status-title">Rebar Status</div>
-            <div class="cpmm-rebar-status-subtitle">Analysis readiness for the active reinforcement model.</div>
-          </div>
-          <span class="cpmm-rebar-badge {status}">{status_text}</span>
-        </div>
-        """.format(status=status, status_text=escape(status_text)),
+        _kv_panel_html(
+            [
+                ("Validation", "OK" if not all_errors else "Error"),
+                ("Warnings", f"{len(warnings):,}"),
+                ("Active bars", f"{len(result.rebars):,}"),
+                ("Total As", f"{_total_as_mm2(result.rebars):,.1f} mm^2"),
+                ("Valid for analysis", "Yes" if valid_for_analysis else "No"),
+                ("Material", _dominant_material_label(result.rebars)),
+            ]
+        ),
         unsafe_allow_html=True,
     )
-
-    rows = [
-        ("Validation", validation_text),
-        ("Warnings", f"{len(warnings):,}"),
-        ("Active bars", f"{len(result.rebars):,}"),
-        ("Total As", f"{_total_as_mm2(result.rebars):,.1f} mm^2"),
-        ("Material", _dominant_material_label(result.rebars)),
-        ("Geometry check", "Available" if geometry_available else "Pending"),
-    ]
-    status_items = []
-    for label, value in rows:
-        status_items.append(
-            '<div class="cpmm-rebar-status-item">'
-            f'<div class="cpmm-rebar-status-label">{escape(label)}</div>'
-            f'<div class="cpmm-rebar-status-value">{escape(value)}</div>'
-            '</div>'
-        )
-    st.markdown('<div class="cpmm-rebar-status-grid">' + ''.join(status_items) + '</div>', unsafe_allow_html=True)
 
     if all_errors:
         for error in all_errors:
@@ -554,69 +544,61 @@ def render_rebar_page() -> None:
     if "rebar_table" not in st.session_state:
         st.session_state["rebar_table"] = _default_rebar_table(rebar_db)
 
-    geometry = st.session_state.get("section_geometry")
+    input_mode = "Manual table"
+    edited_df = st.session_state["rebar_table"]
 
-    # Render the summary before the editor so the user immediately understands the
-    # current reinforcement model before editing rows. Streamlit reruns after table
-    # edits, so this strip updates on the next interaction without duplicating the
-    # summary below the table.
-    current_result = rebars_from_dataframe(st.session_state["rebar_table"], rebar_db)
-    current_geometry_errors = validate_rebars_against_geometry(current_result.rebars, geometry)
-    current_valid = rebars_valid_for_analysis(current_result, current_geometry_errors)
-    _render_summary_strip(current_result, geometry, "Manual table", current_valid, active_material_name)
-
-    input_col, status_col = st.columns([1.55, 0.75], gap="large")
+    input_col, status_col = st.columns([1.45, 0.85], gap="large")
+    summary_slot = None
     with input_col:
         with st.container(border=True):
             st.markdown("#### Rebar Input")
+            # Keep the summary visually above the editor.  The placeholder is filled
+            # after data_editor returns so the metrics still use the normalized table
+            # from the current rerun instead of stale pre-edit values.
+            summary_slot = st.empty()
             input_mode = st.selectbox("Rebar input mode", ["Manual table", "Rectangular perimeter layout", "Circular layout"])
             st.markdown(
-                '<div class="cpmm-rebar-note">Bar Size uses the database diameter. Leave Bar Size blank or choose Custom to use manual Diameter_mm.</div>',
+                '<div class="cpmm-rebar-note">Selecting a database bar size fills Diameter and default Material. Diameter and Material remain editable for project-specific overrides.</div>',
                 unsafe_allow_html=True,
             )
             if input_mode != "Manual table":
-                st.info(
-                    "Automatic rebar layouts are planned for a later milestone. "
-                    "The editable manual table remains active below so the current rebar model is never hidden."
-                )
+                st.info("Automatic rebar layouts are planned for a later milestone. The editable Manual table remains active for engineering traceability.")
 
-            # Keep the editable table visible for every mode until automatic layout
-            # generators are implemented. Hiding the active reinforcement model would
-            # reduce traceability before downstream PMM/SLS analysis.
+            # The editable table is always shown.  Until automatic generators exist,
+            # hiding this table would hide the actual reinforcement model sent to
+            # PMM/SLS analysis and make bar-size synchronization hard to verify.
             edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options)
 
-    st.session_state["rebar_table"] = edited_df
+    normalized_df = normalize_rebar_table_for_bar_size_sync(edited_df, st.session_state.get("rebar_table"), rebar_db)
+    st.session_state["rebar_table"] = normalized_df
 
-    result = rebars_from_dataframe(edited_df, rebar_db)
+    result = rebars_from_dataframe(normalized_df, rebar_db)
+    geometry = st.session_state.get("section_geometry")
     geometry_errors = validate_rebars_against_geometry(result.rebars, geometry)
     valid_for_analysis = rebars_valid_for_analysis(result, geometry_errors)
     st.session_state["rebars"] = result.rebars
     st.session_state["rebars_valid_for_analysis"] = valid_for_analysis
 
+    if summary_slot is not None:
+        with summary_slot:
+            _render_summary_strip(result, geometry, input_mode, valid_for_analysis, active_material_name)
+
     with status_col:
         with st.container(border=True):
             _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
             st.markdown(
-                '<div class="cpmm-rebar-note" style="margin-top:0.65rem;">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
+                '<div class="cpmm-rebar-note">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
                 unsafe_allow_html=True,
             )
 
-    summary_col, preview_col = st.columns([1.0, 1.05], gap="large")
+    summary_col, preview_col = st.columns([0.58, 0.42], gap="large")
     with summary_col:
         st.subheader("Rebar Summary")
-        st.markdown(
-            '<div class="cpmm-rebar-lower-grid-note">Active bars expanded from the editable table. This is the data passed to PMM/SLS analysis.</div>',
-            unsafe_allow_html=True,
-        )
         st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
 
-    with preview_col:
-        if geometry is not None:
+    if geometry is not None:
+        with preview_col:
             st.subheader("Section Preview with Rebar")
-            st.markdown(
-                '<div class="cpmm-rebar-lower-grid-note">Compact preview for checking bar coordinates against the active section.</div>',
-                unsafe_allow_html=True,
-            )
             preview_fig = create_section_preview(
                 geometry,
                 st.session_state.get("section_dimensions", []),
@@ -624,10 +606,9 @@ def render_rebar_page() -> None:
                 st.session_state["rebars"],
                 st.session_state.get("prestress_elements", []),
             )
-            # Keep the Rebar-tab preview useful without allowing it to dominate the
-            # page. Section Builder remains the primary full-size preview workspace.
-            preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=34, b=10))
-            st.plotly_chart(preview_fig, use_container_width=True, key="rebar_section_preview")
-        else:
-            st.subheader("Section Preview with Rebar")
-            st.info("Create a valid section in Section Builder to preview rebar placement.")
+            preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=36, b=10))
+            st.plotly_chart(
+                preview_fig,
+                use_container_width=True,
+                key="rebar_section_preview",
+            )

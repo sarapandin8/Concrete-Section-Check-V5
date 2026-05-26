@@ -6,8 +6,12 @@ import pytest
 from concrete_pmm_pro.core.models import Rebar
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.rebar_page import (
+    bar_size_defaults,
+    default_material_for_bar_size,
     load_rebar_database,
+    normalize_rebar_table_for_bar_size_sync,
     rebars_from_dataframe,
+    rebar_summary_dataframe,
     rebars_valid_for_analysis,
     validate_rebars_against_geometry,
 )
@@ -40,7 +44,7 @@ def test_rebars_from_dataframe_creates_rebar_objects() -> None:
     assert result.rebars[0].diameter_mm == 25
 
 
-def test_selected_database_bar_size_overrides_manual_diameter() -> None:
+def test_selected_database_bar_size_preserves_manual_diameter_override() -> None:
     rebar_db = load_rebar_database()
     df = pd.DataFrame(
         [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB25", "Diameter_mm": 99, "Material": "SD40", "Count": 1, "Note": ""}]
@@ -49,7 +53,97 @@ def test_selected_database_bar_size_overrides_manual_diameter() -> None:
     result = rebars_from_dataframe(df, rebar_db)
 
     assert not result.errors
-    assert result.rebars[0].diameter_mm == 25
+    assert result.rebars[0].diameter_mm == 99
+
+
+def test_default_material_for_thai_rebar_sizes() -> None:
+    assert default_material_for_bar_size("DB10") == "SD40"
+    assert default_material_for_bar_size("DB28") == "SD40"
+    assert default_material_for_bar_size("DB32") == "SD50"
+
+
+def test_bar_size_defaults_resolve_database_diameter_and_material() -> None:
+    rebar_db = load_rebar_database()
+
+    assert bar_size_defaults("DB10", rebar_db) == (10.0, "SD40")
+    assert bar_size_defaults("DB28", rebar_db) == (28.0, "SD40")
+    assert bar_size_defaults("DB32", rebar_db) == (32.0, "SD50")
+
+
+def test_bar_size_change_auto_syncs_diameter_and_material() -> None:
+    rebar_db = load_rebar_database()
+    previous = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB20", "Diameter_mm": 20, "Material": "SD40", "Count": 1, "Note": ""}]
+    )
+    edited = previous.copy()
+    edited.loc[0, "Bar Size"] = "DB32"
+
+    normalized = normalize_rebar_table_for_bar_size_sync(edited, previous, rebar_db)
+
+    assert normalized.loc[0, "Diameter_mm"] == 32
+    assert normalized.loc[0, "Material"] == "SD50"
+
+
+def test_bar_size_sync_fills_blank_dependent_cells_when_size_unchanged() -> None:
+    rebar_db = load_rebar_database()
+    previous = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB25", "Diameter_mm": None, "Material": "", "Count": 1, "Note": ""}]
+    )
+    edited = previous.copy()
+
+    normalized = normalize_rebar_table_for_bar_size_sync(edited, previous, rebar_db)
+
+    assert normalized.loc[0, "Diameter_mm"] == 25
+    assert normalized.loc[0, "Material"] == "SD40"
+
+
+def test_manual_overrides_are_preserved_when_bar_size_is_unchanged() -> None:
+    rebar_db = load_rebar_database()
+    previous = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB25", "Diameter_mm": 25, "Material": "SD40", "Count": 1, "Note": ""}]
+    )
+    edited = previous.copy()
+    edited.loc[0, "Diameter_mm"] = 23
+    edited.loc[0, "Material"] = "ProjectSteel"
+
+    normalized = normalize_rebar_table_for_bar_size_sync(edited, previous, rebar_db)
+
+    assert normalized.loc[0, "Diameter_mm"] == 23
+    assert normalized.loc[0, "Material"] == "ProjectSteel"
+
+
+def test_blank_or_custom_bar_size_preserves_manual_input() -> None:
+    rebar_db = load_rebar_database()
+    previous = pd.DataFrame(
+        [
+            {"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "", "Diameter_mm": 21, "Material": "Manual", "Count": 1, "Note": ""},
+            {"Active": True, "Label": "B2", "x_mm": 0, "y_mm": 0, "Bar Size": "Custom", "Diameter_mm": 22, "Material": "CustomMat", "Count": 1, "Note": ""},
+        ]
+    )
+
+    normalized = normalize_rebar_table_for_bar_size_sync(previous, previous, rebar_db)
+
+    assert normalized.loc[0, "Diameter_mm"] == 21
+    assert normalized.loc[0, "Material"] == "Manual"
+    assert normalized.loc[1, "Diameter_mm"] == 22
+    assert normalized.loc[1, "Material"] == "CustomMat"
+
+
+def test_rebar_summary_uses_normalized_diameter_and_material() -> None:
+    rebar_db = load_rebar_database()
+    previous = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB20", "Diameter_mm": 20, "Material": "SD40", "Count": 1, "Note": ""}]
+    )
+    edited = previous.copy()
+    edited.loc[0, "Bar Size"] = "DB25"
+    normalized = normalize_rebar_table_for_bar_size_sync(edited, previous, rebar_db)
+
+    result = rebars_from_dataframe(normalized, rebar_db)
+    summary = rebar_summary_dataframe(result.rebars)
+
+    assert summary.loc[0, "diameter_mm"] == 25
+    assert summary.loc[0, "material_name"] == "SD40"
+    assert summary.loc[0, "area_mm2"] == pytest.approx(490.9, rel=1e-3)
 
 
 def test_custom_bar_size_with_diameter_creates_rebar() -> None:

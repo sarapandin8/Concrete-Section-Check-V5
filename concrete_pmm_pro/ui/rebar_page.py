@@ -129,6 +129,56 @@ _REBAR_PAGE_CSS = """
   line-height: 1.35;
   padding: 0.18rem 0;
 }
+
+.cpmm-rebar-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+.cpmm-rebar-status-title {
+  color: #101828;
+  font-size: 0.98rem;
+  font-weight: 750;
+}
+.cpmm-rebar-status-subtitle {
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  margin-top: 0.1rem;
+}
+.cpmm-rebar-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.65rem;
+  margin-top: 0.55rem;
+}
+.cpmm-rebar-status-item {
+  border: 1px solid #edf0f5;
+  border-radius: 7px;
+  background: #fbfcfe;
+  padding: 0.42rem 0.52rem;
+}
+.cpmm-rebar-status-label {
+  color: #667085;
+  font-size: 0.70rem;
+  font-weight: 650;
+  margin-bottom: 0.12rem;
+}
+.cpmm-rebar-status-value {
+  color: #101828;
+  font-size: 0.86rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.cpmm-rebar-lower-grid-note {
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.30;
+  margin-top: -0.20rem;
+  margin-bottom: 0.45rem;
+}
 @media (max-width: 1250px) {
   .cpmm-rebar-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
@@ -409,24 +459,51 @@ def _render_summary_strip(
 
 
 def _render_validation(result: RebarParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
-    st.markdown("#### Rebar Status")
+    """Render compact rebar validation without the heavy table-like status block.
+
+    The editable rebar table is the primary artifact on this tab. The status panel
+    should therefore summarize readiness and point to problems without competing
+    visually with the table or repeating the summary strip.
+    """
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
+
+    status = "ready" if valid_for_analysis else "danger"
+    status_text = "READY" if valid_for_analysis else "CHECK INPUT"
+    validation_text = "OK" if not all_errors else f"{len(all_errors):,} error(s)"
+
     st.markdown(
-        _kv_panel_html(
-            [
-                ("Validation", "OK" if not all_errors else "Error"),
-                ("Warnings", f"{len(warnings):,}"),
-                ("Active bars", f"{len(result.rebars):,}"),
-                ("Total As", f"{_total_as_mm2(result.rebars):,.1f} mm^2"),
-                ("Valid for analysis", "Yes" if valid_for_analysis else "No"),
-                ("Material", _dominant_material_label(result.rebars)),
-            ]
-        ),
+        """
+        <div class="cpmm-rebar-status-header">
+          <div>
+            <div class="cpmm-rebar-status-title">Rebar Status</div>
+            <div class="cpmm-rebar-status-subtitle">Analysis readiness for the active reinforcement model.</div>
+          </div>
+          <span class="cpmm-rebar-badge {status}">{status_text}</span>
+        </div>
+        """.format(status=status, status_text=escape(status_text)),
         unsafe_allow_html=True,
     )
+
+    rows = [
+        ("Validation", validation_text),
+        ("Warnings", f"{len(warnings):,}"),
+        ("Active bars", f"{len(result.rebars):,}"),
+        ("Total As", f"{_total_as_mm2(result.rebars):,.1f} mm^2"),
+        ("Material", _dominant_material_label(result.rebars)),
+        ("Geometry check", "Available" if geometry_available else "Pending"),
+    ]
+    status_items = []
+    for label, value in rows:
+        status_items.append(
+            '<div class="cpmm-rebar-status-item">'
+            f'<div class="cpmm-rebar-status-label">{escape(label)}</div>'
+            f'<div class="cpmm-rebar-status-value">{escape(value)}</div>'
+            '</div>'
+        )
+    st.markdown('<div class="cpmm-rebar-status-grid">' + ''.join(status_items) + '</div>', unsafe_allow_html=True)
 
     if all_errors:
         for error in all_errors:
@@ -477,10 +554,18 @@ def render_rebar_page() -> None:
     if "rebar_table" not in st.session_state:
         st.session_state["rebar_table"] = _default_rebar_table(rebar_db)
 
-    input_mode = "Manual table"
-    edited_df = st.session_state["rebar_table"]
+    geometry = st.session_state.get("section_geometry")
 
-    input_col, status_col = st.columns([1.45, 0.85], gap="large")
+    # Render the summary before the editor so the user immediately understands the
+    # current reinforcement model before editing rows. Streamlit reruns after table
+    # edits, so this strip updates on the next interaction without duplicating the
+    # summary below the table.
+    current_result = rebars_from_dataframe(st.session_state["rebar_table"], rebar_db)
+    current_geometry_errors = validate_rebars_against_geometry(current_result.rebars, geometry)
+    current_valid = rebars_valid_for_analysis(current_result, current_geometry_errors)
+    _render_summary_strip(current_result, geometry, "Manual table", current_valid, active_material_name)
+
+    input_col, status_col = st.columns([1.55, 0.75], gap="large")
     with input_col:
         with st.container(border=True):
             st.markdown("#### Rebar Input")
@@ -490,42 +575,59 @@ def render_rebar_page() -> None:
                 unsafe_allow_html=True,
             )
             if input_mode != "Manual table":
-                st.info("Automatic rebar layouts are planned for a later milestone. Use Manual table for now.")
-            else:
-                edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options)
+                st.info(
+                    "Automatic rebar layouts are planned for a later milestone. "
+                    "The editable manual table remains active below so the current rebar model is never hidden."
+                )
+
+            # Keep the editable table visible for every mode until automatic layout
+            # generators are implemented. Hiding the active reinforcement model would
+            # reduce traceability before downstream PMM/SLS analysis.
+            edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options)
 
     st.session_state["rebar_table"] = edited_df
 
     result = rebars_from_dataframe(edited_df, rebar_db)
-    geometry = st.session_state.get("section_geometry")
     geometry_errors = validate_rebars_against_geometry(result.rebars, geometry)
     valid_for_analysis = rebars_valid_for_analysis(result, geometry_errors)
     st.session_state["rebars"] = result.rebars
     st.session_state["rebars_valid_for_analysis"] = valid_for_analysis
 
-    _render_summary_strip(result, geometry, input_mode, valid_for_analysis, active_material_name)
-
     with status_col:
         with st.container(border=True):
             _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
             st.markdown(
-                '<div class="cpmm-rebar-note">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
+                '<div class="cpmm-rebar-note" style="margin-top:0.65rem;">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
                 unsafe_allow_html=True,
             )
 
-    st.subheader("Rebar Summary")
-    st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
+    summary_col, preview_col = st.columns([1.0, 1.05], gap="large")
+    with summary_col:
+        st.subheader("Rebar Summary")
+        st.markdown(
+            '<div class="cpmm-rebar-lower-grid-note">Active bars expanded from the editable table. This is the data passed to PMM/SLS analysis.</div>',
+            unsafe_allow_html=True,
+        )
+        st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
 
-    if geometry is not None:
-        st.subheader("Section Preview with Rebar")
-        st.plotly_chart(
-            create_section_preview(
+    with preview_col:
+        if geometry is not None:
+            st.subheader("Section Preview with Rebar")
+            st.markdown(
+                '<div class="cpmm-rebar-lower-grid-note">Compact preview for checking bar coordinates against the active section.</div>',
+                unsafe_allow_html=True,
+            )
+            preview_fig = create_section_preview(
                 geometry,
                 st.session_state.get("section_dimensions", []),
                 "symbol_value",
                 st.session_state["rebars"],
                 st.session_state.get("prestress_elements", []),
-            ),
-            use_container_width=True,
-            key="rebar_section_preview",
-        )
+            )
+            # Keep the Rebar-tab preview useful without allowing it to dominate the
+            # page. Section Builder remains the primary full-size preview workspace.
+            preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=34, b=10))
+            st.plotly_chart(preview_fig, use_container_width=True, key="rebar_section_preview")
+        else:
+            st.subheader("Section Preview with Rebar")
+            st.info("Create a valid section in Section Builder to preview rebar placement.")

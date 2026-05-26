@@ -10,6 +10,7 @@ from concrete_pmm_pro.ui.rebar_page import (
     default_material_for_bar_size,
     load_rebar_database,
     normalize_rebar_table_for_bar_size_sync,
+    rebar_editor_tables_equal,
     rebars_from_dataframe,
     rebar_summary_dataframe,
     rebars_valid_for_analysis,
@@ -83,6 +84,29 @@ def test_bar_size_change_auto_syncs_diameter_and_material() -> None:
     assert normalized.loc[0, "Diameter_mm"] == 32
     assert normalized.loc[0, "Material"] == "SD50"
 
+
+
+
+def test_editor_table_equivalence_ignores_streamlit_numeric_dtype_roundtrip() -> None:
+    left = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB32", "Diameter_mm": 32.0, "Material": "SD50", "Count": 1.0, "Note": ""}]
+    )
+    right = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0.0, "y_mm": 0.0, "Bar Size": "DB32", "Diameter_mm": 32, "Material": "SD50", "Count": 1, "Note": ""}]
+    )
+
+    assert rebar_editor_tables_equal(left, right) is True
+
+
+def test_editor_table_equivalence_detects_auto_sync_difference() -> None:
+    edited = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB32", "Diameter_mm": 20, "Material": "SD40", "Count": 1, "Note": ""}]
+    )
+    synced = pd.DataFrame(
+        [{"Active": True, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB32", "Diameter_mm": 32, "Material": "SD50", "Count": 1, "Note": ""}]
+    )
+
+    assert rebar_editor_tables_equal(synced, edited) is False
 
 def test_bar_size_sync_fills_blank_dependent_cells_when_size_unchanged() -> None:
     rebar_db = load_rebar_database()

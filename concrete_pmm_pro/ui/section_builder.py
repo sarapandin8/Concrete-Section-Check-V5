@@ -106,6 +106,45 @@ _SECTION_BUILDER_CSS = """
   line-height: 1.35;
   padding: 0.18rem 0;
 }
+.cpmm-section-property-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.45rem;
+}
+.cpmm-section-property-chip {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.56rem 0.68rem;
+  min-height: 72px;
+}
+.cpmm-section-property-label {
+  color: #667085;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  margin-bottom: 0.18rem;
+}
+.cpmm-section-property-value {
+  color: #101828;
+  font-size: 0.94rem;
+  font-weight: 720;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+.cpmm-section-property-detail {
+  color: #667085;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  margin-top: 0.16rem;
+}
+@media (max-width: 1200px) {
+  .cpmm-section-property-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .cpmm-section-property-grid { grid-template-columns: minmax(0, 1fr); }
+}
 </style>
 """
 
@@ -170,6 +209,30 @@ def _message_list_html(messages: list[str]) -> str:
     return f'<div class="cpmm-section-message-list">{items}</div>'
 
 
+def _property_strip_html(properties: list[SectionMetric]) -> str:
+    chips: list[str] = []
+    for property_item in properties:
+        status = _safe_status(property_item.status)
+        value_html = (
+            f'<span class="cpmm-section-badge {status}">{escape(property_item.value)}</span>'
+            if property_item.strong
+            else escape(property_item.value)
+        )
+        detail_html = (
+            f'<div class="cpmm-section-property-detail">{escape(property_item.detail)}</div>'
+            if property_item.detail
+            else ""
+        )
+        chips.append(
+            '<div class="cpmm-section-property-chip">'
+            f'<div class="cpmm-section-property-label">{escape(property_item.title)}</div>'
+            f'<div class="cpmm-section-property-value">{value_html}</div>'
+            f"{detail_html}"
+            "</div>"
+        )
+    return '<div class="cpmm-section-property-grid">' + "".join(chips) + "</div>"
+
+
 def _format_float(value: float, decimals: int = 1) -> str:
     return f"{value:,.{decimals}f}"
 
@@ -190,6 +253,14 @@ def _validation_label(result: ValidationResult) -> str:
     if result.warnings:
         return "Warning"
     return "OK"
+
+
+def _readiness_label(result: ValidationResult) -> str:
+    if result.errors:
+        return "Not Ready"
+    if result.warnings:
+        return "Warning"
+    return "Ready"
 
 
 def _render_validation_panel(result: ValidationResult) -> None:
@@ -363,10 +434,16 @@ def _render_section_properties_summary(
 
     if geometry is None or not validation.is_valid:
         st.markdown(
-            _status_panel_html(
+            _property_strip_html(
                 [
+                    SectionMetric("Gross Area", "N/A"),
+                    SectionMetric("Centroid", "N/A"),
+                    SectionMetric("Ix", "Not calculated"),
+                    SectionMetric("Iy", "Not calculated"),
+                    SectionMetric("Holes / Voids", "N/A"),
                     SectionMetric("Active Preset", preset["display_name"], "", "info"),
-                    SectionMetric("Geometry Status", "Needs Review", "", "danger", True),
+                    SectionMetric("Category", str(preset.get("category", "N/A")), "", "neutral"),
+                    SectionMetric("Readiness", "Not Ready", "", "danger", True),
                 ]
             ),
             unsafe_allow_html=True,
@@ -376,29 +453,30 @@ def _render_section_properties_summary(
         return
 
     summary = summarize_geometry(geometry)
-    detail_cols = st.columns([1, 1])
-    with detail_cols[0]:
-        st.markdown("##### Key Properties")
+    st.markdown(
+        _property_strip_html(
+            [
+                SectionMetric("Gross Area", f"{summary.area_mm2:,.1f} mm^2"),
+                SectionMetric(
+                    "Centroid",
+                    f"x {_format_float(summary.centroid_x_mm, 2)} / y {_format_float(summary.centroid_y_mm, 2)} mm",
+                ),
+                SectionMetric("Ix", _inertia_display(summary.ix_display)),
+                SectionMetric("Iy", _inertia_display(summary.iy_display)),
+                SectionMetric("Holes / Voids", f"{len(geometry.holes):,}"),
+                SectionMetric("Active Preset", preset["display_name"]),
+                SectionMetric("Category", str(preset.get("category", "N/A"))),
+                SectionMetric("Readiness", _readiness_label(validation), "", _validation_status(validation), True),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Geometry Inputs", expanded=False):
         st.markdown(
             _kv_panel_html(
                 [
-                    ("Gross area", f"{summary.area_mm2:,.1f} mm^2"),
-                    ("Centroid x", f"{summary.centroid_x_mm:,.2f} mm"),
-                    ("Centroid y", f"{summary.centroid_y_mm:,.2f} mm"),
-                    ("Ix", _inertia_display(summary.ix_display)),
-                    ("Iy", _inertia_display(summary.iy_display)),
-                    ("Holes / voids", f"{len(geometry.holes):,}"),
-                ]
-            ),
-            unsafe_allow_html=True,
-        )
-    with detail_cols[1]:
-        st.markdown("##### Geometry Context")
-        st.markdown(
-            _kv_panel_html(
-                [
-                    ("Active preset", preset["display_name"]),
-                    ("Category", str(preset.get("category", "N/A"))),
+                    *_parameter_rows(preset, params),
                     ("Parameter count", f"{len(params):,}"),
                     ("Outer vertices", f"{len(geometry.outer_polygon):,}"),
                     ("Validation errors", f"{len(validation.errors):,}"),
@@ -407,9 +485,6 @@ def _render_section_properties_summary(
             ),
             unsafe_allow_html=True,
         )
-
-    with st.expander("Geometry Inputs", expanded=False):
-        st.markdown(_kv_panel_html(_parameter_rows(preset, params)), unsafe_allow_html=True)
 
 
 def render_section_builder() -> None:

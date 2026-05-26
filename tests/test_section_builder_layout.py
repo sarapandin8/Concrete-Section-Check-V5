@@ -15,8 +15,7 @@ def test_section_builder_professional_layout_sections_are_present() -> None:
     assert "Section Definition" in source
     assert "Live Section Preview" in source
     assert "Section Properties" in source
-    assert "Key Properties" in source
-    assert "Geometry Context" in source
+    assert "cpmm-section-property-grid" in source
     assert "Geometry Parameters" in source
     assert "st.sidebar" not in source
 
@@ -48,6 +47,29 @@ def test_section_builder_status_panel_helper_escapes_values() -> None:
 
     assert "Area &lt;gross&gt;" in html
     assert "400 &gt; 300" in html
+
+
+def test_section_builder_property_strip_helper_escapes_values() -> None:
+    html = section_builder._property_strip_html(
+        [section_builder.SectionMetric("Preset <A>", "Rect > Box", "quiet & compact")]
+    )
+
+    assert "cpmm-section-property-grid" in html
+    assert "Preset &lt;A&gt;" in html
+    assert "Rect &gt; Box" in html
+    assert "quiet &amp; compact" in html
+
+
+def test_section_builder_properties_are_compact_strip_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "_property_strip_html" in source
+    assert "Gross Area" in source
+    assert "Centroid" in source
+    assert "Holes / Voids" in source
+    assert "Readiness" in source
+    assert "Key Properties" not in source
+    assert "Geometry Context" not in source
 
 
 def test_section_builder_validation_summary_is_compact_source() -> None:

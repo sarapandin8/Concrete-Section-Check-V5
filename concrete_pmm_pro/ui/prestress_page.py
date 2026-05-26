@@ -42,6 +42,39 @@ LEGACY_INPUT_MODE_ALIASES = {
 LEGACY_INPUT_MODE_OPTIONS = ["Jacking Stress + Losses"]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
 
+PRESTRESS_COMPACT_EDITOR_COLUMNS = [
+    "Active",
+    "Label",
+    "Product",
+    "x_mm",
+    "y_mm",
+    "Area_mm2",
+    "Input Mode",
+    "Pe_eff_kN",
+    "fpe_MPa",
+    "Bonded",
+    "Count",
+    "Note",
+]
+PRESTRESS_REFERENCE_DETAIL_COLUMNS = [
+    "Label",
+    "Steel Type",
+    "Product",
+    "Diameter_mm",
+    "Eq Steel Dia_mm",
+    "fpy_MPa",
+    "fpu_MPa",
+    "Ep_MPa",
+    "fpj_ratio",
+    "loss_percent",
+    "Strand Count",
+    "Strand Diameter_mm",
+    "Strand Area_mm2",
+    "Breaking Load_kN",
+    "Duct Type",
+    "Duct ID_mm",
+]
+
 
 @dataclass(frozen=True)
 class PrestressParseResult:
@@ -163,6 +196,17 @@ _PRESTRESS_PAGE_CSS = """
 .cpmm-prestress-quiet-note {
   color: #667085;
   font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.cpmm-prestress-table-note {
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 0.52rem 0.7rem;
+  margin: 0.42rem 0 0.65rem 0;
+  color: #667085;
+  font-size: 0.80rem;
   line-height: 1.35;
 }
 @media (max-width: 1320px) {
@@ -549,6 +593,30 @@ def normalize_prestress_table_for_effective_input_sync(table: pd.DataFrame, pres
 
     return _normalize_prestress_table_for_display(table, prestress_db)
 
+
+
+
+def _compact_column_order_for_table(table: pd.DataFrame) -> list[str]:
+    """Return visible editor columns without dropping hidden engineering data.
+
+    Streamlit's ``column_order`` is used only to keep the Advanced Prestress
+    editor readable. The backing session-state table still carries the full
+    prestress product/material metadata required by product sync, validation,
+    analysis, report export, and section preview.
+    """
+
+    available = set(pd.DataFrame(table).columns)
+    return [column for column in PRESTRESS_COMPACT_EDITOR_COLUMNS if column in available]
+
+
+def _prestress_reference_detail_dataframe(table: pd.DataFrame) -> pd.DataFrame:
+    """Build a read-only detail view for product/material reference columns."""
+
+    detail = pd.DataFrame(table).copy()
+    if detail.empty:
+        return detail
+    columns = [column for column in PRESTRESS_REFERENCE_DETAIL_COLUMNS if column in detail.columns]
+    return detail.loc[:, columns]
 
 def _dataframes_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
     left_norm = pd.DataFrame(left).reset_index(drop=True).astype("object")
@@ -1091,18 +1159,33 @@ def render_prestress_page() -> None:
         st.markdown("#### Advanced Prestress Table")
         st.markdown(
             '<div class="cpmm-prestress-quiet-note">'
-            "Review and edit prestress element locations, effective prestress, bonded flag, material values, and notes. "
-            "Product selection only helps populate product geometry and material reference data."
+            "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, count, and notes. "
+            "Product/material reference fields are preserved in the backing table and shown below as read-only details."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="cpmm-prestress-table-note">'
+            "Editing Product updates Area/material metadata through the existing product-sync logic. "
+            "Breaking Load and Duct ID remain reference data only; they are not used as Pe_eff or steel diameter."
             "</div>",
             unsafe_allow_html=True,
         )
         product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+        show_full_engineering_columns = st.checkbox(
+            "Show full engineering columns",
+            value=False,
+            help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
+            key="prestress_show_full_engineering_columns",
+        )
+        editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(st.session_state["prestress_table"])
         editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
         edited_df = st.data_editor(
             st.session_state["prestress_table"],
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
+            column_order=editor_column_order,
             column_config={
                 "Active": st.column_config.CheckboxColumn("Active"),
                 "Label": st.column_config.TextColumn("Label"),
@@ -1137,6 +1220,17 @@ def render_prestress_page() -> None:
             st.session_state["prestress_editor_revision"] += 1
             st.rerun()
         st.session_state["prestress_table"] = edited_df
+
+        if not show_full_engineering_columns:
+            with st.expander("Product / material reference details", expanded=False):
+                st.markdown(
+                    '<div class="cpmm-prestress-quiet-note">'
+                    "Read-only reference view for material/product fields hidden from the compact editor. "
+                    "Turn on full engineering columns above only when you intentionally need to edit reference/material fields."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(_prestress_reference_detail_dataframe(edited_df), use_container_width=True, hide_index=True)
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)
     geometry = st.session_state.get("section_geometry")

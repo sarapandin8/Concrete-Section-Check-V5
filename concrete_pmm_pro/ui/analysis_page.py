@@ -989,8 +989,8 @@ def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
     st.subheader("ULS Demand/Capacity Prototype")
     st.warning(
         "This is a prototype PMM demand/capacity check. Bonded prestress contribution is prototype when included; "
-        "unbonded prestress, refined interpolation, and final validation are future work. Axial cap is applied "
-        "only to axial compression summary/checks."
+        "the axial cap uses a prototype Po helper with bonded prestress steel. Unbonded prestress, refined "
+        "interpolation, and final validation are future work. Axial cap is applied only to axial compression summary/checks."
     )
     cols = st.columns(3)
     cols[0].metric("Overall Status", summary.overall_status)

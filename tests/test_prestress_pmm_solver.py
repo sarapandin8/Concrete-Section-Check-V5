@@ -45,6 +45,22 @@ def _analysis_input_with_model(element: PrestressElement, model: str) -> Analysi
     return analysis_input
 
 
+def _prestress_only_analysis_input(element: PrestressElement) -> AnalysisInput:
+    return AnalysisInput(
+        section_geometry=rectangle(width_mm=400, height_mm=600),
+        concrete_material=ConcreteMaterial(name="C35", fc_MPa=35, ecu=0.003, beta1=0.80),
+        rebar_materials=[],
+        rebars=[],
+        prestress_elements=[element],
+        load_cases=[LoadCase(name="ULS-01", Pu_N=500_000, Mux_Nmm=80_000_000, Muy_Nmm=0, load_type="ULS")],
+        settings=AnalysisSettings(
+            include_prestress=True,
+            neutral_axis_angle_steps=12,
+            neutral_axis_depth_steps=10,
+        ),
+    )
+
+
 def _bonded_strand(**updates: object) -> PrestressElement:
     data = {
         "x_mm": 0.0,
@@ -131,6 +147,26 @@ def test_bonded_prestress_element_is_included_when_enabled() -> None:
     assert all(point.bonded_prestress_count == 2 for point in result.points)
     assert any(abs(point.prestress_force_N) > 0 for point in result.points)
     assert any("Bonded prestress is included" in warning for warning in result.warnings)
+
+
+def test_bonded_prestress_tracks_eps_t_for_phi_when_no_rebar_exists() -> None:
+    result = run_rc_pmm_solver(
+        _prestress_only_analysis_input(
+            _bonded_strand(
+                y_mm=-250.0,
+                area_mm2=140.0,
+                fpy_mpa=1580.0,
+                initial_strain=0.0,
+                count=1,
+            )
+        )
+    )
+
+    tension_points = [point for point in result.points if point.eps_t is not None]
+
+    assert tension_points
+    assert any(point.phi > 0.65 for point in tension_points)
+    assert any(point.strain_condition in {"transition", "tension-controlled"} for point in tension_points)
 
 
 def test_prestress_element_is_ignored_when_include_prestress_false() -> None:
@@ -259,10 +295,12 @@ def test_pmm_display_dataframe_includes_prestress_summary_columns() -> None:
     }.issubset(df.columns)
 
 
-def test_solver_warns_prestress_axial_cap_refinement_is_future_work() -> None:
-    result = run_rc_pmm_solver(_analysis_input(_bonded_strand()))
+def test_solver_reports_prestress_aware_axial_cap_when_bonded_prestress_exists() -> None:
+    result = run_rc_pmm_solver(_analysis_input(_bonded_strand(fpy_mpa=1580.0, fpu_mpa=1860.0)))
 
-    assert any("Prestress contribution to axial cap is future work" in warning for warning in result.warnings)
+    assert any("bonded prestress steel" in item for item in result.info)
+    assert any("prototype Po helper including ordinary rebar and bonded prestress steel" in warning for warning in result.warnings)
+    assert not any("Prestress contribution to axial cap is future work" in warning for warning in result.warnings)
 
 
 def test_bonded_prestress_result_differs_from_rc_only_result() -> None:

@@ -50,7 +50,7 @@ from concrete_pmm_pro.analysis.warnings import (
     UNBONDED_PRESTRESS_IGNORED_WARNING,
     deduplicate_warnings,
 )
-from concrete_pmm_pro.code_checks import aci_beta1, aci_max_phiPn, aci_phi_and_strain_condition, nominal_po_rc
+from concrete_pmm_pro.code_checks import aci_beta1, aci_max_phiPn, aci_phi_and_strain_condition, nominal_po_rc_prestressed
 from concrete_pmm_pro.core.analysis import AnalysisInput
 from concrete_pmm_pro.core.models import PrestressElement, Rebar, RebarMaterial
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
@@ -93,6 +93,22 @@ def _clamp(value: float, lower: float, upper: float) -> float:
 
 def _element_label(element: PrestressElement) -> str:
     return element.label or element.material_name or element.id
+
+
+def _prestress_phi_yield_reference_mpa(element: PrestressElement) -> float:
+    """Return a yield/proof stress reference for phi strain transition.
+
+    The phi calculation needs an eps_y reference for the element controlling
+    net tensile strain. Prestressing rows normally provide fpy/proof stress;
+    when missing, use a conservative high-strength reference rather than
+    ordinary rebar defaults.
+    """
+
+    if element.fpy_mpa is not None:
+        return float(element.fpy_mpa)
+    if element.fpu_mpa is not None:
+        return 0.9 * float(element.fpu_mpa)
+    return 1670.0
 
 
 def _initial_prestress_strain(element: PrestressElement, warnings: list[str]) -> float:
@@ -192,13 +208,19 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
         phi_compression = 0.75 if transverse_reinforcement == "spiral" else 0.65
     phiPn_max: float | None = None
     try:
-        Po_N = nominal_po_rc(fc_MPa, float(section_polygon.area), rebars, default_rebar_material)
+        Po_N = nominal_po_rc_prestressed(
+            fc_MPa,
+            float(section_polygon.area),
+            rebars,
+            default_rebar_material,
+            bonded_prestress_elements,
+        )
         phiPn_max = aci_max_phiPn(Po_N, phi_compression, transverse_reinforcement)
         info.append(
             "ACI maximum axial strength cap is applied to axial compression display/checks. "
             "Moment capacity interpolation remains prototype."
         )
-        info.append(f"Prototype nominal Po = {Po_N:,.1f} N; capped max phiPn = {phiPn_max:,.1f} N.")
+        info.append(f"Prototype nominal Po including bonded prestress steel = {Po_N:,.1f} N; capped max phiPn = {phiPn_max:,.1f} N.")
     except ValueError as exc:
         warnings.append(f"ACI axial cap could not be calculated: {exc}")
 
@@ -306,6 +328,13 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
                 Pn += force
                 Mnx += force * (element.y_mm - y_ref)
                 Mny += force * (element.x_mm - x_ref)
+
+                if eps_section < 0.0:
+                    tensile_strain = -eps_section
+                    if eps_t is None or tensile_strain > eps_t:
+                        eps_t = tensile_strain
+                        eps_t_fy = _prestress_phi_yield_reference_mpa(element)
+                        eps_t_es = element.ep_mpa
 
             if settings.use_phi_factor:
                 phi, strain_condition = aci_phi_and_strain_condition(eps_t, eps_t_fy, eps_t_es, transverse_reinforcement)

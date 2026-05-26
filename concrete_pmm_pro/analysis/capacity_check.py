@@ -1,9 +1,9 @@
 """Prototype RC PMM demand/capacity checks.
 
-This module estimates capacity from the RC PMM point cloud. It is intentionally
-not a final design-certification algorithm: prestress contribution, ACI axial
-cap interaction for biaxial bending, and refined PMM surface interpolation
-remain future work.
+This module estimates capacity from the RC/PS PMM point cloud. It is intentionally
+not a final design-certification algorithm: bonded prestress is included by the
+prototype solver when enabled, while unbonded prestress, refined biaxial axial-cap
+interaction, and refined PMM surface interpolation remain future work.
 """
 
 from __future__ import annotations

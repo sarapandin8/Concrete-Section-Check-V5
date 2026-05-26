@@ -76,13 +76,13 @@ def get_engineering_limitations() -> list[EngineeringLimitation]:
         ),
         EngineeringLimitation(
             "prestress_axial_cap",
-            "Prestress contribution to axial cap",
-            "FUTURE_WORK",
+            "Prestress-aware axial cap",
+            "SIMPLIFIED",
             "HIGH",
             "Prestress",
-            "ACI axial cap currently uses RC Po only.",
-            "Aps/fse contribution is not included in the current axial cap workflow.",
-            "Independently review prestressed column axial capacity.",
+            "ACI axial cap uses a prototype Po helper including ordinary rebar and bonded prestress steel.",
+            "Bonded prestress uses fpy or 0.90 fpu as the nominal strength reference; unbonded prestress is ignored.",
+            "Independently review prestressed column axial capacity and code-specific limits.",
         ),
         EngineeringLimitation(
             "prestress_compression_reversal",

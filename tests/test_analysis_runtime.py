@@ -402,3 +402,29 @@ def test_analysis_overview_cards_expose_governing_case_and_fallback_counts() -> 
     assert card_map["Max D/C"]["value"] == "1.500"
     assert card_map["Active ULS Used"]["value"] == "1"
     assert card_map["Fallback Cases"]["value"] == "1"
+
+
+def test_diagnostic_messages_are_cleaned_and_deduplicated() -> None:
+    messages = [
+        "WARNING: Bonded prestress is included using the current prototype strain compatibility model.",
+        "Bonded prestress is included using the current prototype strain compatibility model.",
+        "INFO: Generated 960 PMM point(s).",
+        "Generated 960 PMM point(s).",
+        "",
+    ]
+
+    cleaned = analysis_page_module._deduplicate_diagnostic_messages(messages)
+
+    assert cleaned == [
+        "Bonded prestress is included using the current prototype strain compatibility model.",
+        "Generated 960 PMM point(s).",
+    ]
+
+
+def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
+    assert analysis_page_module._classify_diagnostic_message(
+        "PMM results are prototype results for engineering review."
+    ) == "Limitation / note"
+    assert analysis_page_module._classify_diagnostic_message(
+        "PMM numeric warning: NaN values detected in PMM dataframe columns: eps_t."
+    ) == "Engineering warning"

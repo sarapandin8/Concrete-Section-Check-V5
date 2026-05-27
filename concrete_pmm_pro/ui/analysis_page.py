@@ -526,6 +526,129 @@ def _prestress_check_dataframe(summary: PrestressCheckSummary) -> pd.DataFrame:
     )
 
 
+
+
+def _clean_diagnostic_message(message: object) -> str:
+    """Normalize solver diagnostic text before display.
+
+    Solver/result layers sometimes prefix messages with WARNING:/INFO: and can
+    report the same limitation through several paths.  The Analysis page should
+    keep those messages for QA, but it should not render a debug-console style
+    wall of repeated warnings in the commercial workspace.
+    """
+
+    text = str(message or "").strip()
+    for prefix in ("WARNING:", "INFO:", "ERROR:"):
+        if text.upper().startswith(prefix):
+            text = text[len(prefix):].strip()
+    return " ".join(text.split())
+
+
+def _deduplicate_diagnostic_messages(messages: list[object]) -> list[str]:
+    """Return unique normalized diagnostics while preserving first-seen order."""
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        text = _clean_diagnostic_message(message)
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(text)
+    return unique
+
+
+def _classify_diagnostic_message(message: str) -> str:
+    """Classify diagnostics for compact commercial display.
+
+    Limitations are not hidden; they are separated from actionable engineering
+    warnings so the main Analysis workspace does not look like a solver failure.
+    """
+
+    text = message.casefold()
+    limitation_markers = (
+        "prototype",
+        "future work",
+        "not implemented",
+        "independent engineering verification",
+        "ignored",
+        "not included",
+        "fallback",
+    )
+    if any(marker in text for marker in limitation_markers):
+        return "Limitation / note"
+    if "nan" in text or "numeric" in text or "exceed" in text or "failed" in text:
+        return "Engineering warning"
+    return "Engineering warning"
+
+
+def _diagnostics_to_dataframe(messages: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"Type": _classify_diagnostic_message(message), "Message": message} for message in messages]
+    )
+
+
+def _render_solver_diagnostic_messages(
+    *,
+    result_has_bonded_prestress: bool,
+    settings: AnalysisSettings,
+    result_warnings: list[str],
+    result_info: list[str],
+    numeric_warnings: list[str],
+    rebar_displacement_subtracted: bool,
+) -> None:
+    """Render deduplicated solver messages as compact diagnostics.
+
+    This is UI-only.  It does not suppress solver warnings in the underlying
+    result object; it only prevents repeated warning text from dominating the
+    Analysis workspace.
+    """
+
+    base_warnings: list[object] = [PMM_PROTOTYPE_WARNING, SERVICEABILITY_NOT_IMPLEMENTED_WARNING, DCR_PROTOTYPE_WARNING]
+    if result_has_bonded_prestress:
+        base_warnings.extend(
+            [
+                BONDED_PRESTRESS_PROTOTYPE_WARNING,
+                "PT Bar / Prestressing Bar material is supported through PrestressElement.",
+                RC_AXIAL_CAP_LIMITATION_WARNING,
+            ]
+        )
+    else:
+        base_warnings.append("Prestress contribution is not included in this result.")
+    if not settings.subtract_rebar_displaced_concrete:
+        base_warnings.append("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
+
+    warnings = _deduplicate_diagnostic_messages(base_warnings + list(result_warnings or []) + list(numeric_warnings or []))
+    info_items = _deduplicate_diagnostic_messages(list(result_info or []))
+
+    counts: dict[str, int] = {"Engineering warning": 0, "Limitation / note": 0}
+    for message in warnings:
+        counts[_classify_diagnostic_message(message)] = counts.get(_classify_diagnostic_message(message), 0) + 1
+
+    cols = st.columns(4)
+    cols[0].metric("Unique warnings", f"{len(warnings):,}")
+    cols[1].metric("Engineering warnings", f"{counts.get('Engineering warning', 0):,}")
+    cols[2].metric("Limitations / notes", f"{counts.get('Limitation / note', 0):,}")
+    cols[3].metric("Solver info", f"{len(info_items):,}")
+
+    if warnings:
+        st.caption("Deduplicated solver warnings and limitations are shown below for engineering review.")
+        st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
+    else:
+        st.success("No solver warnings were reported.")
+
+    if rebar_displacement_subtracted:
+        st.info("Concrete compression at ordinary rebar locations is reduced to avoid double counting.")
+
+    with st.expander("Solver info items", expanded=False):
+        if info_items:
+            st.dataframe(pd.DataFrame({"Info": info_items}), use_container_width=True, hide_index=True)
+        else:
+            st.info("No solver info items were reported.")
+
 def _render_prestress_check_panel(summary: PrestressCheckSummary, include_prestress: bool) -> None:
     """Render prestress QA as diagnostics instead of main-page content."""
 
@@ -557,20 +680,19 @@ def _render_prestress_check_panel(summary: PrestressCheckSummary, include_prestr
 
 
 def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
-    collected: list[str] = []
+    collected: list[object] = []
     for group in warning_groups:
         collected.extend(group)
-    return deduplicate_warnings(collected)
+    return _deduplicate_diagnostic_messages(collected)
 
 
 def _render_engineering_warnings(warnings: list[str]) -> None:
-    st.subheader("Engineering Warnings")
-    st.info("Warnings are part of the engineering review workflow and should not be ignored.")
+    st.subheader("Engineering Warnings / Limitations")
+    st.info("Deduplicated engineering review messages are kept here for QA without overwhelming the main result view.")
     if not warnings:
         st.success("No engineering warnings are currently reported.")
         return
-    for warning in warnings:
-        st.warning(warning)
+    st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
 
 
 def _render_prestress_verification_summary(
@@ -875,33 +997,22 @@ def _render_input_summary() -> None:
         result_has_bonded_prestress = any(point.bonded_prestress_count > 0 for point in result.points)
         result_label = "RC + Bonded Prestress PMM Prototype" if result_has_bonded_prestress else "RC PMM Prototype"
         st.subheader(f"{result_label} Result")
-        st.caption("Raw solver capacity diagnostics are collapsed below; the governing ULS result workspace follows after this section.")
-        with st.expander("PMM solver diagnostics / raw capacity summary", expanded=False):
-            st.warning(PMM_PROTOTYPE_WARNING)
-            if result_has_bonded_prestress:
-                st.warning(BONDED_PRESTRESS_PROTOTYPE_WARNING)
-                st.warning("PT Bar / Prestressing Bar material is supported through PrestressElement.")
-                st.warning(RC_AXIAL_CAP_LIMITATION_WARNING)
-            else:
-                st.warning("Prestress contribution is not included in this result.")
-            st.warning(SERVICEABILITY_NOT_IMPLEMENTED_WARNING)
-            if result.points and any(point.rebar_displaced_concrete_subtracted_N > 0.0 for point in result.points):
-                st.info("This refinement reduces double counting of concrete compression at ordinary rebar locations.")
-            elif not settings.subtract_rebar_displaced_concrete:
-                st.warning("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
-            st.warning(DCR_PROTOTYPE_WARNING)
-            for warning in result.warnings:
-                st.warning(f"WARNING: {warning}")
-            for item in result.info:
-                st.info(f"INFO: {item}")
-    
-            df = pmm_result_to_display_dataframe(result)
-            if not df.empty:
-                summary = summarize_pmm_result(result)
-                numeric_summary = check_pmm_dataframe_numerics(df)
-                if numeric_summary["warnings"]:
-                    for warning in numeric_summary["warnings"]:
-                        st.warning(f"PMM numeric warning: {warning}")
+        st.caption("Solver diagnostics are kept in QA panels; the governing ULS result workspace follows below.")
+        df = pmm_result_to_display_dataframe(result)
+        if not df.empty:
+            summary = summarize_pmm_result(result)
+            numeric_summary = check_pmm_dataframe_numerics(df)
+            with st.expander("PMM solver diagnostics / QA summary", expanded=False):
+                _render_solver_diagnostic_messages(
+                    result_has_bonded_prestress=result_has_bonded_prestress,
+                    settings=settings,
+                    result_warnings=result.warnings,
+                    result_info=result.info,
+                    numeric_warnings=[f"PMM numeric warning: {warning}" for warning in numeric_summary["warnings"]],
+                    rebar_displacement_subtracted=bool(
+                        result.points and any(point.rebar_displaced_concrete_subtracted_N > 0.0 for point in result.points)
+                    ),
+                )
                 cols = st.columns(4)
                 cols[0].metric("PMM points", f"{summary['point_count']:,}")
                 cols[1].metric("Max phiPn", f"{df['phiPn_kN'].max():,.1f} kN")

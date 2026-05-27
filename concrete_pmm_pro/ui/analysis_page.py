@@ -991,7 +991,7 @@ def _render_input_summary() -> None:
             )
 
             with st.expander("Detailed PMM plots", expanded=False):
-                _render_pmm_charts(df, demand_df, dc_summary)
+                _render_pmm_charts(df, demand_df, dc_summary, key_prefix="analysis_input_diagnostics")
             with st.expander("Raw PMM result table / export", expanded=False):
                 st.download_button(
                     "Download RC PMM Result CSV",
@@ -1723,7 +1723,7 @@ def _render_pmm_slice_dashboard(
                     use_container_width=True,
                 )
         with st.expander("Detailed PMM plots", expanded=False):
-            _render_pmm_charts(pmm_df, demand_df, dc_summary)
+            _render_pmm_charts(pmm_df, demand_df, dc_summary, key_prefix="analysis_workspace_diagnostics")
 
 def _dc_status_map(summary: DemandCapacitySummary | None) -> dict[str, tuple[str | None, str]]:
     if summary is None:
@@ -1776,7 +1776,13 @@ def _add_demand_trace(fig: go.Figure, demand_df, x_column: str, name: str, dc_su
     )
 
 
-def _render_pmm_charts(df, demand_df, dc_summary: DemandCapacitySummary | None = None) -> None:
+def _render_pmm_charts(
+    df,
+    demand_df,
+    dc_summary: DemandCapacitySummary | None = None,
+    *,
+    key_prefix: str = "analysis_pmm_visual_review",
+) -> None:
     st.subheader("PMM Visual Review")
 
     pmx = go.Figure()
@@ -1794,7 +1800,7 @@ def _render_pmm_charts(df, demand_df, dc_summary: DemandCapacitySummary | None =
         )
     _add_demand_trace(pmx, demand_df, "Mux_kNm", "ULS demand", dc_summary)
     pmx.update_layout(title="RC PMM Prototype: P-Mnx", xaxis_title="phiMnx (kN-m)", yaxis_title="phiPn (kN)")
-    st.plotly_chart(pmx, use_container_width=True, key="analysis_p_mnx_chart")
+    st.plotly_chart(pmx, use_container_width=True, key=f"{key_prefix}_p_mnx_chart")
 
     pmy = go.Figure()
     for condition in sorted(df["strain_condition"].dropna().unique()):
@@ -1811,7 +1817,7 @@ def _render_pmm_charts(df, demand_df, dc_summary: DemandCapacitySummary | None =
         )
     _add_demand_trace(pmy, demand_df, "Muy_kNm", "ULS demand", dc_summary)
     pmy.update_layout(title="RC PMM Prototype: P-Mny", xaxis_title="phiMny (kN-m)", yaxis_title="phiPn (kN)")
-    st.plotly_chart(pmy, use_container_width=True, key="analysis_p_mny_chart")
+    st.plotly_chart(pmy, use_container_width=True, key=f"{key_prefix}_p_mny_chart")
 
     mm = go.Figure(
         go.Scatter(
@@ -1851,7 +1857,7 @@ def _render_pmm_charts(df, demand_df, dc_summary: DemandCapacitySummary | None =
             )
         )
     mm.update_layout(title="RC PMM Prototype: Mnx-Mny Point Cloud", xaxis_title="phiMnx (kN-m)", yaxis_title="phiMny (kN-m)")
-    st.plotly_chart(mm, use_container_width=True, key="analysis_mnx_mny_chart")
+    st.plotly_chart(mm, use_container_width=True, key=f"{key_prefix}_mnx_mny_chart")
 
     fig3d = go.Figure(
         go.Scatter3d(
@@ -1867,7 +1873,7 @@ def _render_pmm_charts(df, demand_df, dc_summary: DemandCapacitySummary | None =
         title="RC PMM Prototype: 3D Point Cloud",
         scene=dict(xaxis_title="phiMnx (kN-m)", yaxis_title="phiMny (kN-m)", zaxis_title="phiPn (kN)"),
     )
-    st.plotly_chart(fig3d, use_container_width=True, key="analysis_3d_pmm_chart")
+    st.plotly_chart(fig3d, use_container_width=True, key=f"{key_prefix}_3d_pmm_chart")
 
 
 def _verification_summary_dataframe(summary: PMMVerificationSummary) -> pd.DataFrame:

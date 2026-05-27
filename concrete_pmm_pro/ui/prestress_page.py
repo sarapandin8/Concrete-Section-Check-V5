@@ -1032,8 +1032,6 @@ def prestress_elements_from_dataframe(df: pd.DataFrame, prestress_db: pd.DataFra
     total_aps = sum(element.total_area_mm2 for element in elements)
     total_pe = sum(element.pe_eff_n * element.count for element in elements)
     info.extend([f"{active_count} active prestress element(s).", f"Total Aps = {total_aps:,.1f} mm^2.", f"Total Pe_eff = {total_pe:,.1f} N."])
-    if not elements:
-        warnings.append("No active prestress elements are defined.")
     return PrestressParseResult(elements=elements, errors=errors, warnings=warnings, info=info)
 
 
@@ -1217,7 +1215,12 @@ def _invalid_prestress_rows_dataframe(table: pd.DataFrame, errors: list[str]) ->
     return pd.DataFrame(rows)
 
 
-def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_errors: list[str], valid_for_analysis: bool) -> list[PrestressMetric]:
+def _build_prestress_summary_metrics(
+    result: PrestressParseResult,
+    geometry_errors: list[str],
+    valid_for_analysis: bool,
+    active_rebar_count: int = 0,
+) -> list[PrestressMetric]:
     total_aps = sum(element.total_area_mm2 for element in result.elements)
     total_pe_kn = sum(element.pe_eff_n * element.count for element in result.elements) / 1000.0
     tendon_group_count = sum(1 for element in result.elements if element.steel_type == "tendon_group")
@@ -1226,6 +1229,8 @@ def _build_prestress_summary_metrics(result: PrestressParseResult, geometry_erro
     unbonded_count = sum(1 for element in result.elements if not element.bonded)
     error_count = len(result.errors) + len(geometry_errors)
     warning_count = len(result.warnings)
+    if not result.elements and active_rebar_count == 0:
+        warning_count += 1
     return [
         PrestressMetric("Valid elements", f"{len(result.elements):,}", detail="used in analysis", status="info"),
         PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
@@ -1243,9 +1248,12 @@ def _build_prestress_status_rows(
     geometry_errors: list[str],
     geometry_available: bool,
     valid_for_analysis: bool,
+    active_rebar_count: int = 0,
 ) -> list[PrestressMetric]:
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
+    if not result.elements and active_rebar_count == 0:
+        warnings.append("No active longitudinal reinforcement is defined. Activate ordinary rebar or prestress before final analysis.")
     if not geometry_available:
         warnings.append("Section geometry is not available yet.")
     total_aps = sum(element.total_area_mm2 for element in result.elements)
@@ -1265,8 +1273,16 @@ def _build_prestress_status_rows(
     ]
 
 
-def _render_prestress_summary_strip(result: PrestressParseResult, geometry_errors: list[str], valid_for_analysis: bool) -> None:
-    st.markdown(_metric_strip_html(_build_prestress_summary_metrics(result, geometry_errors, valid_for_analysis)), unsafe_allow_html=True)
+def _render_prestress_summary_strip(
+    result: PrestressParseResult,
+    geometry_errors: list[str],
+    valid_for_analysis: bool,
+    active_rebar_count: int = 0,
+) -> None:
+    st.markdown(
+        _metric_strip_html(_build_prestress_summary_metrics(result, geometry_errors, valid_for_analysis, active_rebar_count)),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_tendon_product_tools() -> None:
@@ -1336,15 +1352,34 @@ def _render_tendon_product_tools() -> None:
         st.success(f"Added custom tendon {product.label}. Pe_eff remains user-controlled.")
 
 
-def _render_validation(result: PrestressParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
+def _render_validation(
+    result: PrestressParseResult,
+    geometry_errors: list[str],
+    geometry_available: bool,
+    valid_for_analysis: bool,
+    active_rebar_count: int = 0,
+) -> None:
     st.markdown("#### Prestress Status")
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
+    contextual_notes: list[str] = []
+    if not result.elements and active_rebar_count > 0:
+        contextual_notes.append(
+            "No active prestress elements. The section will be analyzed as RC-only unless prestress rows are activated."
+        )
+    elif not result.elements:
+        warnings.append("No active longitudinal reinforcement is defined. Activate ordinary rebar or prestress before final analysis.")
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
-    st.markdown(_status_panel_html(_build_prestress_status_rows(result, geometry_errors, geometry_available, valid_for_analysis)), unsafe_allow_html=True)
+    st.markdown(
+        _status_panel_html(
+            _build_prestress_status_rows(result, geometry_errors, geometry_available, valid_for_analysis, active_rebar_count)
+        ),
+        unsafe_allow_html=True,
+    )
     messages = [f"ERROR: {error}" for error in all_errors] or ["No validation errors."]
     messages.extend(f"WARNING: {warning}" for warning in warnings)
+    messages.extend(f"INFO: {note}" for note in contextual_notes)
     messages.extend(f"INFO: {item}" for item in result.info)
     st.markdown(_message_list_html(messages), unsafe_allow_html=True)
 
@@ -1481,11 +1516,13 @@ def render_prestress_page() -> None:
     st.session_state["prestress_elements"] = result.elements
     st.session_state["prestress_valid_for_analysis"] = valid_for_analysis
 
+    active_rebar_count = len(st.session_state.get("rebars", []) or [])
+
     with summary_slot.container():
-        _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis)
+        _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis, active_rebar_count)
 
     with side_col:
-        _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+        _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis, active_rebar_count)
         _render_engineering_notes()
 
     invalid_rows_df = _invalid_prestress_rows_dataframe(edited_df, result.errors)

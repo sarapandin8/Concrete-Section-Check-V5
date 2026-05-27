@@ -292,3 +292,15 @@ def RebarParseResultForTest(rebars: list[Rebar]):
     from concrete_pmm_pro.ui.rebar_page import RebarParseResult
 
     return RebarParseResult(rebars=rebars, errors=[], warnings=[], info=[])
+
+
+def test_rebars_from_dataframe_empty_active_rows_does_not_emit_presence_warning() -> None:
+    rebar_db = load_rebar_database()
+    df = pd.DataFrame(
+        [{"Active": False, "Label": "B1", "x_mm": 0, "y_mm": 0, "Bar Size": "DB20", "Diameter_mm": 20, "Material": "SD40", "Count": 1, "Note": ""}]
+    )
+
+    result = rebars_from_dataframe(df, rebar_db)
+
+    assert result.rebars == []
+    assert not any("No active" in warning for warning in result.warnings)

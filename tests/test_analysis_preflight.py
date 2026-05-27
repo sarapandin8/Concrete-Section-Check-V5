@@ -178,3 +178,37 @@ def test_apply_project_to_session_state_restores_analysis_settings() -> None:
 
     assert isinstance(session["analysis_settings"], AnalysisSettings)
     assert session["analysis_settings"].neutral_axis_depth_steps == 144
+
+
+def test_check_analysis_readiness_allows_rc_only_without_prestress_warning() -> None:
+    session = _valid_session()
+    session["prestress_elements"] = []
+
+    result = check_analysis_readiness(session)
+
+    assert result.ready is True
+    assert not any("No prestress" in warning for warning in result.warnings)
+    assert any("RC-only" in item for item in result.info)
+
+
+def test_check_analysis_readiness_allows_prestress_only_without_rebar_warning() -> None:
+    session = _valid_session()
+    session["rebars"] = []
+
+    result = check_analysis_readiness(session)
+
+    assert result.ready is True
+    assert not any("No rebars" in warning or "Rebars are missing" in warning for warning in result.warnings)
+    assert not any("Rebars are missing" in error for error in result.errors)
+    assert any("No active ordinary rebar" in item for item in result.info)
+
+
+def test_check_analysis_readiness_errors_when_no_longitudinal_reinforcement() -> None:
+    session = _valid_session()
+    session["rebars"] = []
+    session["prestress_elements"] = []
+
+    result = check_analysis_readiness(session)
+
+    assert result.ready is False
+    assert any("No active longitudinal reinforcement" in error for error in result.errors)

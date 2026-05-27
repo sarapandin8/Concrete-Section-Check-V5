@@ -76,8 +76,10 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
     if not strength_load_cases:
         errors.append(f"No active {settings.strength_load_type} load cases are available.")
 
-    if settings.include_rebars and not rebars:
-        errors.append("Rebars are missing while Include rebars is enabled.")
+    included_rebars = rebars if settings.include_rebars else []
+    included_prestress = prestress_elements if settings.include_prestress else []
+    if not included_rebars and not included_prestress:
+        errors.append("No active longitudinal reinforcement or bonded prestress elements are available for PMM analysis.")
 
     rebars_valid = _get_session_value(session_state, "rebars_valid_for_analysis", None)
     if rebars_valid is False and (settings.include_rebars or rebars):
@@ -87,10 +89,10 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
     if settings.include_prestress and prestress_elements and prestress_valid is False:
         errors.append("Prestress elements are not valid for analysis.")
 
-    if not rebars:
-        warnings.append("No rebars are defined.")
-    if not prestress_elements:
-        warnings.append("No prestress elements are defined.")
+    if not rebars and prestress_elements:
+        info.append("No active ordinary rebar is defined; PMM analysis will rely on active prestress elements. Check minimum ordinary reinforcement and detailing requirements separately.")
+    elif rebars and not prestress_elements:
+        info.append("No active prestress elements are defined; ULS PMM analysis will proceed as RC-only.")
     if any(not element.bonded for element in prestress_elements):
         warnings.append("Unbonded prestress elements are present; unbonded prestress modeling is future work.")
     if not rebar_materials:

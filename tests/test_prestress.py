@@ -219,7 +219,7 @@ def test_custom_tendon_product_row_parses_without_using_duct_as_diameter() -> No
     assert not result.errors
     assert not result.warnings
     element = result.elements[0]
-    assert element.material_name == "6-25"
+    assert element.material_name == "Tendon 6-25"
     assert element.steel_type == "tendon_group"
     assert element.area_mm2 == pytest.approx(3500.0)
     assert element.diameter_mm is None
@@ -605,7 +605,7 @@ def test_prestress_summary_metrics_count_active_types_and_force() -> None:
 
     metrics = {metric.title: metric for metric in _build_prestress_summary_metrics(result, [], True)}
 
-    assert metrics["Active elements"].value == "2"
+    assert metrics["Valid elements"].value == "2"
     assert metrics["Total Aps"].value == "340.0 mm2"
     assert metrics["Total Pe_eff"].value == "110.0 kN"
     assert metrics["Analysis readiness"].value == "Yes"
@@ -617,7 +617,7 @@ def test_prestress_summary_metrics_count_active_types_and_force() -> None:
 def test_prestress_status_rows_include_geometry_warning_without_validation_logic_change() -> None:
     result = PrestressParseResult(elements=[], errors=[], warnings=[], info=[])
 
-    rows = {row.title: row for row in _build_prestress_status_rows(result, [], False, True)}
+    rows = {row.title: row for row in _build_prestress_status_rows(result, [], False, True, active_rebar_count=1)}
 
     assert rows["Overall readiness"].value == "Ready"
     assert rows["Warnings"].value == "1"
@@ -633,3 +633,13 @@ def test_engineering_notes_preserve_prestress_safeguards() -> None:
     assert "Duct ID is duct reference information and is not steel diameter" in html
     assert "Area_mm2 controls steel area" in html
     assert "not external Pu demand" in html
+
+
+def test_prestress_elements_from_dataframe_empty_active_rows_does_not_emit_presence_warning() -> None:
+    prestress_db = load_prestress_steel_database()
+    row = apply_tendon_product_to_row(_row(Active=False), "Tendon 6-12")
+
+    result = prestress_elements_from_dataframe(pd.DataFrame([row]), prestress_db)
+
+    assert result.elements == []
+    assert not any("No active" in warning for warning in result.warnings)

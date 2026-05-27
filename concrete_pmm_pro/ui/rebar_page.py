@@ -411,8 +411,6 @@ def rebars_from_dataframe(df: pd.DataFrame, rebar_db: pd.DataFrame) -> RebarPars
 
     total_as = sum(rebar.area_mm2 for rebar in rebars)
     info = [f"{len(rebars)} active rebar object(s).", f"Total As = {total_as:,.1f} mm^2."]
-    if not rebars:
-        warnings.append("No active rebars are defined.")
     return RebarParseResult(rebars=rebars, errors=errors, warnings=warnings, info=info)
 
 
@@ -544,10 +542,23 @@ def _render_summary_strip(
     )
 
 
-def _render_validation(result: RebarParseResult, geometry_errors: list[str], geometry_available: bool, valid_for_analysis: bool) -> None:
+def _render_validation(
+    result: RebarParseResult,
+    geometry_errors: list[str],
+    geometry_available: bool,
+    valid_for_analysis: bool,
+    active_prestress_count: int = 0,
+) -> None:
     st.markdown("#### Rebar Status")
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
+    contextual_notes: list[str] = []
+    if not result.rebars and active_prestress_count > 0:
+        contextual_notes.append(
+            "No active ordinary rebar is defined. Analysis will rely on active bonded prestress elements; check minimum ordinary reinforcement and detailing requirements separately."
+        )
+    elif not result.rebars:
+        warnings.append("No active longitudinal reinforcement is defined. Activate ordinary rebar or prestress before final analysis.")
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
     st.markdown(
@@ -572,7 +583,10 @@ def _render_validation(result: RebarParseResult, geometry_errors: list[str], geo
         for warning in warnings:
             st.warning(f"WARNING: {warning}")
 
-    if result.info and (all_errors or warnings):
+    for note in contextual_notes:
+        st.info(f"INFO: {note}")
+
+    if result.info and (all_errors or warnings or contextual_notes):
         st.markdown(_message_list_html([f"INFO: {info}" for info in result.info]), unsafe_allow_html=True)
 
 
@@ -671,7 +685,13 @@ def render_rebar_page() -> None:
 
     with status_col:
         with st.container(border=True):
-            _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis)
+            _render_validation(
+                result,
+                geometry_errors,
+                geometry is not None,
+                valid_for_analysis,
+                active_prestress_count=len(st.session_state.get("prestress_elements", []) or []),
+            )
             st.markdown(
                 '<div class="cpmm-rebar-note">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
                 unsafe_allow_html=True,

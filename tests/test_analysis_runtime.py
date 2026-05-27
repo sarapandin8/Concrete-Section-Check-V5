@@ -434,3 +434,44 @@ def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
     assert analysis_page_module._classify_diagnostic_message(
         "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed."
     ) == "Engineering review warning"
+
+
+def test_diagnostic_guidance_explains_prestress_fpu_cap_action() -> None:
+    guidance = analysis_page_module._diagnostic_guidance("PS1: Prestress stress reached fpu cap.")
+
+    assert guidance["Severity"] == "Engineering review warning"
+    assert guidance["Source"] == "Prestress model"
+    assert "Pe_eff/fpe" in guidance["Recommended Action"]
+    assert "Prestress tab" in guidance["Where to Check"]
+    assert "Potential" in guidance["Governing Impact"]
+
+
+def test_diagnostic_guidance_explains_eps_t_nan_as_numerical_note() -> None:
+    guidance = analysis_page_module._diagnostic_guidance(
+        "PMM numeric warning: NaN values detected in PMM dataframe columns: eps_t."
+    )
+
+    assert guidance["Severity"] == "Numerical note"
+    assert "compression-controlled" in guidance["Meaning"]
+    assert "No input change" in guidance["Recommended Action"]
+
+
+def test_diagnostics_dataframe_contains_actionable_columns() -> None:
+    df = analysis_page_module._diagnostics_to_dataframe(
+        [
+            "PS2: Prestress compression reversal is not modeled; tensile strain was clamped to zero.",
+            "PMM results are prototype results for engineering review.",
+        ]
+    )
+
+    expected_columns = {
+        "Source",
+        "Severity",
+        "Message",
+        "Meaning",
+        "Possible Cause",
+        "Recommended Action",
+        "Governing Impact",
+        "Where to Check",
+    }
+    assert expected_columns.issubset(set(df.columns))

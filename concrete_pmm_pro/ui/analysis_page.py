@@ -619,15 +619,140 @@ def _diagnostic_counts(messages: list[str]) -> dict[str, int]:
     return counts
 
 
+def _diagnostic_source(message: str) -> str:
+    """Return the likely engineering source of a solver diagnostic."""
+
+    text = message.casefold()
+    if "prestress" in text or text.startswith("ps") or "fpu" in text or "fpy" in text:
+        return "Prestress model"
+    if "directional moment" in text or "d/c" in text or "interpolation" in text or "fallback" in text:
+        return "PMM D/C method"
+    if "axial cap" in text or "nominal po" in text or "phipn" in text:
+        return "ACI axial cap"
+    if "sls" in text or "serviceability" in text:
+        return "SLS workspace"
+    if "nan" in text or "numeric" in text or "eps_t" in text:
+        return "PMM numeric diagnostics"
+    if "pmm" in text:
+        return "PMM solver"
+    return "General QA"
+
+
+def _diagnostic_guidance(message: str) -> dict[str, str]:
+    """Explain what a diagnostic means and how a user should respond.
+
+    The solver messages are intentionally conservative, but raw warnings are
+    not enough for a commercial engineering UI.  This mapping converts common
+    solver diagnostics into actionable QA guidance without changing any solver
+    results or suppressing the original message.
+    """
+
+    text = message.casefold()
+    severity = _classify_diagnostic_message(message)
+    source = _diagnostic_source(message)
+
+    guidance = {
+        "Source": source,
+        "Severity": severity,
+        "Message": message,
+        "Meaning": "Solver or QA diagnostic retained for engineering review.",
+        "Possible Cause": "Review the related input and calculation diagnostics.",
+        "Recommended Action": "Open the related diagnostics panel and verify the governing case before final design use.",
+        "Governing Impact": "Review required",
+        "Where to Check": "Analysis > Diagnostics / QA",
+    }
+
+    if "prestress stress reached fpu" in text or "reached fpu cap" in text:
+        guidance.update(
+            {
+                "Meaning": "Prestressing steel stress reached the material ultimate-stress cap in part of the generated PMM interaction surface.",
+                "Possible Cause": "High Pe_eff/fpe, tendon close to the extreme tension zone, high curvature failure states, or an aggressive prestress material definition.",
+                "Recommended Action": "Check the named prestress row in Prestress: Product, Area, Pe_eff/fpe, fpu/fpy, x/y location, and Bonded state. If the governing case is near this region, treat the result as preliminary and verify manually.",
+                "Governing Impact": "Potential if near governing case",
+                "Where to Check": "Prestress tab + Analysis > PMM Check / governing trace",
+            }
+        )
+    elif "compression reversal" in text or "tensile strain was clamped" in text:
+        guidance.update(
+            {
+                "Meaning": "A prestress element entered a compression-side strain range where the current prestress model does not model compression reversal in detail; tensile strain was clamped to zero.",
+                "Possible Cause": "Tendon/bar lies on the compression side for some neutral-axis positions, or the PMM sweep includes curvature states that reverse the expected prestress tension behavior.",
+                "Recommended Action": "Check tendon x/y position and the governing PMM direction. If this occurs only away from the governing case, retain as QA note; if near the governing case, verify with an independent section analysis.",
+                "Governing Impact": "Potential if near governing case",
+                "Where to Check": "Prestress tab + Analysis > Diagnostics / QA",
+            }
+        )
+    elif "directional moment" in text or "fallback" in text or "falls back" in text:
+        guidance.update(
+            {
+                "Meaning": "The demand/capacity check may use a fallback capacity method when the cleaned Pu slice cannot directly resolve the demand direction.",
+                "Possible Cause": "Sparse PMM surface points, demand near the edge of the interaction surface, irregular slice geometry, or insufficient analysis resolution.",
+                "Recommended Action": "Review the governing case trace, capacity method, and fallback flag. Re-run with a higher accuracy preset if the governing case uses fallback or lies near the capacity boundary.",
+                "Governing Impact": "Potential for governing D/C",
+                "Where to Check": "Analysis > PMM Check + Full ULS D/C trace details",
+            }
+        )
+    elif "nan" in text and "eps_t" in text:
+        guidance.update(
+            {
+                "Meaning": "Some PMM points do not have a controlling tensile strain value. This can be expected for compression-controlled states.",
+                "Possible Cause": "Compression-controlled PMM points or points where no tensile reinforcement/PS strain controls phi.",
+                "Recommended Action": "No input change is usually required if phi, capacity, and governing D/C are computed. Review only if many PMM points are invalid or the governing case lacks capacity.",
+                "Governing Impact": "Usually none",
+                "Where to Check": "Analysis > Diagnostics / QA > raw PMM data",
+            }
+        )
+    elif "prototype" in text and "pmm" in text:
+        guidance.update(
+            {
+                "Meaning": "The PMM solver/result workflow is currently flagged as an engineering-review prototype, not a fully production-validated design engine.",
+                "Possible Cause": "The application is still under staged validation and benchmark expansion.",
+                "Recommended Action": "Use the result for engineering review/preliminary design and verify important governing cases independently until the solver validation milestone is completed.",
+                "Governing Impact": "Global limitation",
+                "Where to Check": "Analysis > Diagnostics / QA + benchmark tests",
+            }
+        )
+    elif "axial cap" in text or "nominal po" in text:
+        guidance.update(
+            {
+                "Meaning": "The ACI maximum axial strength cap uses the current prestress-aware Po helper. Unbonded prestress is excluded.",
+                "Possible Cause": "The section includes ordinary rebar and/or bonded prestress; axial compression display/checks are capped by ACI-style limits.",
+                "Recommended Action": "Verify Ag, As, Aps, f'c, fy/fpy, and whether prestress is bonded. Do not enter Pe_eff as external Pu. Independently verify compression-controlled governing cases.",
+                "Governing Impact": "Potential for high axial compression cases",
+                "Where to Check": "Section/Rebar/Prestress tabs + Analysis > Diagnostics / QA",
+            }
+        )
+    elif "bonded prestress" in text or "prestress" in text:
+        guidance.update(
+            {
+                "Meaning": "Bonded prestress is included through the current strain-compatibility prestress model.",
+                "Possible Cause": "Active bonded prestress elements are present in the section model.",
+                "Recommended Action": "Review Pe_eff/fpe, product properties, bonded state, and tendon positions. Treat final design use as subject to independent verification until prestress validation is complete.",
+                "Governing Impact": "Global prestress-model limitation",
+                "Where to Check": "Prestress tab + Analysis > Prestress diagnostics",
+            }
+        )
+    elif "sls" in text or "serviceability" in text:
+        guidance.update(
+            {
+                "Meaning": "SLS load cases are stored but the SLS calculation engine is not active in this workflow yet.",
+                "Possible Cause": "The Loads table contains SLS rows while the current analysis workspace is ULS/PMM-focused.",
+                "Recommended Action": "No ULS input change is required. Use SLS rows later when the SLS workspace/checks are implemented.",
+                "Governing Impact": "Does not affect ULS PMM D/C",
+                "Where to Check": "Analysis > SLS tab",
+            }
+        )
+
+    return guidance
+
+
 def _diagnostics_to_dataframe(messages: list[str]) -> pd.DataFrame:
-    df = pd.DataFrame(
-        [{"Type": _classify_diagnostic_message(message), "Message": message} for message in messages]
-    )
+    df = pd.DataFrame([_diagnostic_guidance(message) for message in messages])
     if df.empty:
         return df
     order = {"Engineering review warning": 0, "Solver limitation note": 1, "Numerical note": 2}
-    df["_order"] = df["Type"].map(order).fillna(99)
-    return df.sort_values(["_order", "Type", "Message"]).drop(columns=["_order"]).reset_index(drop=True)
+    df["_order"] = df["Severity"].map(order).fillna(99)
+    return df.sort_values(["_order", "Severity", "Source", "Message"]).drop(columns=["_order"]).reset_index(drop=True)
 
 
 def _render_solver_diagnostic_messages(
@@ -672,7 +797,7 @@ def _render_solver_diagnostic_messages(
     cols[3].metric("Solver info", f"{len(info_items):,}")
 
     if warnings:
-        st.caption("Deduplicated solver messages are grouped by severity for QA without overwhelming the main result view.")
+        st.caption("Deduplicated solver messages are grouped by severity with meaning, likely cause, recommended action, and where to check.")
         st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
     else:
         st.success("No solver warnings were reported.")
@@ -724,8 +849,8 @@ def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
 
 
 def _render_engineering_warnings(warnings: list[str]) -> None:
-    st.subheader("Engineering Review Messages / Solver Limitations")
-    st.info("Deduplicated review messages are grouped by severity. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
+    st.subheader("Actionable Engineering Review Guidance")
+    st.info("Each diagnostic is translated into meaning, possible cause, recommended action, governing impact, and where to check. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
     if not warnings:
         st.success("No engineering review messages are currently reported.")
         return
@@ -1134,7 +1259,7 @@ def _render_input_summary() -> None:
                 numerical_note_count = warning_counts.get("Numerical note", 0)
                 if review_warning_count:
                     st.warning(
-                        f"{review_warning_count:,} engineering review warning(s) are available in Diagnostics / QA. "
+                        f"{review_warning_count:,} engineering review warning(s) need review in Diagnostics / QA with recommended actions. "
                         f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
                     )
                 else:

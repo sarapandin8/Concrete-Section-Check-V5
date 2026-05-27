@@ -200,8 +200,15 @@ def _normalize_editor_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             normalized[column] = True if column == "Active" else ""
 
     normalized = normalized[EDITOR_COLUMNS].copy()
-    normalized["Active"] = normalized["Active"].map(lambda value: _to_bool(value, default=True))
+    normalized["Active"] = normalized["Active"].map(lambda value: _to_bool(value, default=True)).astype(bool)
+    normalized["Case Name"] = normalized["Case Name"].map(lambda value: "" if _is_blank(value) else str(value))
     normalized["Limit State"] = normalized["Limit State"].map(lambda value: _normalize_limit_state(value) or str(value).strip())
+    # Pu/Mux/Muy intentionally use TextColumn in st.data_editor so pasted Excel
+    # values such as "1,250" or "2500 kN" can be accepted and validated
+    # by the parser. Streamlit requires TextColumn to receive string/object dtype,
+    # so coerce numeric defaults/session-state values before rendering.
+    for numeric_column in ("Pu", "Mux", "Muy"):
+        normalized[numeric_column] = normalized[numeric_column].map(lambda value: "" if _is_blank(value) else str(value))
     normalized["Note"] = normalized["Note"].map(lambda value: "" if _is_blank(value) else str(value))
     return normalized
 

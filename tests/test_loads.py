@@ -5,7 +5,7 @@ import pytest
 
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
-from concrete_pmm_pro.ui.loads_page import _preview_dataframe, load_cases_from_dataframe
+from concrete_pmm_pro.ui.loads_page import _normalize_editor_dataframe, _preview_dataframe, load_cases_from_dataframe
 
 
 def test_force_unit_conversions() -> None:
@@ -168,3 +168,19 @@ def test_internal_units_preview_uses_case_and_limit_state_column_names() -> None
     assert "Muy_Nmm" in preview.columns
     assert "Mx_Nmm" not in preview.columns
     assert "My_Nmm" not in preview.columns
+
+
+def test_load_editor_normalization_casts_numeric_text_columns_for_streamlit() -> None:
+    df = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-01", "Limit State": "ULS", "Pu": 1250.0, "Mux": 500.0, "Muy": -300.0, "Note": None},
+        ]
+    )
+
+    normalized = _normalize_editor_dataframe(df)
+
+    assert normalized["Active"].dtype == bool
+    assert normalized.loc[0, "Pu"] == "1250.0"
+    assert normalized.loc[0, "Mux"] == "500.0"
+    assert normalized.loc[0, "Muy"] == "-300.0"
+    assert normalized.loc[0, "Note"] == ""

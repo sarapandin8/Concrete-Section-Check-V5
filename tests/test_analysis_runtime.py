@@ -307,3 +307,98 @@ def test_timed_call_returns_result_and_timing() -> None:
     assert result == 2
     assert timing.label == "quick operation"
     assert timing.elapsed_seconds >= 0
+
+from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary
+from concrete_pmm_pro.ui.analysis_page import (
+    _active_load_case_usage_summary,
+    _analysis_result_overview_cards,
+    _demand_capacity_transparency_dataframe,
+)
+
+
+def _synthetic_dc_summary_for_transparency() -> DemandCapacitySummary:
+    return DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-GOV",
+                Pu_N=1_500_000.0,
+                Mux_Nmm=120_000_000.0,
+                Muy_Nmm=90_000_000.0,
+                Mu_Nmm=150_000_000.0,
+                moment_angle_rad=0.64,
+                capacity_Mn_Nmm=None,
+                capacity_phiMn_Nmm=100_000_000.0,
+                capacity_phiPn_N=1_500_000.0,
+                dcr=1.5,
+                status="FAIL",
+                message="Synthetic governing case.",
+                capacity_method="slice_envelope",
+                slice_method="interpolated",
+                envelope_method="convex_hull",
+                used_fallback=False,
+                warning_count=2,
+            ),
+            DemandCapacityResult(
+                combo_name="ULS-OK",
+                Pu_N=900_000.0,
+                Mux_Nmm=50_000_000.0,
+                Muy_Nmm=0.0,
+                Mu_Nmm=50_000_000.0,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=None,
+                capacity_phiMn_Nmm=100_000_000.0,
+                capacity_phiPn_N=900_000.0,
+                dcr=0.5,
+                status="PASS",
+                message="Synthetic pass.",
+                capacity_method="point_cloud_fallback",
+                slice_method="tolerance_fallback",
+                envelope_method="N/A",
+                used_fallback=True,
+                warning_count=1,
+            ),
+        ],
+        governing_combo="ULS-GOV",
+        max_dcr=1.5,
+        overall_status="FAIL",
+    )
+
+
+def test_analysis_transparency_dataframe_marks_governing_and_methods() -> None:
+    df = _demand_capacity_transparency_dataframe(_synthetic_dc_summary_for_transparency())
+
+    assert list(df["Case Name"]) == ["ULS-GOV", "ULS-OK"]
+    assert df.loc[0, "Governing"] == "Yes"
+    assert df.loc[0, "D/C"] == 1.5
+    assert df.loc[0, "Available_phiMn_kNm"] == 100.0
+    assert df.loc[1, "Fallback"] == "Yes"
+    assert df.loc[1, "Capacity Method"] == "point_cloud_fallback"
+
+
+def test_active_load_case_usage_summary_separates_uls_sls_and_inactive() -> None:
+    cases = [
+        LoadCase(name="ULS-1", load_type="ULS", active=True),
+        LoadCase(name="SLS-1", load_type="SLS", active=True),
+        LoadCase(name="ULS-OFF", load_type="ULS", active=False),
+    ]
+
+    summary = _active_load_case_usage_summary(cases)
+
+    assert summary["total"] == 3
+    assert summary["active_uls"] == 1
+    assert summary["active_sls"] == 1
+    assert summary["inactive"] == 1
+
+
+def test_analysis_overview_cards_expose_governing_case_and_fallback_counts() -> None:
+    cards = _analysis_result_overview_cards(
+        _synthetic_dc_summary_for_transparency(),
+        [LoadCase(name="ULS-GOV", load_type="ULS"), LoadCase(name="SLS-1", load_type="SLS")],
+    )
+    card_map = {card["title"]: card for card in cards}
+
+    assert card_map["Overall ULS Status"]["value"] == "FAIL"
+    assert card_map["Governing Case"]["value"] == "ULS-GOV"
+    assert card_map["Max D/C"]["value"] == "1.500"
+    assert card_map["Active ULS Used"]["value"] == "1"
+    assert card_map["Fallback Cases"]["value"] == "1"

@@ -179,6 +179,17 @@ _ANALYSIS_DASHBOARD_CSS = """
   line-height: 1.28;
   margin-top: 0.22rem;
 }
+.cpmm-analysis-path {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 0.72rem 0.82rem;
+  margin: 0.55rem 0 0.8rem 0;
+  color: #344054;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.cpmm-analysis-path strong { color: #101828; }
 .cpmm-analysis-badge {
   display: inline-block;
   border-radius: 999px;
@@ -859,6 +870,178 @@ def _format_optional_number(value: float | None, suffix: str = "", precision: in
     return f"{value:,.{precision}f}{suffix}"
 
 
+def _active_load_case_usage_summary(load_cases: list) -> dict[str, int]:
+    """Return load-case usage counts for the Analysis transparency panel.
+
+    The Analysis page consumes only active ULS load cases for PMM D/C checks.
+    SLS load cases remain available for the SLS workspace and must not be counted
+    as ULS demand. This helper is UI-only and does not change solver inputs.
+    """
+
+    summary = {"total": 0, "active_uls": 0, "active_sls": 0, "inactive": 0, "other_active": 0}
+    for load_case in load_cases:
+        summary["total"] += 1
+        if not bool(getattr(load_case, "active", False)):
+            summary["inactive"] += 1
+            continue
+        load_type = str(getattr(load_case, "load_type", "")).upper()
+        if load_type == "ULS":
+            summary["active_uls"] += 1
+        elif load_type == "SLS":
+            summary["active_sls"] += 1
+        else:
+            summary["other_active"] += 1
+    return summary
+
+
+def _demand_capacity_transparency_dataframe(summary: DemandCapacitySummary) -> pd.DataFrame:
+    """Build a stable, review-oriented D/C table for the Analysis workspace."""
+
+    rows: list[dict[str, object]] = []
+    for item in summary.results:
+        rows.append(
+            {
+                "Governing": "Yes" if item.combo_name == summary.governing_combo else "",
+                "Case Name": item.combo_name,
+                "Status": item.status,
+                "D/C": None if item.dcr is None else round(float(item.dcr), 4),
+                "Pu_kN": round(N_to_kN(item.Pu_N), 3),
+                "Mux_kNm": round(Nmm_to_kNm(item.Mux_Nmm), 3),
+                "Muy_kNm": round(Nmm_to_kNm(item.Muy_Nmm), 3),
+                "Mu_kNm": round(Nmm_to_kNm(item.Mu_Nmm), 3),
+                "Available_phiMn_kNm": None
+                if item.capacity_phiMn_Nmm is None
+                else round(Nmm_to_kNm(item.capacity_phiMn_Nmm), 3),
+                "Capacity Method": item.capacity_method or "N/A",
+                "Slice Method": item.slice_method or "N/A",
+                "Envelope Method": item.envelope_method or "N/A",
+                "Fallback": "Yes" if item.used_fallback else "No",
+                "Warning Count": int(item.warning_count),
+                "Message": item.message,
+            }
+        )
+    columns = [
+        "Governing",
+        "Case Name",
+        "Status",
+        "D/C",
+        "Pu_kN",
+        "Mux_kNm",
+        "Muy_kNm",
+        "Mu_kNm",
+        "Available_phiMn_kNm",
+        "Capacity Method",
+        "Slice Method",
+        "Envelope Method",
+        "Fallback",
+        "Warning Count",
+        "Message",
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _governing_result(summary: DemandCapacitySummary):
+    if summary.governing_combo is None:
+        return None
+    for item in summary.results:
+        if item.combo_name == summary.governing_combo:
+            return item
+    return None
+
+
+def _analysis_result_overview_cards(dc_summary: DemandCapacitySummary, load_cases: list) -> list[dict[str, object]]:
+    usage = _active_load_case_usage_summary(load_cases)
+    governing = _governing_result(dc_summary)
+    return [
+        {
+            "title": "Overall ULS Status",
+            "value": dc_summary.overall_status.replace("_", " "),
+            "detail": "Based on active ULS demand/capacity results",
+            "status": _analysis_status_style(dc_summary.overall_status),
+            "strong": True,
+        },
+        {
+            "title": "Governing Case",
+            "value": dc_summary.governing_combo or "N/A",
+            "detail": "Highest finite D/C ratio",
+            "status": "info" if dc_summary.governing_combo else "neutral",
+        },
+        {
+            "title": "Max D/C",
+            "value": _format_optional_number(dc_summary.max_dcr, precision=3),
+            "detail": "Demand Mu / available phiMn at Pu",
+            "status": _analysis_status_style(dc_summary.overall_status),
+        },
+        {
+            "title": "Active ULS Used",
+            "value": f"{usage['active_uls']:,}",
+            "detail": f"SLS not used here: {usage['active_sls']:,}; inactive: {usage['inactive']:,}",
+            "status": "ready" if usage["active_uls"] else "warning",
+        },
+        {
+            "title": "Governing Capacity",
+            "value": "N/A" if governing is None or governing.capacity_phiMn_Nmm is None else f"{Nmm_to_kNm(governing.capacity_phiMn_Nmm):,.1f} kN-m",
+            "detail": "Available phiMn in demand direction",
+            "status": "neutral",
+        },
+        {
+            "title": "Capacity Method",
+            "value": "N/A" if governing is None else (governing.capacity_method or "N/A"),
+            "detail": "Preferred: slice envelope; fallback methods are flagged",
+            "status": "warning" if governing is not None and governing.used_fallback else "neutral",
+        },
+        {
+            "title": "Fallback Cases",
+            "value": f"{sum(1 for item in dc_summary.results if item.used_fallback):,}",
+            "detail": "Should be reviewed when nonzero",
+            "status": "warning" if any(item.used_fallback for item in dc_summary.results) else "ready",
+        },
+        {
+            "title": "D/C Warnings",
+            "value": f"{sum(int(item.warning_count) for item in dc_summary.results):,}",
+            "detail": "Per-case method/slice warnings",
+            "status": "warning" if any(item.warning_count for item in dc_summary.results) else "ready",
+        },
+    ]
+
+
+def _render_result_traceability_path(selected_summary: dict) -> None:
+    path_html = (
+        '<div class="cpmm-analysis-path">'
+        '<strong>Trace path:</strong> Load case '
+        f'<strong>{escape(str(selected_summary["selected_combo"]))}</strong> '
+        f'→ Pu <strong>{escape(_format_optional_number(selected_summary["Pu_kN"], " kN"))}</strong> '
+        f'→ current PMM slice/envelope → demand direction Mu <strong>{escape(_format_optional_number(selected_summary["Mu_kNm"], " kN-m"))}</strong> '
+        f'→ available phiMn <strong>{escape(_format_optional_number(selected_summary["capacity_phiMn_kNm"], " kN-m"))}</strong> '
+        f'→ D/C <strong>{escape(_format_optional_number(selected_summary["dcr"], precision=3))}</strong>.'
+        '</div>'
+    )
+    st.markdown(path_html, unsafe_allow_html=True)
+
+
+def _render_analysis_result_transparency_panel(dc_summary: DemandCapacitySummary, load_cases: list) -> pd.DataFrame:
+    st.subheader("Analysis Result Transparency")
+    st.caption(
+        "This panel traces active ULS load cases into the PMM D/C result. "
+        "SLS cases are not used in the ULS PMM ranking and remain available in the SLS workspace."
+    )
+    _render_analysis_summary_strip(_analysis_result_overview_cards(dc_summary, load_cases), columns=4)
+    transparency_df = _demand_capacity_transparency_dataframe(dc_summary)
+    if transparency_df.empty:
+        st.info("No active ULS D/C rows are available yet.")
+        return transparency_df
+    with st.expander("All Active ULS Cases — D/C Trace Table", expanded=True):
+        st.dataframe(transparency_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Download ULS D/C Trace CSV",
+            data=transparency_df.to_csv(index=False),
+            file_name="uls_demand_capacity_trace.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    return transparency_df
+
+
 def _analysis_card_html(title: str, value: str, detail: str = "", status: str = "info", strong: bool = False) -> str:
     status_class = status if status in {"ready", "warning", "danger", "info", "neutral"} else "info"
     detail_html = f'<div class="cpmm-analysis-detail">{escape(detail)}</div>' if detail else ""
@@ -1072,6 +1255,8 @@ def _render_pmm_slice_dashboard(
         st.info("No active ULS load cases are available for the PMM Slice Dashboard.")
         return
 
+    _render_analysis_result_transparency_panel(dc_summary, load_cases)
+
     options = [load_case.name for load_case in active_uls]
     default_combo = dc_summary.governing_combo if dc_summary.governing_combo in options else options[0]
     remembered_combo = st.session_state.get("pmm_dashboard_selected_combo", default_combo)
@@ -1109,6 +1294,7 @@ def _render_pmm_slice_dashboard(
         selected_envelope,
     )
     _render_analysis_summary_strip(_selected_case_summary_cards(selected_summary, dc_summary), columns=4)
+    _render_result_traceability_path(selected_summary)
 
     slice_export_df = pmm_slice_export_dataframe(selected_slice)
     envelope_export_df = slice_envelope_export_dataframe(selected_envelope)
@@ -1247,19 +1433,19 @@ def _render_pmm_slice_dashboard(
                     use_container_width=True,
                 )
 
-    st.subheader("Load Case D/C Ranking")
-    ranking_df = rank_load_cases_by_dcr(dc_summary)
-    if ranking_df.empty:
-        st.info("No active ULS demand/capacity results are available to rank.")
-    else:
-        st.dataframe(ranking_df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "Download ULS D/C Result CSV",
-            data=ranking_df.to_csv(index=False),
-            file_name="uls_demand_capacity_result.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+    with st.expander("Detailed Load Case D/C Ranking", expanded=False):
+        ranking_df = rank_load_cases_by_dcr(dc_summary)
+        if ranking_df.empty:
+            st.info("No active ULS demand/capacity results are available to rank.")
+        else:
+            st.dataframe(ranking_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download ULS D/C Result CSV",
+                data=ranking_df.to_csv(index=False),
+                file_name="uls_demand_capacity_result.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 
 def _dc_status_map(summary: DemandCapacitySummary | None) -> dict[str, tuple[str | None, str]]:

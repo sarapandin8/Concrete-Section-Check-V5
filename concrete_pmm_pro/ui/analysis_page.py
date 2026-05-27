@@ -325,24 +325,70 @@ def _serviceability_analysis_input_from_session() -> AnalysisInput | None:
 
 
 def _render_readiness_panel() -> None:
+    """Render a compact readiness strip and keep detailed diagnostics collapsed.
+
+    The previous UI displayed every readiness info item as a full-width alert,
+    which pushed the governing PMM result far down the page.  This keeps the
+    first-screen workflow focused on status while preserving all QA messages.
+    """
+
     result = check_analysis_readiness(st.session_state)
+    st.markdown(_ANALYSIS_DASHBOARD_CSS, unsafe_allow_html=True)
     st.subheader("Analysis Readiness")
-    st.metric("Ready for future analysis", "Yes" if result.ready else "No")
+    cards = [
+        {
+            "title": "Ready",
+            "value": "Yes" if result.ready else "No",
+            "detail": "Ready for current ULS/SLS workflow" if result.ready else "Resolve errors before running analysis",
+            "status": "ready" if result.ready else "danger",
+            "strong": True,
+        },
+        {
+            "title": "Errors",
+            "value": f"{len(result.errors):,}",
+            "detail": "Must be zero before analysis",
+            "status": "danger" if result.errors else "ready",
+        },
+        {
+            "title": "Warnings",
+            "value": f"{len(result.warnings):,}",
+            "detail": "Review before final design",
+            "status": "warning" if result.warnings else "ready",
+        },
+        {
+            "title": "Info Items",
+            "value": f"{len(result.info):,}",
+            "detail": "Section/material/load totals",
+            "status": "neutral",
+        },
+    ]
+    _render_analysis_summary_strip(cards, columns=4)
 
     if result.errors:
-        for error in result.errors:
-            st.error(f"ERROR: {error}")
+        st.error("Readiness errors are present. Open the diagnostics below and correct them before relying on results.")
+    elif result.warnings:
+        st.warning("Readiness warnings are present. Analysis can run, but the warnings should be reviewed.")
     else:
-        st.success("No readiness errors")
+        st.success("No readiness errors. Detailed readiness information is available below if needed.")
 
-    if result.warnings:
-        for warning in result.warnings:
-            st.warning(f"WARNING: {warning}")
-    else:
-        st.info("WARNING: none")
+    with st.expander("Readiness diagnostics", expanded=False):
+        if result.errors:
+            for error in result.errors:
+                st.error(f"ERROR: {error}")
+        else:
+            st.success("No readiness errors")
 
-    for item in result.info:
-        st.info(f"INFO: {item}")
+        if result.warnings:
+            for warning in result.warnings:
+                st.warning(f"WARNING: {warning}")
+        else:
+            st.info("WARNING: none")
+
+        if result.info:
+            for item in result.info:
+                st.info(f"INFO: {item}")
+        else:
+            st.info("No readiness info items were reported.")
 
 
 def _render_analysis_mode_section() -> AnalysisModeSettings:
@@ -416,25 +462,33 @@ def _prestress_check_dataframe(summary: PrestressCheckSummary) -> pd.DataFrame:
 
 
 def _render_prestress_check_panel(summary: PrestressCheckSummary, include_prestress: bool) -> None:
-    st.subheader("Prestress Analysis Check Table")
+    """Render prestress QA as diagnostics instead of main-page content."""
+
     if not summary.checks:
         st.info("No prestress elements are defined.")
         return
 
-    cols = st.columns(4)
-    cols[0].metric("Bonded count", f"{summary.bonded_count:,}")
-    cols[1].metric("Unbonded ignored", f"{summary.unbonded_count:,}")
-    cols[2].metric("Total bonded Aps", f"{summary.total_area_mm2:,.1f} mm^2")
-    cols[3].metric("Total bonded Pe_eff", f"{N_to_kN(summary.total_pe_eff_N):,.1f} kN")
-    if not include_prestress:
-        st.info("Prestress elements are not included because Include prestress is disabled.")
-    if summary.bonded_count == 0 and summary.unbonded_count > 0:
-        st.warning("Only unbonded prestress elements are present. They are ignored in the current solver.")
-    for error in summary.errors:
-        st.error(f"ERROR: {error}")
-    for warning in summary.warnings:
-        st.warning(f"WARNING: {warning}")
-    st.dataframe(_prestress_check_dataframe(summary), use_container_width=True, hide_index=True)
+    if summary.errors:
+        st.error("Prestress validation errors are present. Open Prestress diagnostics for row-level details.")
+    elif summary.warnings:
+        st.warning("Prestress warnings are present. Open Prestress diagnostics for row-level details.")
+
+    with st.expander("Prestress diagnostics", expanded=False):
+        st.markdown("**Prestress Analysis Check Table**")
+        cols = st.columns(4)
+        cols[0].metric("Bonded count", f"{summary.bonded_count:,}")
+        cols[1].metric("Unbonded ignored", f"{summary.unbonded_count:,}")
+        cols[2].metric("Total bonded Aps", f"{summary.total_area_mm2:,.1f} mm^2")
+        cols[3].metric("Total bonded Pe_eff", f"{N_to_kN(summary.total_pe_eff_N):,.1f} kN")
+        if not include_prestress:
+            st.info("Prestress elements are not included because Include prestress is disabled.")
+        if summary.bonded_count == 0 and summary.unbonded_count > 0:
+            st.warning("Only unbonded prestress elements are present. They are ignored in the current solver.")
+        for error in summary.errors:
+            st.error(f"ERROR: {error}")
+        for warning in summary.warnings:
+            st.warning(f"WARNING: {warning}")
+        st.dataframe(_prestress_check_dataframe(summary), use_container_width=True, hide_index=True)
 
 
 def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
@@ -654,58 +708,90 @@ def _render_input_summary() -> None:
     prototype_label = "RC + Bonded Prestress PMM Prototype" if settings.include_prestress and bonded_prestress_elements else "RC PMM Prototype"
     prestress_check_summary = check_prestress_elements_for_analysis(prestress_elements)
 
-    st.subheader("Analysis Input Summary")
-    cols = st.columns(4)
-    cols[0].metric("Section available", "Yes" if section_geometry is not None else "No")
-    cols[1].metric("Strength load cases", f"{len(load_cases):,}")
-    cols[2].metric("Rebars", f"{len(rebars):,}")
-    cols[3].metric("Prestress elements", f"{len(prestress_elements):,}")
+    st.subheader("Analysis Workspace Overview")
+    beta1 = concrete_material.beta1 if concrete_material is not None and concrete_material.beta1 is not None else (
+        aci_beta1(concrete_material.fc_MPa) if concrete_material is not None else None
+    )
+    overview_cards = [
+        {
+            "title": "Section",
+            "value": "Available" if section_geometry is not None else "Missing",
+            "detail": "Geometry ready for PMM" if section_geometry is not None else "Define section geometry first",
+            "status": "ready" if section_geometry is not None else "danger",
+        },
+        {
+            "title": "Active ULS",
+            "value": f"{len(load_cases):,}",
+            "detail": "Used by ULS / PMM D/C",
+            "status": "ready" if load_cases else "warning",
+        },
+        {
+            "title": "Rebar / Prestress",
+            "value": f"{len(rebars):,} / {len(prestress_elements):,}",
+            "detail": f"Bonded PS {len(bonded_prestress_elements):,}; unbonded ignored {len(unbonded_prestress_elements):,}",
+            "status": "warning" if unbonded_prestress_elements else "neutral",
+        },
+        {
+            "title": "Solver Mode",
+            "value": prototype_label,
+            "detail": f"f'c {concrete_material.fc_MPa:g} MPa, beta1 {beta1:.3g}" if concrete_material is not None and beta1 is not None else "Concrete material missing",
+            "status": "ready" if concrete_material is not None else "danger",
+        },
+    ]
+    _render_analysis_summary_strip(overview_cards, columns=4)
 
-    ps_count_cols = st.columns(2)
-    ps_count_cols[0].metric("Bonded prestress elements", f"{len(bonded_prestress_elements):,}")
-    ps_count_cols[1].metric("Unbonded prestress elements ignored", f"{len(unbonded_prestress_elements):,}")
     if unbonded_prestress_elements:
         st.warning("Unbonded prestress elements are present and are ignored by the current PMM/SLS solvers.")
-
-    cols2 = st.columns(4)
-    if concrete_material is not None:
-        beta1 = concrete_material.beta1 if concrete_material.beta1 is not None else aci_beta1(concrete_material.fc_MPa)
-        cols2[0].metric("Concrete material", f"{concrete_material.name}")
-        cols2[1].metric("Concrete f'c", f"{concrete_material.fc_MPa:g} MPa")
-        cols2[2].metric("beta1", f"{beta1:.3g}")
-    else:
-        cols2[0].metric("Concrete material", "Missing")
-        cols2[1].metric("Concrete f'c", "N/A")
-        cols2[2].metric("beta1", "N/A")
-    cols2[3].metric("Include prestress", "Yes" if settings.include_prestress else "No")
-
-    cols3 = st.columns(3)
-    cols3[0].metric("Total As", f"{total_as:,.1f} mm^2")
-    cols3[1].metric("Total Aps", f"{total_aps:,.1f} mm^2")
-    cols3[2].metric("Total Pe_eff", f"{total_pe:,.1f} N")
-
-    st.info("PMM prototype status: RC-only or RC + bonded prestress depending on analysis settings.")
-    st.info(f"Current solver mode: {prototype_label}.")
-    if is_beam_girder_future_workflow(mode_settings):
-        st.warning("PMM interaction is not the primary design method for typical beam/girder flexural design. Beam/Girder design checks are future work.")
-    elif not is_pmm_primary_workflow(mode_settings):
-        st.info("General Section mode is active; PMM and SLS tools remain available for engineering review.")
-    st.info(f"Prestress stress model: {settings.prestress_stress_model}.")
-    st.info(
-        "Rebar displaced concrete subtraction: "
-        f"{'Enabled' if settings.subtract_rebar_displaced_concrete else 'Disabled'}."
-    )
     if not settings.subtract_rebar_displaced_concrete:
         st.warning("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
-    st.info(
-        SERVICEABILITY_NOT_IMPLEMENTED_WARNING
-        if not settings.include_prestress
-        else f"{BONDED_PRESTRESS_PROTOTYPE_WARNING} {SERVICEABILITY_NOT_IMPLEMENTED_WARNING}"
-    )
     if analysis_input is not None:
         st.success("AnalysisInput can be built from the current session data.")
     else:
         st.info("AnalysisInput will be built after readiness errors are resolved.")
+
+    with st.expander("Input diagnostics / section totals", expanded=False):
+        cols = st.columns(4)
+        cols[0].metric("Section available", "Yes" if section_geometry is not None else "No")
+        cols[1].metric("Strength load cases", f"{len(load_cases):,}")
+        cols[2].metric("Rebars", f"{len(rebars):,}")
+        cols[3].metric("Prestress elements", f"{len(prestress_elements):,}")
+
+        ps_count_cols = st.columns(2)
+        ps_count_cols[0].metric("Bonded prestress elements", f"{len(bonded_prestress_elements):,}")
+        ps_count_cols[1].metric("Unbonded prestress elements ignored", f"{len(unbonded_prestress_elements):,}")
+
+        cols2 = st.columns(4)
+        if concrete_material is not None:
+            cols2[0].metric("Concrete material", f"{concrete_material.name}")
+            cols2[1].metric("Concrete f'c", f"{concrete_material.fc_MPa:g} MPa")
+            cols2[2].metric("beta1", f"{beta1:.3g}" if beta1 is not None else "N/A")
+        else:
+            cols2[0].metric("Concrete material", "Missing")
+            cols2[1].metric("Concrete f'c", "N/A")
+            cols2[2].metric("beta1", "N/A")
+        cols2[3].metric("Include prestress", "Yes" if settings.include_prestress else "No")
+
+        cols3 = st.columns(3)
+        cols3[0].metric("Total As", f"{total_as:,.1f} mm^2")
+        cols3[1].metric("Total Aps", f"{total_aps:,.1f} mm^2")
+        cols3[2].metric("Total Pe_eff", f"{N_to_kN(total_pe):,.1f} kN")
+
+        st.info("PMM prototype status: RC-only or RC + bonded prestress depending on analysis settings.")
+        st.info(f"Current solver mode: {prototype_label}.")
+        if is_beam_girder_future_workflow(mode_settings):
+            st.warning("PMM interaction is not the primary design method for typical beam/girder flexural design. Beam/Girder design checks are future work.")
+        elif not is_pmm_primary_workflow(mode_settings):
+            st.info("General Section mode is active; PMM and SLS tools remain available for engineering review.")
+        st.info(f"Prestress stress model: {settings.prestress_stress_model}.")
+        st.info(
+            "Rebar displaced concrete subtraction: "
+            f"{'Enabled' if settings.subtract_rebar_displaced_concrete else 'Disabled'}."
+        )
+        st.info(
+            SERVICEABILITY_NOT_IMPLEMENTED_WARNING
+            if not settings.include_prestress
+            else f"{BONDED_PRESTRESS_PROTOTYPE_WARNING} {SERVICEABILITY_NOT_IMPLEMENTED_WARNING}"
+        )
 
     _render_prestress_check_panel(prestress_check_summary, settings.include_prestress)
 
@@ -724,104 +810,108 @@ def _render_input_summary() -> None:
         result_has_bonded_prestress = any(point.bonded_prestress_count > 0 for point in result.points)
         result_label = "RC + Bonded Prestress PMM Prototype" if result_has_bonded_prestress else "RC PMM Prototype"
         st.subheader(f"{result_label} Result")
-        st.warning(PMM_PROTOTYPE_WARNING)
-        if result_has_bonded_prestress:
-            st.warning(BONDED_PRESTRESS_PROTOTYPE_WARNING)
-            st.warning("PT Bar / Prestressing Bar material is supported through PrestressElement.")
-            st.warning(RC_AXIAL_CAP_LIMITATION_WARNING)
-        else:
-            st.warning("Prestress contribution is not included in this result.")
-        st.warning(SERVICEABILITY_NOT_IMPLEMENTED_WARNING)
-        if result.points and any(point.rebar_displaced_concrete_subtracted_N > 0.0 for point in result.points):
-            st.info("This refinement reduces double counting of concrete compression at ordinary rebar locations.")
-        elif not settings.subtract_rebar_displaced_concrete:
-            st.warning("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
-        st.warning(DCR_PROTOTYPE_WARNING)
-        for warning in result.warnings:
-            st.warning(f"WARNING: {warning}")
-        for item in result.info:
-            st.info(f"INFO: {item}")
-
-        df = pmm_result_to_display_dataframe(result)
-        if not df.empty:
-            summary = summarize_pmm_result(result)
-            numeric_summary = check_pmm_dataframe_numerics(df)
-            if numeric_summary["warnings"]:
-                for warning in numeric_summary["warnings"]:
-                    st.warning(f"PMM numeric warning: {warning}")
-            cols = st.columns(4)
-            cols[0].metric("PMM points", f"{summary['point_count']:,}")
-            cols[1].metric("Max phiPn", f"{df['phiPn_kN'].max():,.1f} kN")
-            cols[2].metric("Max capped phiPn", f"{df['phiPn_capped_kN'].max():,.1f} kN")
-            cols[3].metric("Min phiPn", f"{df['phiPn_kN'].min():,.1f} kN")
-            cols2 = st.columns(4)
-            cols2[0].metric("Max |phiMnx|", f"{df['phiMnx_kNm'].abs().max():,.1f} kN-m")
-            cols2[1].metric("Max |phiMny|", f"{df['phiMny_kNm'].abs().max():,.1f} kN-m")
-            cols2[2].metric("Max nominal Pn", f"{df['Pn_kN'].max():,.1f} kN")
-            cols2[3].metric("Max nominal |Mnx|", f"{df['Mnx_kNm'].abs().max():,.1f} kN-m")
-            cols3 = st.columns(1)
-            cols3[0].metric("Max nominal |Mny|", f"{df['Mny_kNm'].abs().max():,.1f} kN-m")
-            cols4 = st.columns(4)
-            cols4[0].metric("Bonded PS included", f"{int(df['bonded_prestress_count'].max()):,}")
-            cols4[1].metric("Unbonded PS ignored", f"{int(df['unbonded_prestress_ignored_count'].max()):,}")
-            cols4[2].metric("Max |PS force|", f"{df['prestress_force_kN'].abs().max():,.1f} kN")
-            included_aps = sum(element.total_area_mm2 for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
-            included_pe = sum(element.pe_eff_n * element.count for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
-            cols4[3].metric("Included Aps / Pe", f"{included_aps:,.1f} mm^2 / {included_pe:,.0f} N")
-            cols_disp = st.columns(3)
-            cols_disp[0].metric(
-                "Rebar displacement subtraction",
-                "Enabled" if settings.subtract_rebar_displaced_concrete else "Disabled",
-            )
-            cols_disp[1].metric(
-                "Max concrete subtraction",
-                f"{df['rebar_displaced_concrete_subtracted_kN'].max():,.1f} kN",
-            )
-            cols_disp[2].metric(
-                "Max bars in block",
-                f"{int(df['rebar_inside_compression_count'].max()):,}",
-            )
-            if result_has_bonded_prestress and "max_prestress_stress_MPa" in df:
-                model_values = df["prestress_stress_model"].dropna()
-                model_label = str(model_values.iloc[0]) if not model_values.empty else settings.prestress_stress_model
-                cols5 = st.columns(4)
-                cols5[0].metric("Prestress stress model", model_label)
-                cols5[1].metric("Max fps", f"{df['max_prestress_stress_MPa'].max():,.1f} MPa")
-                cols5[2].metric("Stress warning count", f"{int(df['prestress_stress_warning_count'].sum()):,}")
-                cols5[3].metric("Reached fpu cap count", f"{int(df['prestress_reached_fpu_cap_count'].sum()):,}")
-
-            contribution_summary = summarize_prestress_contribution(result)
-            comparison_summary = st.session_state.get("prestress_comparison_summary")
-            if settings.include_prestress and result_has_bonded_prestress:
-                _render_prestress_verification_summary(prestress_check_summary, contribution_summary, comparison_summary)
-            elif not settings.include_prestress and prestress_elements:
-                st.info("Prestress elements are not included because Include prestress is disabled.")
-            elif contribution_summary["unbonded_prestress_ignored_count"] > 0:
-                st.warning("Only unbonded prestress elements are present. They are ignored in the current solver.")
-
-            active_uls = get_active_uls_load_cases(st.session_state.get("load_cases", []))
-            demand_df = demand_load_cases_to_display_dataframe(active_uls)
-            st.subheader("Active ULS Demand Points")
-            st.info(
-                "Demand points are shown for visual reference. Prototype D/C results are shown below; "
-                "formal production demand/capacity checks will be implemented in a future milestone."
-            )
-            st.dataframe(demand_df, use_container_width=True, hide_index=True)
+        st.caption("Raw solver capacity diagnostics are collapsed below; the governing ULS result workspace follows after this section.")
+        with st.expander("PMM solver diagnostics / raw capacity summary", expanded=False):
+            st.warning(PMM_PROTOTYPE_WARNING)
+            if result_has_bonded_prestress:
+                st.warning(BONDED_PRESTRESS_PROTOTYPE_WARNING)
+                st.warning("PT Bar / Prestressing Bar material is supported through PrestressElement.")
+                st.warning(RC_AXIAL_CAP_LIMITATION_WARNING)
+            else:
+                st.warning("Prestress contribution is not included in this result.")
+            st.warning(SERVICEABILITY_NOT_IMPLEMENTED_WARNING)
+            if result.points and any(point.rebar_displaced_concrete_subtracted_N > 0.0 for point in result.points):
+                st.info("This refinement reduces double counting of concrete compression at ordinary rebar locations.")
+            elif not settings.subtract_rebar_displaced_concrete:
+                st.warning("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
+            st.warning(DCR_PROTOTYPE_WARNING)
+            for warning in result.warnings:
+                st.warning(f"WARNING: {warning}")
+            for item in result.info:
+                st.info(f"INFO: {item}")
+    
+            df = pmm_result_to_display_dataframe(result)
+            if not df.empty:
+                summary = summarize_pmm_result(result)
+                numeric_summary = check_pmm_dataframe_numerics(df)
+                if numeric_summary["warnings"]:
+                    for warning in numeric_summary["warnings"]:
+                        st.warning(f"PMM numeric warning: {warning}")
+                cols = st.columns(4)
+                cols[0].metric("PMM points", f"{summary['point_count']:,}")
+                cols[1].metric("Max phiPn", f"{df['phiPn_kN'].max():,.1f} kN")
+                cols[2].metric("Max capped phiPn", f"{df['phiPn_capped_kN'].max():,.1f} kN")
+                cols[3].metric("Min phiPn", f"{df['phiPn_kN'].min():,.1f} kN")
+                cols2 = st.columns(4)
+                cols2[0].metric("Max |phiMnx|", f"{df['phiMnx_kNm'].abs().max():,.1f} kN-m")
+                cols2[1].metric("Max |phiMny|", f"{df['phiMny_kNm'].abs().max():,.1f} kN-m")
+                cols2[2].metric("Max nominal Pn", f"{df['Pn_kN'].max():,.1f} kN")
+                cols2[3].metric("Max nominal |Mnx|", f"{df['Mnx_kNm'].abs().max():,.1f} kN-m")
+                cols3 = st.columns(1)
+                cols3[0].metric("Max nominal |Mny|", f"{df['Mny_kNm'].abs().max():,.1f} kN-m")
+                cols4 = st.columns(4)
+                cols4[0].metric("Bonded PS included", f"{int(df['bonded_prestress_count'].max()):,}")
+                cols4[1].metric("Unbonded PS ignored", f"{int(df['unbonded_prestress_ignored_count'].max()):,}")
+                cols4[2].metric("Max |PS force|", f"{df['prestress_force_kN'].abs().max():,.1f} kN")
+                included_aps = sum(element.total_area_mm2 for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
+                included_pe = sum(element.pe_eff_n * element.count for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
+                cols4[3].metric("Included Aps / Pe", f"{included_aps:,.1f} mm^2 / {included_pe:,.0f} N")
+                cols_disp = st.columns(3)
+                cols_disp[0].metric(
+                    "Rebar displacement subtraction",
+                    "Enabled" if settings.subtract_rebar_displaced_concrete else "Disabled",
+                )
+                cols_disp[1].metric(
+                    "Max concrete subtraction",
+                    f"{df['rebar_displaced_concrete_subtracted_kN'].max():,.1f} kN",
+                )
+                cols_disp[2].metric(
+                    "Max bars in block",
+                    f"{int(df['rebar_inside_compression_count'].max()):,}",
+                )
+                if result_has_bonded_prestress and "max_prestress_stress_MPa" in df:
+                    model_values = df["prestress_stress_model"].dropna()
+                    model_label = str(model_values.iloc[0]) if not model_values.empty else settings.prestress_stress_model
+                    cols5 = st.columns(4)
+                    cols5[0].metric("Prestress stress model", model_label)
+                    cols5[1].metric("Max fps", f"{df['max_prestress_stress_MPa'].max():,.1f} MPa")
+                    cols5[2].metric("Stress warning count", f"{int(df['prestress_stress_warning_count'].sum()):,}")
+                    cols5[3].metric("Reached fpu cap count", f"{int(df['prestress_reached_fpu_cap_count'].sum()):,}")
+    
+                contribution_summary = summarize_prestress_contribution(result)
+                comparison_summary = st.session_state.get("prestress_comparison_summary")
+                if settings.include_prestress and result_has_bonded_prestress:
+                    _render_prestress_verification_summary(prestress_check_summary, contribution_summary, comparison_summary)
+                elif not settings.include_prestress and prestress_elements:
+                    st.info("Prestress elements are not included because Include prestress is disabled.")
+                elif contribution_summary["unbonded_prestress_ignored_count"] > 0:
+                    st.warning("Only unbonded prestress elements are present. They are ignored in the current solver.")
+    
+                active_uls = get_active_uls_load_cases(st.session_state.get("load_cases", []))
+                demand_df = demand_load_cases_to_display_dataframe(active_uls)
+                st.subheader("Active ULS Demand Points")
+                st.info(
+                    "Demand points are shown for visual reference. Prototype D/C results are shown below; "
+                    "formal production demand/capacity checks will be implemented in a future milestone."
+                )
+                st.dataframe(demand_df, use_container_width=True, hide_index=True)
 
             dc_summary = _get_or_compute_demand_capacity_summary(
                 result,
                 st.session_state.get("load_cases", []),
                 result_hash,
             )
-            _render_engineering_warnings(
-                _collect_engineering_warnings(
-                    result.warnings,
-                    prestress_check_summary.errors,
-                    prestress_check_summary.warnings,
-                    dc_summary.warnings,
-                    numeric_summary["warnings"],
-                )
+            engineering_warnings = _collect_engineering_warnings(
+                result.warnings,
+                prestress_check_summary.errors,
+                prestress_check_summary.warnings,
+                dc_summary.warnings,
+                numeric_summary["warnings"],
             )
+            if engineering_warnings:
+                st.warning(f"{len(engineering_warnings):,} engineering warning(s) are available in diagnostics.")
+            with st.expander("Engineering warnings / limitations", expanded=False):
+                _render_engineering_warnings(engineering_warnings)
 
             unbonded_ignored_count = int(df["unbonded_prestress_ignored_count"].max()) if "unbonded_prestress_ignored_count" in df else 0
             _render_pmm_slice_dashboard(
@@ -835,16 +925,17 @@ def _render_input_summary() -> None:
                 result_hash,
             )
 
-            with st.expander("Detailed PMM Plots", expanded=False):
+            with st.expander("Detailed PMM plots", expanded=False):
                 _render_pmm_charts(df, demand_df, dc_summary)
-            st.download_button(
-                "Download RC PMM Result CSV",
-                data=df.to_csv(index=False),
-                file_name="rc_pmm_result.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-            st.dataframe(df.head(20), use_container_width=True, hide_index=True)
+            with st.expander("Raw PMM result table / export", expanded=False):
+                st.download_button(
+                    "Download RC PMM Result CSV",
+                    data=df.to_csv(index=False),
+                    file_name="rc_pmm_result.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+                st.dataframe(df.head(20), use_container_width=True, hide_index=True)
 
 
 def _demand_capacity_display_dataframe(summary: DemandCapacitySummary) -> pd.DataFrame:
@@ -1020,17 +1111,26 @@ def _render_result_traceability_path(selected_summary: dict) -> None:
 
 
 def _render_analysis_result_transparency_panel(dc_summary: DemandCapacitySummary, load_cases: list) -> pd.DataFrame:
-    st.subheader("Analysis Result Transparency")
+    st.subheader("Governing ULS Result")
     st.caption(
-        "This panel traces active ULS load cases into the PMM D/C result. "
-        "SLS cases are not used in the ULS PMM ranking and remain available in the SLS workspace."
+        "Active ULS load cases are ranked by PMM demand/capacity. "
+        "SLS cases are excluded from this ULS ranking and remain available in the SLS workspace."
     )
     _render_analysis_summary_strip(_analysis_result_overview_cards(dc_summary, load_cases), columns=4)
     transparency_df = _demand_capacity_transparency_dataframe(dc_summary)
     if transparency_df.empty:
         st.info("No active ULS D/C rows are available yet.")
         return transparency_df
-    with st.expander("All Active ULS Cases — D/C Trace Table", expanded=True):
+
+    compact_columns = [
+        column
+        for column in ["Governing", "Case Name", "Status", "D/C", "Pu_kN", "Mux_kNm", "Muy_kNm", "Available_phiMn_kNm"]
+        if column in transparency_df.columns
+    ]
+    st.markdown("**Active ULS Cases — Compact D/C Trace**")
+    st.dataframe(transparency_df[compact_columns], use_container_width=True, hide_index=True)
+
+    with st.expander("Full ULS D/C trace details", expanded=False):
         st.dataframe(transparency_df, use_container_width=True, hide_index=True)
         st.download_button(
             "Download ULS D/C Trace CSV",

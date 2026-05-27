@@ -36,9 +36,16 @@ DEFAULT_PRESTRESS_DB_PATH = REPO_ROOT / "data" / "prestress_steel_database.csv"
 
 STEEL_TYPE_OPTIONS = ["wire", "strand", "prestressing_bar", "tendon_group", "custom"]
 INPUT_MODE_OPTIONS = ["Passive", "Pe_eff", "fpe"]
+INPUT_MODE_DISPLAY_LABELS = {
+    "Passive": "Passive — no prestress force",
+    "Pe_eff": "Pe_eff — enter effective force after losses (kN)",
+    "fpe": "fpe — enter effective stress after losses (MPa)",
+}
+INPUT_MODE_EDITOR_OPTIONS = list(INPUT_MODE_DISPLAY_LABELS.values())
 LEGACY_INPUT_MODE_ALIASES = {
     "Effective Force Pe": "Pe_eff",
     "Effective Stress fpe": "fpe",
+    **{display_label: value for value, display_label in INPUT_MODE_DISPLAY_LABELS.items()},
 }
 LEGACY_INPUT_MODE_OPTIONS = ["Jacking Stress + Losses"]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
@@ -55,7 +62,6 @@ PRESTRESS_COMPACT_EDITOR_COLUMNS = [
     "fpe_MPa",
     "Bonded",
     "Count",
-    "Note",
 ]
 PRESTRESS_REFERENCE_DETAIL_COLUMNS = [
     "Label",
@@ -411,6 +417,27 @@ def _normalize_input_mode_label(value: Any) -> str:
     return LEGACY_INPUT_MODE_ALIASES.get(mode, mode)
 
 
+def _input_mode_display_label(value: Any) -> str:
+    """Return the user-facing editor label for a stored input mode value."""
+
+    mode = _normalize_input_mode_label(value)
+    return INPUT_MODE_DISPLAY_LABELS.get(mode, INPUT_MODE_DISPLAY_LABELS["Passive"])
+
+
+def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
+    """Create a display-only editor copy with clear input-mode labels.
+
+    The backing table intentionally stores compact canonical values
+    (Passive/Pe_eff/fpe) so analysis, project I/O, and tests remain stable.
+    Only the Streamlit editor copy uses the longer explanatory dropdown labels.
+    """
+
+    editor_table = pd.DataFrame(table).copy()
+    if "Input Mode" in editor_table.columns:
+        editor_table["Input Mode"] = editor_table["Input Mode"].map(_input_mode_display_label)
+    return editor_table
+
+
 def _effective_prestress_columns() -> list[str]:
     return ["Input Mode", "Pe_eff_kN", "fpe_MPa"]
 
@@ -565,6 +592,8 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd
         "Breaking Load_kN",
         "Duct Type",
         "Duct ID_mm",
+        "Count",
+        "Note",
     ):
         if column not in normalized.columns:
             normalized[column] = None
@@ -577,6 +606,9 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd
         normalized.insert(insert_at, "Eq Steel Dia_mm", None)
     for index, row in normalized.iterrows():
         normalized.at[index, "Input Mode"] = _normalize_input_mode_label(row.get("Input Mode"))
+        count = _to_count(row.get("Count"))
+        normalized.at[index, "Count"] = 1 if count is None else count
+        normalized.at[index, "Note"] = "" if _is_blank(row.get("Note")) else str(row.get("Note")).strip()
         product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
         tendon_product = get_tendon_product(product) or _custom_tendon_product_from_label(product, row)
         database_row = _product_row(product, prestress_db) if prestress_db is not None else None
@@ -1245,7 +1277,7 @@ def render_prestress_page() -> None:
         st.markdown("#### Advanced Prestress Table")
         st.markdown(
             '<div class="cpmm-prestress-quiet-note">'
-            "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, count, and notes. "
+            "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, and count. "
             "Product/material reference fields are preserved in the backing table and shown below as read-only details."
             "</div>",
             unsafe_allow_html=True,
@@ -1265,10 +1297,11 @@ def render_prestress_page() -> None:
             help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
             key="prestress_show_full_engineering_columns",
         )
-        editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(st.session_state["prestress_table"])
+        editor_table = _prestress_table_for_editor(st.session_state["prestress_table"])
+        editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(editor_table)
         editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
         edited_df = st.data_editor(
-            st.session_state["prestress_table"],
+            editor_table,
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
@@ -1288,8 +1321,8 @@ def render_prestress_page() -> None:
                 "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
                 "Input Mode": st.column_config.SelectboxColumn(
                     "Input Mode",
-                    options=INPUT_MODE_OPTIONS,
-                    help="Passive = no effective prestress; Pe_eff = enter effective force in kN; fpe = enter effective stress in MPa.",
+                    options=INPUT_MODE_EDITOR_OPTIONS,
+                    help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
                 ),
                 "Pe_eff_kN": st.column_config.NumberColumn(
                     "Pe_eff_kN",
@@ -1307,7 +1340,10 @@ def render_prestress_page() -> None:
                 "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
                 "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
                 "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
-                "Note": st.column_config.TextColumn("Note"),
+                "Note": st.column_config.TextColumn(
+                    "Remarks",
+                    help="Optional engineering remark for this prestress row. It is not used in calculation.",
+                ),
             },
             key=editor_key,
         )

@@ -8,12 +8,15 @@ from concrete_pmm_pro.data.prestress_tendon_products import apply_tendon_product
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
     INPUT_MODE_OPTIONS,
+    INPUT_MODE_DISPLAY_LABELS,
+    PRESTRESS_COMPACT_EDITOR_COLUMNS,
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
     _build_prestress_status_rows,
     _build_prestress_summary_metrics,
     _engineering_notes_html,
     _normalize_prestress_table_for_display,
+    _prestress_table_for_editor,
     _product_options_for_table,
     load_prestress_steel_database,
     normalize_prestress_table_for_effective_input_sync,
@@ -250,6 +253,50 @@ def test_product_creation_modes_exclude_manual_custom_table() -> None:
 
 def test_effective_input_mode_options_are_user_facing_modes() -> None:
     assert INPUT_MODE_OPTIONS == ["Passive", "Pe_eff", "fpe"]
+
+
+
+
+def test_prestress_table_defaults_count_and_note_for_new_rows() -> None:
+    table = pd.DataFrame(
+        [
+            _row(
+                Product="6-25",
+                **{
+                    "Steel Type": "tendon_group",
+                    "Count": None,
+                    "Note": None,
+                    "Input Mode": "fpe",
+                    "fpe_MPa": 600.0,
+                },
+            )
+        ]
+    )
+
+    normalized = normalize_prestress_table_for_effective_input_sync(table, load_prestress_steel_database())
+
+    assert normalized.loc[0, "Count"] == 1
+    assert normalized.loc[0, "Note"] == ""
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(2100.0)
+
+
+def test_input_mode_editor_labels_are_user_facing_but_normalize_to_canonical_values() -> None:
+    editor_table = _prestress_table_for_editor(pd.DataFrame([_row(**{"Input Mode": "Pe_eff"})]))
+
+    assert editor_table.loc[0, "Input Mode"] == INPUT_MODE_DISPLAY_LABELS["Pe_eff"]
+
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(**{"Input Mode": INPUT_MODE_DISPLAY_LABELS["fpe"], "Area_mm2": 1680.0, "fpe_MPa": 1000.0})]),
+        load_prestress_steel_database(),
+    )
+
+    assert normalized.loc[0, "Input Mode"] == "fpe"
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0)
+
+
+def test_note_is_not_shown_in_compact_prestress_editor_columns() -> None:
+    assert "Count" in PRESTRESS_COMPACT_EDITOR_COLUMNS
+    assert "Note" not in PRESTRESS_COMPACT_EDITOR_COLUMNS
 
 
 def test_effective_input_sync_passive_sets_zero_force_and_stress() -> None:

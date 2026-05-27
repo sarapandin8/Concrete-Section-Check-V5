@@ -5,7 +5,7 @@ import pytest
 
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
-from concrete_pmm_pro.ui.loads_page import _normalize_editor_dataframe, _preview_dataframe, load_cases_from_dataframe
+from concrete_pmm_pro.ui.loads_page import _excel_template_bytes, _normalize_editor_dataframe, _preview_dataframe, load_cases_from_dataframe, prepare_imported_load_table
 
 
 def test_force_unit_conversions() -> None:
@@ -184,3 +184,30 @@ def test_load_editor_normalization_casts_numeric_text_columns_for_streamlit() ->
     assert normalized.loc[0, "Mux"] == "500.0"
     assert normalized.loc[0, "Muy"] == "-300.0"
     assert normalized.loc[0, "Note"] == ""
+
+
+def test_prepare_imported_load_table_accepts_legacy_headers_and_drops_blank_rows() -> None:
+    df = pd.DataFrame(
+        [
+            {"Active": True, "Combo Name": "ULS-01", "Load Type": "Strength", "Pu": "1,250", "Mx": "500", "My": "-300", "Description": "from export"},
+            {"Active": None, "Combo Name": "", "Load Type": "", "Pu": "", "Mx": "", "My": "", "Description": ""},
+        ]
+    )
+
+    imported = prepare_imported_load_table(df)
+
+    assert list(imported.columns) == ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Note"]
+    assert len(imported) == 1
+    assert imported.loc[0, "Case Name"] == "ULS-01"
+    assert imported.loc[0, "Limit State"] == "ULS"
+    assert imported.loc[0, "Pu"] == "1,250"
+    assert imported.loc[0, "Mux"] == "500"
+    assert imported.loc[0, "Muy"] == "-300"
+    assert imported.loc[0, "Note"] == "from export"
+
+
+def test_excel_template_bytes_can_be_generated() -> None:
+    data = _excel_template_bytes()
+
+    assert data.startswith(b"PK")
+    assert len(data) > 1000

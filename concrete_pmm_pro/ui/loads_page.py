@@ -8,6 +8,7 @@ Parsing helpers therefore accept both the current column names and legacy aliase
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Any
 
 import pandas as pd
@@ -20,11 +21,16 @@ LOAD_TYPE_OPTIONS = ["ULS", "SLS", "Extreme", "Construction", "Other"]
 FORCE_UNIT_OPTIONS = ["kN", "N", "tonf"]
 MOMENT_UNIT_OPTIONS = ["kN-m", "N-mm", "tonf-m"]
 EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Note"]
+IMPORT_FILE_TYPES = ["xlsx", "csv"]
 LEGACY_COLUMN_RENAMES = {
     "Combo Name": "Case Name",
     "Load Type": "Limit State",
     "Description": "Note",
     "Remarks": "Note",
+    "P": "Pu",
+    "Axial": "Pu",
+    "Mx": "Mux",
+    "My": "Muy",
 }
 LOAD_TYPE_ALIASES = {
     "u": "ULS",
@@ -80,6 +86,67 @@ def _excel_template_dataframe() -> pd.DataFrame:
         ],
         columns=EDITOR_COLUMNS,
     )
+
+
+def _excel_template_bytes() -> bytes:
+    """Return an XLSX load import template for users to fill in Excel."""
+    output = BytesIO()
+    template = _excel_template_dataframe()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        template.to_excel(writer, sheet_name="Load Cases", index=False)
+        guide = pd.DataFrame(
+            [
+                {"Field": "Active", "Instruction": "TRUE/FALSE. Blank is treated as TRUE during import."},
+                {"Field": "Case Name", "Instruction": "Required unique load case or combination name."},
+                {"Field": "Limit State", "Instruction": "Use ULS or SLS. Aliases such as Strength/Service are normalized."},
+                {"Field": "Pu", "Instruction": "Axial force in the selected Force unit. Compression is positive."},
+                {"Field": "Mux", "Instruction": "Moment about x-axis in the selected Moment unit."},
+                {"Field": "Muy", "Instruction": "Moment about y-axis in the selected Moment unit."},
+                {"Field": "Note", "Instruction": "Optional. Not used in calculation."},
+            ]
+        )
+        guide.to_excel(writer, sheet_name="Instructions", index=False)
+    return output.getvalue()
+
+
+def _read_uploaded_load_table(uploaded_file: Any) -> pd.DataFrame:
+    """Read a CSV/XLSX upload into a raw dataframe for validation.
+
+    The parser is intentionally tolerant about column aliases; validation happens
+    later in ``parse_load_cases_from_dataframe`` so users can preview and fix
+    errors before applying imported rows to the live table.
+    """
+    if uploaded_file is None:
+        return pd.DataFrame(columns=EDITOR_COLUMNS)
+
+    filename = str(getattr(uploaded_file, "name", "")).lower()
+    if filename.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    if filename.endswith((".xlsx", ".xls")):
+        return pd.read_excel(uploaded_file, sheet_name=0)
+    raise ValueError("Unsupported load import file type. Please upload .xlsx or .csv.")
+
+
+def prepare_imported_load_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize imported load rows for the editable load table.
+
+    This function is shared by UI code and tests. It preserves the canonical
+    editor columns and keeps Pu/Mux/Muy as text so thousands separators or unit
+    suffixes remain paste/import friendly until validation parses them.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=EDITOR_COLUMNS)
+
+    # Determine blank rows before normalization. Normalization intentionally
+    # defaults blank Limit State to ULS and Active to True, which would make
+    # purely blank Excel-formatting rows look non-blank if checked afterwards.
+    raw_keep_mask = [not _row_is_blank(row) for _, row in df.iterrows()]
+    if not any(raw_keep_mask):
+        return pd.DataFrame(columns=EDITOR_COLUMNS)
+
+    raw_nonblank = df.loc[raw_keep_mask].copy()
+    normalized = _normalize_editor_dataframe(raw_nonblank)
+    return normalized[EDITOR_COLUMNS].reset_index(drop=True)
 
 
 def _is_blank(value: Any) -> bool:
@@ -399,21 +466,81 @@ def _render_validation_panel(result: LoadParseResult) -> None:
         st.info(info)
 
 
-def _render_excel_paste_help() -> None:
-    st.markdown("**Excel paste workflow**")
+def _render_load_template_downloads() -> None:
+    st.markdown("**Recommended workflow: Download template → fill in Excel → upload → preview → apply**")
     st.caption(
-        "Copy rectangular cells from Excel and paste directly into the table. "
-        "Keep the same column order for the cleanest paste result. Numeric values may include commas."
+        "Use this workflow for reliable load import from Excel, CSiBridge, ETABS, or post-processing spreadsheets. "
+        "The table editor below remains available for final manual edits."
     )
     template = _excel_template_dataframe()
     st.dataframe(template, use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download CSV load template",
-        data=template.to_csv(index=False).encode("utf-8"),
-        file_name="concrete_pmm_load_template.csv",
-        mime="text/csv",
-        use_container_width=True,
+
+    cols = st.columns(2)
+    with cols[0]:
+        st.download_button(
+            "Download Excel load template",
+            data=_excel_template_bytes(),
+            file_name="concrete_pmm_load_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with cols[1]:
+        st.download_button(
+            "Download CSV load template",
+            data=template.to_csv(index=False).encode("utf-8"),
+            file_name="concrete_pmm_load_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
+def _render_load_import_workflow(force_unit: str, moment_unit: str) -> None:
+    st.markdown("**Import Load Cases from Excel / CSV**")
+    st.caption(
+        "Upload a completed template or compatible load table, preview validation, then apply it to the editable load table. "
+        "Applying replaces the current load table so accidental partial paste errors are avoided."
     )
+    uploaded_file = st.file_uploader(
+        "Upload completed load template",
+        type=IMPORT_FILE_TYPES,
+        help="Supported files: .xlsx or .csv. The first sheet is read for Excel files.",
+        key="loads_import_file",
+    )
+    if uploaded_file is None:
+        return
+
+    try:
+        imported_raw = _read_uploaded_load_table(uploaded_file)
+        imported_editor = prepare_imported_load_table(imported_raw)
+    except Exception as exc:  # pragma: no cover - UI guardrail
+        st.error(f"Could not read load import file: {exc}")
+        return
+
+    if imported_editor.empty:
+        st.warning("The uploaded file does not contain any non-blank load rows.")
+        return
+
+    result = parse_load_cases_from_dataframe(imported_editor, force_unit, moment_unit)
+    st.markdown("**Import Preview**")
+    st.caption("Preview of rows that will be applied to the Load Case Input Table after normalization.")
+    st.dataframe(imported_editor, use_container_width=True, hide_index=True)
+    _render_summary_metrics(result, total_rows=len(imported_editor))
+
+    if result.errors:
+        with st.expander("Import Rows Excluded from Analysis", expanded=True):
+            for error in result.errors:
+                st.error(error)
+        st.warning("Fix the highlighted import errors before applying this file to the load table.")
+        apply_disabled = True
+    else:
+        st.success("Import validation passed. You can apply these rows to the load table.")
+        apply_disabled = False
+
+    if st.button("Apply imported loads to table", type="primary", use_container_width=True, disabled=apply_disabled):
+        st.session_state["loads_table"] = imported_editor.copy()
+        st.session_state.pop("loads_data_editor", None)
+        st.success("Imported load cases applied to the editable load table.")
+        st.rerun()
 
 
 def render_loads_page() -> None:
@@ -431,8 +558,11 @@ def render_loads_page() -> None:
     with unit_cols[1]:
         moment_unit = st.selectbox("Moment unit", MOMENT_UNIT_OPTIONS, index=0, help="Unit used in the Mux and Muy columns of the input table.")
 
-    with st.expander("Excel paste template", expanded=False):
-        _render_excel_paste_help()
+    with st.expander("Excel / CSV load template", expanded=False):
+        _render_load_template_downloads()
+
+    with st.expander("Import Load Cases from Excel / CSV", expanded=True):
+        _render_load_import_workflow(force_unit, moment_unit)
 
     with st.expander("Sign convention", expanded=False):
         st.write("- Pu is axial force demand. Compression is positive.")
@@ -449,7 +579,7 @@ def render_loads_page() -> None:
 
     editor_df = _normalize_editor_dataframe(st.session_state["loads_table"])
     st.markdown("**Load Case Input Table**")
-    st.caption("Paste from Excel into this table. Rows with blank case names are excluded; duplicate names are rejected.")
+    st.caption("Edit imported rows here if needed. Rows with blank case names are excluded; duplicate names are rejected.")
     edited_df = st.data_editor(
         editor_df,
         num_rows="dynamic",

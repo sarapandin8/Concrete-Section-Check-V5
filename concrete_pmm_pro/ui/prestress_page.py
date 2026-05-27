@@ -24,8 +24,10 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     apply_tendon_product_to_row,
     equivalent_steel_diameter_mm,
     get_tendon_product,
+    is_tendon_6n_label,
     list_tendon_products,
     make_custom_tendon_product,
+    standard_tendon_label,
     tendon_product_options,
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
@@ -504,10 +506,11 @@ def _product_options_for_table(prestress_db: pd.DataFrame, prestress_table: pd.D
 
 def _custom_tendon_product_from_label(product: str, row: pd.Series | None = None) -> TendonProduct | None:
     label = str(product).strip()
-    if not label.startswith("6-"):
+    parse_label = label.split(None, 1)[1].strip() if label.lower().startswith("tendon ") else label
+    if not parse_label.startswith("6-"):
         return None
     try:
-        strand_count = int(label.split("-", 1)[1])
+        strand_count = int(parse_label.split("-", 1)[1])
     except (TypeError, ValueError):
         return None
     if strand_count < 1:
@@ -538,7 +541,7 @@ def _looks_like_15_2mm_tendon_group(row: pd.Series) -> bool:
     if steel_type != "tendon_group":
         return False
     product = "" if _is_blank(row.get("Product")) else str(row.get("Product")).strip()
-    if get_tendon_product(product) is not None or product.startswith("6-"):
+    if get_tendon_product(product) is not None or is_tendon_6n_label(product):
         return True
     strand_count = _to_float(row.get("Strand Count"))
     strand_diameter = _to_float(row.get("Strand Diameter_mm"))
@@ -617,6 +620,7 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd
             normalized.at[index, "Steel Type"] = "tendon_group"
             normalized.at[index, "Diameter_mm"] = None
             if tendon_product is not None:
+                normalized.at[index, "Product"] = tendon_product.label
                 normalized.at[index, "Area_mm2"] = tendon_product.tendon_area_mm2
                 normalized.at[index, "fpy_MPa"] = tendon_product.fpy_MPa
                 normalized.at[index, "fpu_MPa"] = tendon_product.fpu_MPa
@@ -1200,7 +1204,13 @@ def _render_tendon_product_tools() -> None:
     base_row = _blank_prestress_row(next_label)
 
     if mode == "Standard tendon product":
-        product_label = st.selectbox("Standard tendon product", tendon_product_options(), index=tendon_product_options().index("6-12") if "6-12" in tendon_product_options() else 0)
+        product_options = tendon_product_options()
+        default_product = standard_tendon_label(12)
+        product_label = st.selectbox(
+            "Standard tendon product",
+            product_options,
+            index=product_options.index(default_product) if default_product in product_options else 0,
+        )
         product = get_tendon_product(product_label)
         assert product is not None
         st.dataframe(_tendon_product_summary_dataframe([product]), use_container_width=True, hide_index=True)

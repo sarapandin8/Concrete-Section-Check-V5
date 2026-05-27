@@ -14,23 +14,7 @@ from concrete_pmm_pro.visualization.section_plot import display_diameter_for_pre
 from concrete_pmm_pro.core.models import PrestressElement
 
 
-STANDARD_LABELS = {
-    "6-1",
-    "6-2",
-    "6-3",
-    "6-4",
-    "6-7",
-    "6-9",
-    "6-12",
-    "6-15",
-    "6-19",
-    "6-22",
-    "6-27",
-    "6-31",
-    "6-37",
-    "6-43",
-    "6-55",
-}
+STANDARD_LABELS = {f"Tendon 6-{strand_count}" for strand_count in range(1, 56)}
 
 
 def test_standard_tendon_product_records_exist() -> None:
@@ -57,6 +41,17 @@ def test_get_tendon_product_6_12_returns_expected_reference_data() -> None:
     assert product.duct_id_mm == pytest.approx(80.0)
 
 
+
+
+def test_legacy_tendon_label_6_12_is_accepted_and_migrates_to_display_label() -> None:
+    legacy = get_tendon_product("6-12")
+    current = get_tendon_product("Tendon 6-12")
+
+    assert legacy is not None
+    assert current is not None
+    assert legacy == current
+    assert legacy.label == "Tendon 6-12"
+
 def test_get_tendon_product_6_55_returns_expected_reference_data() -> None:
     product = get_tendon_product("6-55")
 
@@ -70,7 +65,7 @@ def test_get_tendon_product_6_55_returns_expected_reference_data() -> None:
 def test_make_custom_tendon_product_6_25_computes_nominal_values() -> None:
     product = make_custom_tendon_product(25)
 
-    assert product.label == "6-25"
+    assert product.label == "Tendon 6-25"
     assert product.strand_count == 25
     assert product.tendon_area_mm2 == pytest.approx(3500.0)
     assert product.breaking_load_kN == pytest.approx(6500.0)
@@ -82,7 +77,7 @@ def test_make_custom_tendon_product_6_25_computes_nominal_values() -> None:
 def test_make_custom_tendon_product_6_28_computes_equivalent_display_diameter() -> None:
     product = make_custom_tendon_product(28)
 
-    assert product.label == "6-28"
+    assert product.label == "Tendon 6-28"
     assert product.tendon_area_mm2 == pytest.approx(3920.0)
     assert product.fpy_MPa == pytest.approx(1580.0)
     assert equivalent_steel_diameter_mm(product.tendon_area_mm2) == pytest.approx(70.65, abs=0.05)
@@ -108,7 +103,7 @@ def test_apply_standard_tendon_product_to_row_updates_area_and_reference_fields(
     row = {"Pe_eff_kN": 123.0, "Diameter_mm": 999.0, "Note": "keep user note"}
     updated = apply_tendon_product_to_row(row, "6-12")
 
-    assert updated["Product"] == "6-12"
+    assert updated["Product"] == "Tendon 6-12"
     assert updated["Steel Type"] == "tendon_group"
     assert updated["Area_mm2"] == pytest.approx(1680.0)
     assert updated["Eq Steel Dia_mm"] == pytest.approx(46.27, abs=0.03)
@@ -129,7 +124,7 @@ def test_apply_custom_tendon_product_to_row_updates_area_without_pe_overwrite() 
     row = {"Pe_eff_kN": 0.0, "fpe_MPa": 900.0}
     updated = apply_tendon_product_to_row(row, product)
 
-    assert updated["Product"] == "6-25"
+    assert updated["Product"] == "Tendon 6-25"
     assert updated["Area_mm2"] == pytest.approx(3500.0)
     assert updated["Eq Steel Dia_mm"] == pytest.approx(66.8, abs=0.05)
     assert updated["fpy_MPa"] == pytest.approx(1580.0)

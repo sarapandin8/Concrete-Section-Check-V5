@@ -20,6 +20,8 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     DEFAULT_STRAND_FPY_MPA,
     equivalent_steel_diameter_mm,
     get_tendon_product,
+    is_tendon_6n_label,
+    tendon_product_display_label,
 )
 from concrete_pmm_pro.serviceability.models import ServiceabilitySettings
 from concrete_pmm_pro.serviceability.points import stress_check_points_to_dataframe
@@ -87,6 +89,8 @@ def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str,
     rows: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         entry = {column: _clean_table_value(row.get(column)) for column in metadata_columns if column in df.columns}
+        if "Product" in entry and not _is_blank(entry.get("Product")):
+            entry["Product"] = tendon_product_display_label(entry.get("Product"))
         if any(not _is_blank(value) for value in entry.values()):
             rows.append(entry)
     return rows
@@ -240,6 +244,7 @@ def _restore_tendon_product_metadata(row: dict[str, Any]) -> dict[str, Any]:
     if tendon_product is None:
         return row
     restored = dict(row)
+    restored["Product"] = tendon_product.label
     restored["Steel Type"] = "tendon_group"
     restored["Area_mm2"] = tendon_product.tendon_area_mm2
     restored["Diameter_mm"] = None
@@ -262,7 +267,7 @@ def _looks_like_15_2mm_tendon_group(row: dict[str, Any]) -> bool:
     if str(row.get("Steel Type") or "").strip() != "tendon_group":
         return False
     product = str(row.get("Product") or "").strip()
-    if get_tendon_product(product) is not None or product.startswith("6-"):
+    if get_tendon_product(product) is not None or is_tendon_6n_label(product):
         return True
     strand_count = row.get("Strand Count")
     if _is_blank(strand_count):
@@ -351,7 +356,7 @@ def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[d
         ):
             value = metadata.get(column)
             if not _is_blank(value):
-                row[column] = value
+                row[column] = tendon_product_display_label(value) if column == "Product" else value
         rows.append(_normalize_tendon_group_table_row(row))
     return pd.DataFrame(rows)
 

@@ -54,8 +54,50 @@ class TendonProduct:
         }
 
 
+def standard_tendon_label(strand_count: int) -> str:
+    """Return the user-facing standard 15.2 mm tendon product label."""
+
+    return f"Tendon 6-{int(strand_count)}"
+
+
+def legacy_tendon_label(strand_count: int) -> str:
+    """Return the old project-file label kept for backward compatibility."""
+
+    return f"6-{int(strand_count)}"
+
+
+def tendon_product_display_label(label: str | None) -> str:
+    """Normalize legacy tendon labels to the current user-facing label.
+
+    Older project files and tests may contain labels such as ``6-12``. The UI
+    now displays ``Tendon 6-12`` for clarity, but the database lookup must keep
+    accepting the legacy form so old projects continue to load safely.
+    """
+
+    count = _parse_tendon_6n_count(label)
+    return standard_tendon_label(count) if count is not None else str(label or "").strip()
+
+
+def _parse_tendon_6n_count(label: str | None) -> int | None:
+    text = str(label or "").strip()
+    if not text:
+        return None
+    if text.lower().startswith("tendon "):
+        text = text.split(None, 1)[1].strip()
+    if not text.startswith("6-"):
+        return None
+    try:
+        count = int(text.split("-", 1)[1])
+    except (TypeError, ValueError):
+        return None
+    return count if count >= 1 else None
+
+
+def is_tendon_6n_label(label: str | None) -> bool:
+    return _parse_tendon_6n_count(label) is not None
+
+
 def _standard_product(
-    label: str,
     strand_count: int,
     description: str = "Round",
     duct_type: str | None = "Round duct",
@@ -63,7 +105,7 @@ def _standard_product(
     typical_use: str | None = None,
 ) -> TendonProduct:
     return TendonProduct(
-        label=label,
+        label=standard_tendon_label(strand_count),
         description=description,
         strand_count=strand_count,
         tendon_area_mm2=strand_count * DEFAULT_STRAND_AREA_MM2,
@@ -74,31 +116,39 @@ def _standard_product(
     )
 
 
-STANDARD_TENDON_PRODUCTS: tuple[TendonProduct, ...] = (
-    _standard_product(
-        "6-1",
-        1,
-        description="Monostrand",
-        duct_type="Flat duct",
-        duct_id_mm=None,
-        typical_use="Flat slab / lightweight structure / external prestressing",
-    ),
-    _standard_product("6-2", 2, description="Flat", duct_type="Flat duct", duct_id_mm=None),
-    _standard_product("6-3", 3, description="Flat/Round", duct_type="Round duct if used", duct_id_mm=50.0),
-    _standard_product("6-4", 4, description="Flat/Round", duct_type="Round duct if used", duct_id_mm=55.0),
-    _standard_product("6-7", 7, duct_id_mm=85.0),
-    _standard_product("6-9", 9, duct_id_mm=70.0),
-    _standard_product("6-12", 12, duct_id_mm=80.0),
-    _standard_product("6-15", 15, duct_id_mm=90.0),
-    _standard_product("6-19", 19, duct_id_mm=100.0),
-    _standard_product("6-22", 22, duct_id_mm=105.0),
-    _standard_product("6-27", 27, duct_id_mm=115.0),
-    _standard_product("6-31", 31, duct_id_mm=120.0),
-    _standard_product("6-37", 37, duct_id_mm=130.0),
-    _standard_product("6-43", 43, duct_id_mm=140.0),
-    _standard_product("6-55", 55, description="Special", duct_id_mm=160.0),
-)
+_SPECIAL_STANDARD_TENDON_METADATA: dict[int, dict[str, Any]] = {
+    1: {
+        "description": "Monostrand",
+        "duct_type": "Flat duct",
+        "duct_id_mm": None,
+        "typical_use": "Flat slab / lightweight structure / external prestressing",
+    },
+    2: {"description": "Flat", "duct_type": "Flat duct", "duct_id_mm": None},
+    3: {"description": "Flat/Round", "duct_type": "Round duct if used", "duct_id_mm": 50.0},
+    4: {"description": "Flat/Round", "duct_type": "Round duct if used", "duct_id_mm": 55.0},
+    7: {"duct_id_mm": 85.0},
+    9: {"duct_id_mm": 70.0},
+    12: {"duct_id_mm": 80.0},
+    15: {"duct_id_mm": 90.0},
+    19: {"duct_id_mm": 100.0},
+    22: {"duct_id_mm": 105.0},
+    27: {"duct_id_mm": 115.0},
+    31: {"duct_id_mm": 120.0},
+    37: {"duct_id_mm": 130.0},
+    43: {"duct_id_mm": 140.0},
+    55: {"description": "Special", "duct_id_mm": 160.0},
+}
 
+
+def _make_standard_tendon_products() -> tuple[TendonProduct, ...]:
+    products: list[TendonProduct] = []
+    for strand_count in range(1, 56):
+        metadata = _SPECIAL_STANDARD_TENDON_METADATA.get(strand_count, {})
+        products.append(_standard_product(strand_count, **metadata))
+    return tuple(products)
+
+
+STANDARD_TENDON_PRODUCTS: tuple[TendonProduct, ...] = _make_standard_tendon_products()
 
 def list_tendon_products() -> list[TendonProduct]:
     return list(STANDARD_TENDON_PRODUCTS)
@@ -109,9 +159,12 @@ def tendon_product_options() -> list[str]:
 
 
 def get_tendon_product(label: str) -> TendonProduct | None:
-    normalized = str(label).strip()
+    normalized = str(label or "").strip()
+    requested_count = _parse_tendon_6n_count(normalized)
     for product in STANDARD_TENDON_PRODUCTS:
         if product.label == normalized:
+            return product
+        if requested_count is not None and product.strand_count == requested_count:
             return product
     return None
 
@@ -150,7 +203,7 @@ def make_custom_tendon_product(
         raise ValueError("fpy_MPa must be less than fpu_MPa")
     if Ep_MPa <= 0:
         raise ValueError("Ep_MPa must be positive")
-    resolved_label = str(label).strip() if label and str(label).strip() else f"6-{strand_count}"
+    resolved_label = str(label).strip() if label and str(label).strip() else standard_tendon_label(strand_count)
     return TendonProduct(
         label=resolved_label,
         description="Custom tendon",

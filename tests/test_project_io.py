@@ -232,7 +232,7 @@ def test_prestress_to_table_restores_standard_tendon_metadata_from_product_label
     )
 
     row = table.iloc[0]
-    assert row["Product"] == "6-12"
+    assert row["Product"] == "Tendon 6-12"
     assert row["Steel Type"] == "tendon_group"
     assert row["Area_mm2"] == pytest.approx(1680.0)
     assert row["Diameter_mm"] is None
@@ -272,7 +272,7 @@ def test_prestress_to_table_preserves_custom_tendon_metadata_without_inventing_d
     )
 
     row = table.iloc[0]
-    assert row["Product"] == "6-25"
+    assert row["Product"] == "Tendon 6-25"
     assert row["Area_mm2"] == pytest.approx(3500.0)
     assert row["Diameter_mm"] is None
     assert row["Eq Steel Dia_mm"] == pytest.approx(66.8, abs=0.05)
@@ -281,7 +281,7 @@ def test_prestress_to_table_preserves_custom_tendon_metadata_without_inventing_d
     assert row["Ep_MPa"] == pytest.approx(195000.0)
     assert row["Strand Count"] == 25
     assert row["Breaking Load_kN"] == pytest.approx(6500.0)
-    assert row["Duct Type"] == ""
+    assert row["Duct Type"] == "Round duct"
     assert row["Duct ID_mm"] is None
     assert row["Count"] == 1
 
@@ -319,7 +319,7 @@ def test_project_from_session_state_stores_prestress_table_metadata_for_reload()
     )
 
     metadata = project.metadata["prestress_table_metadata"][0]
-    assert metadata["Product"] == "6-25"
+    assert metadata["Product"] == "Tendon 6-25"
     assert metadata["fpy_MPa"] == pytest.approx(1580.0)
     assert metadata["Strand Count"] == 25
     assert metadata["Breaking Load_kN"] == pytest.approx(6500.0)

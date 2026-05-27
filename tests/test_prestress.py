@@ -202,7 +202,7 @@ def test_standard_tendon_product_row_parses_as_tendon_group_area_without_pe_over
 
     assert not result.errors
     element = result.elements[0]
-    assert element.material_name == "6-12"
+    assert element.material_name == "Tendon 6-12"
     assert element.steel_type == "tendon_group"
     assert element.area_mm2 == pytest.approx(1680.0)
     assert element.diameter_mm is None
@@ -242,7 +242,7 @@ def test_product_options_include_standard_products_and_current_custom_labels() -
 
     assert options[:2] == ["", "Custom"]
     assert "15.2mm strand" in options
-    assert "6-12" in options
+    assert "Tendon 6-12" in options
     assert "6-25" in options
 
 
@@ -360,7 +360,7 @@ def test_effective_input_sync_standard_tendon_fields_remain_intact() -> None:
         load_prestress_steel_database(),
     )
 
-    assert normalized.loc[0, "Product"] == "6-12"
+    assert normalized.loc[0, "Product"] == "Tendon 6-12"
     assert normalized.loc[0, "Area_mm2"] == pytest.approx(1680.0)
     assert normalized.loc[0, "fpy_MPa"] == pytest.approx(1580.0)
     assert normalized.loc[0, "fpu_MPa"] == pytest.approx(1860.0)

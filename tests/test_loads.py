@@ -114,3 +114,57 @@ def test_internal_units_preview_uses_mux_muy_column_names() -> None:
     assert "Muy_Nmm" in preview.columns
     assert "Mx_Nmm" not in preview.columns
     assert "My_Nmm" not in preview.columns
+
+
+def test_load_cases_from_dataframe_accepts_current_case_and_limit_state_columns() -> None:
+    df = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-NEW", "Limit State": "ULS", "Pu": "1,250", "Mux": "500.5", "Muy": "-300", "Note": "excel paste"},
+        ]
+    )
+
+    load_cases = load_cases_from_dataframe(df, "kN", "kN-m")
+
+    assert len(load_cases) == 1
+    assert load_cases[0].name == "ULS-NEW"
+    assert load_cases[0].load_type == "ULS"
+    assert load_cases[0].Pu_N == pytest.approx(1_250_000)
+    assert load_cases[0].Mux_Nmm == pytest.approx(500_500_000)
+    assert load_cases[0].Muy_Nmm == pytest.approx(-300_000_000)
+
+
+def test_load_cases_from_dataframe_accepts_limit_state_aliases_and_blank_active_defaults_true() -> None:
+    df = pd.DataFrame(
+        [
+            {"Case Name": "SERVICE-01", "Limit State": "service", "Pu": 10, "Mux": 2, "Muy": 3, "Note": ""},
+        ]
+    )
+
+    load_cases = load_cases_from_dataframe(df, "kN", "kN-m")
+
+    assert load_cases[0].active is True
+    assert load_cases[0].load_type == "SLS"
+
+
+def test_load_cases_from_dataframe_rejects_duplicate_case_names() -> None:
+    df = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-01", "Limit State": "ULS", "Pu": 10, "Mux": 2, "Muy": 3},
+            {"Active": True, "Case Name": "uls-01", "Limit State": "ULS", "Pu": 11, "Mux": 2, "Muy": 3},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Duplicate Case Name"):
+        load_cases_from_dataframe(df, "kN", "kN-m")
+
+
+def test_internal_units_preview_uses_case_and_limit_state_column_names() -> None:
+    preview = _preview_dataframe([LoadCase(name="ULS-01", Pu_N=1000, Mux_Nmm=2000, Muy_Nmm=3000)])
+
+    assert "Case Name" in preview.columns
+    assert "Limit State" in preview.columns
+    assert "Pu_N" in preview.columns
+    assert "Mux_Nmm" in preview.columns
+    assert "Muy_Nmm" in preview.columns
+    assert "Mx_Nmm" not in preview.columns
+    assert "My_Nmm" not in preview.columns

@@ -1,4 +1,9 @@
-"""Loads tab UI and conversion helpers."""
+"""Loads tab UI and conversion helpers.
+
+The Loads tab is intentionally paste-friendly: engineers commonly copy factored
+load combinations from Excel, CSiBridge, ETABS, or post-processing spreadsheets.
+Parsing helpers therefore accept both the current column names and legacy aliases.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,26 @@ from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to
 LOAD_TYPE_OPTIONS = ["ULS", "SLS", "Extreme", "Construction", "Other"]
 FORCE_UNIT_OPTIONS = ["kN", "N", "tonf"]
 MOMENT_UNIT_OPTIONS = ["kN-m", "N-mm", "tonf-m"]
+EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Note"]
+LEGACY_COLUMN_RENAMES = {
+    "Combo Name": "Case Name",
+    "Load Type": "Limit State",
+    "Description": "Note",
+    "Remarks": "Note",
+}
+LOAD_TYPE_ALIASES = {
+    "u": "ULS",
+    "uls": "ULS",
+    "strength": "ULS",
+    "s": "SLS",
+    "sls": "SLS",
+    "service": "SLS",
+    "extreme": "Extreme",
+    "ext": "Extreme",
+    "construction": "Construction",
+    "const": "Construction",
+    "other": "Other",
+}
 
 
 @dataclass(frozen=True)
@@ -24,13 +49,36 @@ class LoadParseResult:
     info: list[str]
 
 
+@dataclass(frozen=True)
+class LoadCaseSummary:
+    total_rows: int
+    valid_rows: int
+    active_rows: int
+    active_uls_rows: int
+    active_sls_rows: int
+    inactive_rows: int
+    excluded_rows: int
+
+
 def _default_load_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Active": True, "Combo Name": "ULS-01", "Pu": 1000.0, "Mux": 100.0, "Muy": 50.0, "Load Type": "ULS", "Note": ""},
-            {"Active": True, "Combo Name": "ULS-02", "Pu": 1200.0, "Mux": 120.0, "Muy": 60.0, "Load Type": "ULS", "Note": ""},
-            {"Active": True, "Combo Name": "SLS-01", "Pu": 700.0, "Mux": 70.0, "Muy": 35.0, "Load Type": "SLS", "Note": ""},
-        ]
+            {"Active": True, "Case Name": "ULS-01", "Limit State": "ULS", "Pu": 1000.0, "Mux": 100.0, "Muy": 50.0, "Note": ""},
+            {"Active": True, "Case Name": "ULS-02", "Limit State": "ULS", "Pu": 1200.0, "Mux": 120.0, "Muy": 60.0, "Note": ""},
+            {"Active": True, "Case Name": "SLS-01", "Limit State": "SLS", "Pu": 700.0, "Mux": 70.0, "Muy": 35.0, "Note": ""},
+        ],
+        columns=EDITOR_COLUMNS,
+    )
+
+
+def _excel_template_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-01", "Limit State": "ULS", "Pu": 2500, "Mux": 120, "Muy": -350, "Note": "Governing strength combo"},
+            {"Active": True, "Case Name": "ULS-02", "Limit State": "ULS", "Pu": 1800, "Mux": -95, "Muy": 410, "Note": "Alternate biaxial combo"},
+            {"Active": True, "Case Name": "SLS-01", "Limit State": "SLS", "Pu": 1500, "Mux": 70, "Muy": -220, "Note": "Service stress combo"},
+        ],
+        columns=EDITOR_COLUMNS,
     )
 
 
@@ -39,27 +87,60 @@ def _is_blank(value: Any) -> bool:
 
 
 def _row_is_blank(row: pd.Series) -> bool:
-    columns = ["Combo Name", "Pu", "Mux", "Muy", "Mx", "My", "Load Type", "Note"]
+    columns = [
+        "Case Name",
+        "Combo Name",
+        "Pu",
+        "Pu_kN",
+        "Pu_N",
+        "Mux",
+        "Mux_kNm",
+        "Mux_Nmm",
+        "Muy",
+        "Muy_kNm",
+        "Muy_Nmm",
+        "Mx",
+        "My",
+        "Limit State",
+        "Load Type",
+        "Note",
+        "Description",
+        "Remarks",
+    ]
     return all(_is_blank(row.get(column)) for column in columns)
+
+
+def _clean_number_text(value: Any) -> str:
+    text = str(value).strip()
+    # Common Excel exports may include thousands separators, non-breaking spaces,
+    # or unit suffixes copied with the value. Keep this conservative so invalid
+    # engineering inputs are still caught by validation.
+    text = text.replace("\u00a0", "").replace(" ", "").replace(",", "")
+    for suffix in ("kN-m", "kNm", "N-mm", "Nmm", "tonf-m", "tonfm", "kN", "N", "tonf"):
+        if text.lower().endswith(suffix.lower()):
+            text = text[: -len(suffix)]
+            break
+    return text
 
 
 def _to_float(value: Any) -> float | None:
     if _is_blank(value):
         return 0.0
     try:
-        return float(value)
+        return float(_clean_number_text(value))
     except (TypeError, ValueError):
         return None
 
 
-def _to_bool(value: Any) -> bool:
+def _to_bool(value: Any, *, default: bool = True) -> bool:
     if isinstance(value, bool):
         return value
     if _is_blank(value):
-        return False
-    if str(value).strip().lower() in {"true", "1", "yes"}:
+        return default
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "active", "ใช้", "ใช่"}:
         return True
-    if str(value).strip().lower() in {"false", "0", "no"}:
+    if text in {"false", "0", "no", "n", "inactive", "ไม่ใช้", "ไม่"}:
         return False
     return bool(value)
 
@@ -84,50 +165,111 @@ def _moment_to_Nmm(value: float, unit: str) -> float:
     raise ValueError(f"Unsupported moment unit: {unit}")
 
 
-def _load_value(row: pd.Series, primary_column: str, legacy_column: str | None = None) -> Any:
-    if primary_column in row.index and not _is_blank(row.get(primary_column)):
-        return row.get(primary_column)
-    if legacy_column and legacy_column in row.index:
-        return row.get(legacy_column)
-    return row.get(primary_column)
+def _load_value(row: pd.Series, candidates: list[str]) -> Any:
+    for column in candidates:
+        if column in row.index and not _is_blank(row.get(column)):
+            return row.get(column)
+    return None
+
+
+def _normalize_limit_state(value: Any) -> str | None:
+    if _is_blank(value):
+        return "ULS"
+    text = str(value).strip()
+    if text in LOAD_TYPE_OPTIONS:
+        return text
+    return LOAD_TYPE_ALIASES.get(text.lower())
+
+
+def _normalize_editor_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a paste-friendly editor table with current column names.
+
+    This keeps old session-state tables working after the UI rename from
+    ``Combo Name``/``Load Type`` to ``Case Name``/``Limit State``.
+    """
+    if df is None or df.empty:
+        return _default_load_table()
+
+    normalized = df.copy()
+    for old_name, new_name in LEGACY_COLUMN_RENAMES.items():
+        if old_name in normalized.columns and new_name not in normalized.columns:
+            normalized[new_name] = normalized[old_name]
+
+    for column in EDITOR_COLUMNS:
+        if column not in normalized.columns:
+            normalized[column] = True if column == "Active" else ""
+
+    normalized = normalized[EDITOR_COLUMNS].copy()
+    normalized["Active"] = normalized["Active"].map(lambda value: _to_bool(value, default=True))
+    normalized["Limit State"] = normalized["Limit State"].map(lambda value: _normalize_limit_state(value) or str(value).strip())
+    normalized["Note"] = normalized["Note"].map(lambda value: "" if _is_blank(value) else str(value))
+    return normalized
+
+
+def _load_case_summary(load_cases: list[LoadCase], errors: list[str], total_rows: int) -> LoadCaseSummary:
+    active_rows = sum(1 for load_case in load_cases if load_case.active)
+    active_uls_rows = sum(1 for load_case in load_cases if load_case.active and load_case.load_type == "ULS")
+    active_sls_rows = sum(1 for load_case in load_cases if load_case.active and load_case.load_type == "SLS")
+    inactive_rows = sum(1 for load_case in load_cases if not load_case.active)
+    excluded_rows = len({error.split(":", 1)[0] for error in errors if error.startswith("Row ")})
+    return LoadCaseSummary(
+        total_rows=total_rows,
+        valid_rows=len(load_cases),
+        active_rows=active_rows,
+        active_uls_rows=active_uls_rows,
+        active_sls_rows=active_sls_rows,
+        inactive_rows=inactive_rows,
+        excluded_rows=excluded_rows,
+    )
 
 
 def parse_load_cases_from_dataframe(df: pd.DataFrame, force_unit: str, moment_unit: str) -> LoadParseResult:
     errors: list[str] = []
+    warnings: list[str] = []
     load_cases: list[LoadCase] = []
+    seen_names: set[str] = set()
+    nonblank_rows = 0
 
     for index, row in df.iterrows():
         row_number = int(index) + 1
         if _row_is_blank(row):
             continue
+        nonblank_rows += 1
 
-        name_value = row.get("Combo Name")
+        name_value = _load_value(row, ["Case Name", "Combo Name", "Name"])
         if _is_blank(name_value):
-            errors.append(f"Row {row_number}: Combo Name cannot be blank.")
+            errors.append(f"Row {row_number}: Case Name cannot be blank.")
             continue
         name = str(name_value).strip()
+        name_key = name.lower()
+        if name_key in seen_names:
+            errors.append(f"Row {row_number}: Duplicate Case Name = {name}.")
+            continue
+        seen_names.add(name_key)
 
-        column_sources = {
-            "Pu": ("Pu", None),
-            "Mux": ("Mux", "Mx"),
-            "Muy": ("Muy", "My"),
+        numeric_sources = {
+            "Pu": ["Pu", "Pu_kN", "Pu_N", "P", "Axial"],
+            "Mux": ["Mux", "Mux_kNm", "Mux_Nmm", "Mx", "Mx_kNm", "Mx_Nmm"],
+            "Muy": ["Muy", "Muy_kNm", "Muy_Nmm", "My", "My_kNm", "My_Nmm"],
         }
         numeric_values: dict[str, float] = {}
-        for column, (primary_column, legacy_column) in column_sources.items():
-            parsed = _to_float(_load_value(row, primary_column, legacy_column))
+        for column, candidates in numeric_sources.items():
+            raw_value = _load_value(row, candidates)
+            parsed = _to_float(raw_value)
             if parsed is None:
                 errors.append(f"Row {row_number}: {column} must be numeric.")
                 numeric_values[column] = 0.0
             else:
                 numeric_values[column] = parsed
 
-        load_type = str(row.get("Load Type") or "ULS").strip()
-        if load_type not in LOAD_TYPE_OPTIONS:
-            errors.append(f"Row {row_number}: Load Type must be one of {', '.join(LOAD_TYPE_OPTIONS)}.")
+        limit_state_value = _load_value(row, ["Limit State", "Load Type", "Type"])
+        load_type = _normalize_limit_state(limit_state_value)
+        if load_type is None:
+            errors.append(f"Row {row_number}: Limit State must be one of {', '.join(LOAD_TYPE_OPTIONS)}.")
             load_type = "Other"
 
-        active = _to_bool(row.get("Active"))
-        note_value = row.get("Note")
+        active = _to_bool(row.get("Active"), default=True)
+        note_value = _load_value(row, ["Note", "Description", "Remarks"])
         note = None if _is_blank(note_value) else str(note_value)
 
         if any(error.startswith(f"Row {row_number}:") for error in errors):
@@ -145,12 +287,22 @@ def parse_load_cases_from_dataframe(df: pd.DataFrame, force_unit: str, moment_un
             )
         )
 
-    warnings: list[str] = []
     active_count = sum(1 for load_case in load_cases if load_case.active)
+    active_uls_count = sum(1 for load_case in load_cases if load_case.active and load_case.load_type == "ULS")
+    active_sls_count = sum(1 for load_case in load_cases if load_case.active and load_case.load_type == "SLS")
     if load_cases and active_count == 0:
         warnings.append("No active load case is selected.")
+    if load_cases and active_uls_count == 0:
+        warnings.append("No active ULS load case is available for PMM strength demand/capacity checks.")
 
-    info = [f"{active_count} active load case(s)."]
+    info = [
+        f"{active_count} active load case(s).",
+        f"{active_uls_count} active ULS case(s) used by strength checks; {active_sls_count} active SLS case(s) stored for service checks.",
+    ]
+    if errors:
+        info.append("Rows with validation errors are excluded from analysis until corrected.")
+    if nonblank_rows == 0:
+        info.append("No non-blank load rows found.")
     return LoadParseResult(load_cases=load_cases, errors=errors, warnings=warnings, info=info)
 
 
@@ -165,11 +317,11 @@ def _preview_dataframe(load_cases: list[LoadCase]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "Combo Name": load_case.name,
+                "Case Name": load_case.name,
                 "Pu_N": load_case.Pu_N,
                 "Mux_Nmm": load_case.Mux_Nmm,
                 "Muy_Nmm": load_case.Muy_Nmm,
-                "Load Type": load_case.load_type,
+                "Limit State": load_case.load_type,
                 "Active": load_case.active,
             }
             for load_case in load_cases
@@ -177,73 +329,152 @@ def _preview_dataframe(load_cases: list[LoadCase]) -> pd.DataFrame:
     )
 
 
+def _valid_load_cases_dataframe(load_cases: list[LoadCase], force_unit: str, moment_unit: str) -> pd.DataFrame:
+    def from_internal_force(value_n: float) -> float:
+        if force_unit == "kN":
+            return value_n / 1000.0
+        if force_unit == "N":
+            return value_n
+        if force_unit == "tonf":
+            return value_n / 9806.65
+        return value_n
+
+    def from_internal_moment(value_nmm: float) -> float:
+        if moment_unit == "kN-m":
+            return value_nmm / 1_000_000.0
+        if moment_unit == "N-mm":
+            return value_nmm
+        if moment_unit == "tonf-m":
+            return value_nmm / 9_806_650.0
+        return value_nmm
+
+    return pd.DataFrame(
+        [
+            {
+                "Active": load_case.active,
+                "Case Name": load_case.name,
+                "Limit State": load_case.load_type,
+                f"Pu ({force_unit})": from_internal_force(load_case.Pu_N),
+                f"Mux ({moment_unit})": from_internal_moment(load_case.Mux_Nmm),
+                f"Muy ({moment_unit})": from_internal_moment(load_case.Muy_Nmm),
+                "Note": load_case.note or "",
+            }
+            for load_case in load_cases
+        ]
+    )
+
+
+def _render_summary_metrics(result: LoadParseResult, total_rows: int) -> None:
+    summary = _load_case_summary(result.load_cases, result.errors, total_rows)
+    cols = st.columns(5)
+    cols[0].metric("Valid cases", summary.valid_rows, help="Valid load cases after validation.")
+    cols[1].metric("Active ULS", summary.active_uls_rows, help="Active ULS cases used by PMM strength demand/capacity checks.")
+    cols[2].metric("Active SLS", summary.active_sls_rows, help="Active SLS cases stored for serviceability checks.")
+    cols[3].metric("Inactive", summary.inactive_rows, help="Valid rows with Active unchecked.")
+    cols[4].metric("Excluded", summary.excluded_rows, help="Non-blank rows excluded due to validation errors.")
+
+
 def _render_validation_panel(result: LoadParseResult) -> None:
     st.subheader("Load Validation")
+    st.caption("Only valid active load cases are used by analysis. Invalid or inactive rows are excluded.")
     if result.errors:
-        for error in result.errors:
-            st.error(f"ERROR: {error}")
+        with st.expander("Rows Excluded from Analysis", expanded=True):
+            for error in result.errors:
+                st.error(error)
     else:
         st.success("No validation errors")
 
     if result.warnings:
         for warning in result.warnings:
-            st.warning(f"WARNING: {warning}")
-    else:
-        st.info("WARNING: none")
+            st.warning(warning)
 
     for info in result.info:
-        st.info(f"INFO: {info}")
+        st.info(info)
+
+
+def _render_excel_paste_help() -> None:
+    st.markdown("**Excel paste workflow**")
+    st.caption(
+        "Copy rectangular cells from Excel and paste directly into the table. "
+        "Keep the same column order for the cleanest paste result. Numeric values may include commas."
+    )
+    template = _excel_template_dataframe()
+    st.dataframe(template, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download CSV load template",
+        data=template.to_csv(index=False).encode("utf-8"),
+        file_name="concrete_pmm_load_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 def render_loads_page() -> None:
     st.subheader("Loads")
+    st.caption("Paste-friendly load case input for PMM strength and serviceability workflows.")
+
     st.info(
-        "Primary PMM capacity checks will use ULS demand values: Pu, Mux, and Muy. "
-        "SLS load cases are stored for future serviceability checks but are not checked yet."
+        "PMM strength checks currently use active ULS demand values: Pu, Mux, and Muy. "
+        "Active SLS cases are stored and used by available serviceability checks."
     )
-    st.info("For current PMM capacity development, use Load Type = ULS.")
 
     unit_cols = st.columns(2)
     with unit_cols[0]:
-        force_unit = st.selectbox("Force unit", FORCE_UNIT_OPTIONS, index=0)
+        force_unit = st.selectbox("Force unit", FORCE_UNIT_OPTIONS, index=0, help="Unit used in the Pu column of the input table.")
     with unit_cols[1]:
-        moment_unit = st.selectbox("Moment unit", MOMENT_UNIT_OPTIONS, index=0)
+        moment_unit = st.selectbox("Moment unit", MOMENT_UNIT_OPTIONS, index=0, help="Unit used in the Mux and Muy columns of the input table.")
 
-    if "loads_table" not in st.session_state:
-        st.session_state["loads_table"] = _default_load_table()
+    with st.expander("Excel paste template", expanded=False):
+        _render_excel_paste_help()
 
-    edited_df = st.data_editor(
-        st.session_state["loads_table"],
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Active": st.column_config.CheckboxColumn("Active"),
-            "Combo Name": st.column_config.TextColumn("Combo Name"),
-            "Pu": st.column_config.NumberColumn("Pu (compression +)"),
-            "Mux": st.column_config.NumberColumn("Mux"),
-            "Muy": st.column_config.NumberColumn("Muy"),
-            "Load Type": st.column_config.SelectboxColumn("Load Type", options=LOAD_TYPE_OPTIONS),
-            "Note": st.column_config.TextColumn("Note"),
-        },
-        key="loads_data_editor",
-    )
-    st.session_state["loads_table"] = edited_df
-
-    result = parse_load_cases_from_dataframe(edited_df, force_unit, moment_unit)
-    st.session_state["load_cases"] = result.load_cases if not result.errors else []
-
-    _render_validation_panel(result)
-
-    with st.expander("Sign Convention", expanded=True):
+    with st.expander("Sign convention", expanded=False):
         st.write("- Pu is axial force demand. Compression is positive.")
         st.write("- Mux is moment demand about the x-axis.")
         st.write("- Muy is moment demand about the y-axis.")
         st.write("- x-axis is positive to the right in the section preview.")
         st.write("- y-axis is positive upward in the section preview.")
         st.write("- Positive moments follow the right-hand rule.")
-        st.write("- For PMM strength checks, use ULS load combinations.")
-        st.write("- SLS load cases are stored for future serviceability checks.")
+        st.write("- For PMM strength checks, use active ULS load combinations.")
+        st.write("- SLS load cases are stored and used by serviceability checks where available.")
 
-    st.subheader("Internal Units Preview")
-    st.dataframe(_preview_dataframe(st.session_state["load_cases"]), use_container_width=True, hide_index=True)
+    if "loads_table" not in st.session_state:
+        st.session_state["loads_table"] = _default_load_table()
+
+    editor_df = _normalize_editor_dataframe(st.session_state["loads_table"])
+    st.markdown("**Load Case Input Table**")
+    st.caption("Paste from Excel into this table. Rows with blank case names are excluded; duplicate names are rejected.")
+    edited_df = st.data_editor(
+        editor_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active", help="Only active and valid rows are used by analysis."),
+            "Case Name": st.column_config.TextColumn("Case Name", help="Unique load case or combination name."),
+            "Limit State": st.column_config.SelectboxColumn("Limit State", options=LOAD_TYPE_OPTIONS, help="ULS is used for strength checks; SLS is stored for service checks."),
+            "Pu": st.column_config.TextColumn(f"Pu ({force_unit}, compression +)", help="Axial demand. Compression is positive."),
+            "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Moment demand about the x-axis."),
+            "Muy": st.column_config.TextColumn(f"Muy ({moment_unit})", help="Moment demand about the y-axis."),
+            "Note": st.column_config.TextColumn("Note", help="Optional engineering note. Not used in calculation."),
+        },
+        key="loads_data_editor",
+    )
+    edited_df = _normalize_editor_dataframe(edited_df)
+    st.session_state["loads_table"] = edited_df
+
+    result = parse_load_cases_from_dataframe(edited_df, force_unit, moment_unit)
+    # Keep valid rows available even when other pasted rows are invalid.
+    # Invalid rows are reported in the validation panel and excluded from analysis.
+    st.session_state["load_cases"] = result.load_cases
+
+    nonblank_count = sum(0 if _row_is_blank(row) else 1 for _, row in edited_df.iterrows())
+    _render_summary_metrics(result, total_rows=nonblank_count)
+    _render_validation_panel(result)
+
+    with st.expander("Valid Load Cases Used by Analysis", expanded=True):
+        st.caption("This table shows validated rows converted back to the selected input units for review.")
+        st.dataframe(_valid_load_cases_dataframe(result.load_cases, force_unit, moment_unit), use_container_width=True, hide_index=True)
+
+    with st.expander("Internal Units Preview", expanded=False):
+        st.caption("Internal solver units are N and N-mm.")
+        st.dataframe(_preview_dataframe(st.session_state["load_cases"]), use_container_width=True, hide_index=True)

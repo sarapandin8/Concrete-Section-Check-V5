@@ -562,13 +562,37 @@ def _deduplicate_diagnostic_messages(messages: list[object]) -> list[str]:
 
 
 def _classify_diagnostic_message(message: str) -> str:
-    """Classify diagnostics for compact commercial display.
+    """Classify diagnostics by engineering severity for commercial display.
 
-    Limitations are not hidden; they are separated from actionable engineering
-    warnings so the main Analysis workspace does not look like a solver failure.
+    The underlying solver still records the original warnings.  This UI
+    classification prevents expected prototype limitations or harmless numeric
+    placeholders from being presented as if the ULS result had failed.
     """
 
     text = message.casefold()
+
+    # Some PMM rows legitimately have no controlling tensile strain value
+    # (for example compression-controlled states).  Keep the information for
+    # QA, but do not count it as an engineering warning.
+    if "nan" in text and "eps_t" in text:
+        return "Numerical note"
+    if "numeric" in text or "nan" in text:
+        return "Numerical note"
+
+    # Actionable model-behavior warnings that a reviewer should inspect.
+    if (
+        "prestress stress reached fpu" in text
+        or "reached fpu cap" in text
+        or "compression reversal" in text
+        or "tensile strain was clamped" in text
+        or "directional moment" in text
+        or "falls back" in text
+        or "fallback" in text
+        or "failed" in text
+        or "exceed" in text
+    ):
+        return "Engineering review warning"
+
     limitation_markers = (
         "prototype",
         "future work",
@@ -576,19 +600,34 @@ def _classify_diagnostic_message(message: str) -> str:
         "independent engineering verification",
         "ignored",
         "not included",
-        "fallback",
     )
     if any(marker in text for marker in limitation_markers):
-        return "Limitation / note"
-    if "nan" in text or "numeric" in text or "exceed" in text or "failed" in text:
-        return "Engineering warning"
-    return "Engineering warning"
+        return "Solver limitation note"
+
+    return "Engineering review warning"
+
+
+def _diagnostic_counts(messages: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {
+        "Engineering review warning": 0,
+        "Solver limitation note": 0,
+        "Numerical note": 0,
+    }
+    for message in messages:
+        category = _classify_diagnostic_message(message)
+        counts[category] = counts.get(category, 0) + 1
+    return counts
 
 
 def _diagnostics_to_dataframe(messages: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(
+    df = pd.DataFrame(
         [{"Type": _classify_diagnostic_message(message), "Message": message} for message in messages]
     )
+    if df.empty:
+        return df
+    order = {"Engineering review warning": 0, "Solver limitation note": 1, "Numerical note": 2}
+    df["_order"] = df["Type"].map(order).fillna(99)
+    return df.sort_values(["_order", "Type", "Message"]).drop(columns=["_order"]).reset_index(drop=True)
 
 
 def _render_solver_diagnostic_messages(
@@ -624,18 +663,16 @@ def _render_solver_diagnostic_messages(
     warnings = _deduplicate_diagnostic_messages(base_warnings + list(result_warnings or []) + list(numeric_warnings or []))
     info_items = _deduplicate_diagnostic_messages(list(result_info or []))
 
-    counts: dict[str, int] = {"Engineering warning": 0, "Limitation / note": 0}
-    for message in warnings:
-        counts[_classify_diagnostic_message(message)] = counts.get(_classify_diagnostic_message(message), 0) + 1
+    counts = _diagnostic_counts(warnings)
 
     cols = st.columns(4)
-    cols[0].metric("Unique warnings", f"{len(warnings):,}")
-    cols[1].metric("Engineering warnings", f"{counts.get('Engineering warning', 0):,}")
-    cols[2].metric("Limitations / notes", f"{counts.get('Limitation / note', 0):,}")
+    cols[0].metric("Review warnings", f"{counts.get('Engineering review warning', 0):,}")
+    cols[1].metric("Limitation notes", f"{counts.get('Solver limitation note', 0):,}")
+    cols[2].metric("Numerical notes", f"{counts.get('Numerical note', 0):,}")
     cols[3].metric("Solver info", f"{len(info_items):,}")
 
     if warnings:
-        st.caption("Deduplicated solver warnings and limitations are shown below for engineering review.")
+        st.caption("Deduplicated solver messages are grouped by severity for QA without overwhelming the main result view.")
         st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
     else:
         st.success("No solver warnings were reported.")
@@ -687,11 +724,17 @@ def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
 
 
 def _render_engineering_warnings(warnings: list[str]) -> None:
-    st.subheader("Engineering Warnings / Limitations")
-    st.info("Deduplicated engineering review messages are kept here for QA without overwhelming the main result view.")
+    st.subheader("Engineering Review Messages / Solver Limitations")
+    st.info("Deduplicated review messages are grouped by severity. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
     if not warnings:
-        st.success("No engineering warnings are currently reported.")
+        st.success("No engineering review messages are currently reported.")
         return
+
+    counts = _diagnostic_counts(warnings)
+    cols = st.columns(3)
+    cols[0].metric("Review warnings", f"{counts.get('Engineering review warning', 0):,}")
+    cols[1].metric("Limitation notes", f"{counts.get('Solver limitation note', 0):,}")
+    cols[2].metric("Numerical notes", f"{counts.get('Numerical note', 0):,}")
     st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
 
 
@@ -1085,7 +1128,20 @@ def _render_input_summary() -> None:
                 numeric_summary["warnings"],
             )
             if engineering_warnings:
-                st.warning(f"{len(engineering_warnings):,} engineering warning(s) are available in diagnostics.")
+                warning_counts = _diagnostic_counts(engineering_warnings)
+                review_warning_count = warning_counts.get("Engineering review warning", 0)
+                limitation_count = warning_counts.get("Solver limitation note", 0)
+                numerical_note_count = warning_counts.get("Numerical note", 0)
+                if review_warning_count:
+                    st.warning(
+                        f"{review_warning_count:,} engineering review warning(s) are available in Diagnostics / QA. "
+                        f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
+                    )
+                else:
+                    st.info(
+                        f"No engineering review warnings are active. "
+                        f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
+                    )
             with st.expander("Engineering warnings / limitations", expanded=False):
                 _render_engineering_warnings(engineering_warnings)
 

@@ -424,7 +424,13 @@ def test_diagnostic_messages_are_cleaned_and_deduplicated() -> None:
 def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
     assert analysis_page_module._classify_diagnostic_message(
         "PMM results are prototype results for engineering review."
-    ) == "Limitation / note"
+    ) == "Solver limitation note"
     assert analysis_page_module._classify_diagnostic_message(
         "PMM numeric warning: NaN values detected in PMM dataframe columns: eps_t."
-    ) == "Engineering warning"
+    ) == "Numerical note"
+    assert analysis_page_module._classify_diagnostic_message(
+        "PS1: Prestress stress reached fpu cap."
+    ) == "Engineering review warning"
+    assert analysis_page_module._classify_diagnostic_message(
+        "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed."
+    ) == "Engineering review warning"

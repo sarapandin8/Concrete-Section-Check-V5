@@ -233,6 +233,7 @@ def test_product_options_include_standard_products_and_current_custom_labels() -
     table = pd.DataFrame(
         [
             _row(Product="6-25", **{"Steel Type": "tendon_group", "Strand Count": 25}),
+            _row(Product="Custom high-strength bar"),
             _row(Product=""),
             _row(Product=None),
         ]
@@ -241,9 +242,14 @@ def test_product_options_include_standard_products_and_current_custom_labels() -
     options = _product_options_for_table(prestress_db, table)
 
     assert options[:2] == ["", "Custom"]
-    assert "15.2mm strand" in options
+    assert "Tendon 6-1" in options
     assert "Tendon 6-12" in options
-    assert "6-25" in options
+    assert "Tendon 6-25" in options
+    assert "Tendon 6-55" in options
+    assert "6-25" not in options
+    assert options.index("Tendon 6-1") < options.index("Tendon 6-55") < options.index("15.2mm strand")
+    assert "PS Bar 32 - 1080/1230" in options
+    assert "Custom high-strength bar" in options
 
 
 def test_product_creation_modes_exclude_manual_custom_table() -> None:

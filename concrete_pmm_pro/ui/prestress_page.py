@@ -28,6 +28,7 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     list_tendon_products,
     make_custom_tendon_product,
     standard_tendon_label,
+    tendon_product_display_label,
     tendon_product_options,
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
@@ -220,7 +221,7 @@ _PRESTRESS_PAGE_CSS = """
 }
 .cpmm-prestress-mode-guide {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.5rem;
   margin: 0.55rem 0 0.65rem 0;
 }
@@ -494,14 +495,81 @@ def _append_prestress_row(table: pd.DataFrame, row: dict[str, Any]) -> pd.DataFr
     return pd.concat([expanded, pd.DataFrame([row], columns=columns)], ignore_index=True)
 
 
+def _tendon_6n_count_from_label(label: Any) -> int | None:
+    """Return the strand count for Tendon 6-n labels used in product sorting.
+
+    This UI helper intentionally accepts both the current display label
+    (``Tendon 6-12``) and the legacy project label (``6-12``). Keeping this
+    local parser avoids exposing database internals while still letting the
+    Product dropdown present the full tendon catalog in a predictable
+    engineering order.
+    """
+
+    text = str(label or "").strip()
+    if not text:
+        return None
+    if text.lower().startswith("tendon "):
+        text = text.split(None, 1)[1].strip()
+    if not text.startswith("6-"):
+        return None
+    try:
+        count = int(text.split("-", 1)[1])
+    except (TypeError, ValueError):
+        return None
+    return count if 1 <= count <= 55 else None
+
+
+def _canonical_product_option_label(product: Any) -> str:
+    """Return the dropdown label to show for a product value.
+
+    Legacy tendon labels are migrated to ``Tendon 6-n`` in the editor options,
+    while non-tendon database labels and user custom labels are preserved.
+    """
+
+    if _is_blank(product):
+        return ""
+    label = str(product).strip()
+    if _tendon_6n_count_from_label(label) is not None:
+        return tendon_product_display_label(label)
+    return label
+
+
+def _product_option_sort_key(label: str) -> tuple[int, int, str]:
+    """Sort Product options by engineering use rather than raw insertion order."""
+
+    if label == "":
+        return (0, 0, label)
+    if label == "Custom":
+        return (1, 0, label)
+    tendon_count = _tendon_6n_count_from_label(label)
+    if tendon_count is not None:
+        return (2, tendon_count, label)
+    lowered = label.lower()
+    if "strand" in lowered:
+        return (3, 0, label)
+    if "bar" in lowered:
+        return (4, 0, label)
+    return (5, 0, label)
+
+
 def _product_options_for_table(prestress_db: pd.DataFrame, prestress_table: pd.DataFrame | None) -> list[str]:
+    """Build Product dropdown options with stable ordering and legacy support.
+
+    The dropdown should be fast to scan: blank/custom first, then the complete
+    standard ``Tendon 6-1`` to ``Tendon 6-55`` catalog, then strand/bar database
+    products, then any current custom labels. Legacy labels such as ``6-12``
+    are not shown as duplicate choices; they are displayed as ``Tendon 6-12``
+    and normalized by the existing product-sync logic.
+    """
+
     options: list[str] = ["", "Custom"]
-    if "name" in prestress_db.columns:
-        options.extend(str(name).strip() for name in prestress_db["name"].tolist() if not _is_blank(name))
     options.extend(tendon_product_options())
+    if "name" in prestress_db.columns:
+        options.extend(_canonical_product_option_label(name) for name in prestress_db["name"].tolist() if not _is_blank(name))
     if prestress_table is not None and "Product" in prestress_table.columns:
-        options.extend(str(product).strip() for product in prestress_table["Product"].tolist() if not _is_blank(product))
-    return list(dict.fromkeys(options))
+        options.extend(_canonical_product_option_label(product) for product in prestress_table["Product"].tolist() if not _is_blank(product))
+    unique = list(dict.fromkeys(option for option in options if option is not None))
+    return sorted(unique, key=_product_option_sort_key)
 
 
 def _custom_tendon_product_from_label(product: str, row: pd.Series | None = None) -> TendonProduct | None:
@@ -1089,6 +1157,29 @@ def _input_mode_guide_html() -> str:
     return f'<div class="cpmm-prestress-mode-guide">{card_html}</div>'
 
 
+def _product_selection_guide_html(product_options: list[str]) -> str:
+    """Return a compact guide explaining Product dropdown organization."""
+
+    tendon_count = sum(1 for option in product_options if _tendon_6n_count_from_label(option) is not None)
+    strand_count = sum(1 for option in product_options if "strand" in option.lower() and _tendon_6n_count_from_label(option) is None)
+    bar_count = sum(1 for option in product_options if "bar" in option.lower())
+    cards = [
+        ("Tendon catalog", f"{tendon_count} standard choices: Tendon 6-1 to Tendon 6-55."),
+        ("PT / PS bars", f"{bar_count} bar product choices follow the tendon list."),
+        ("Compatibility", "Legacy labels such as 6-12 are accepted and displayed as Tendon 6-12."),
+    ]
+    if strand_count:
+        cards.insert(1, ("Single strand", f"{strand_count} strand product choice(s) remain available."))
+    card_html = "".join(
+        '<div class="cpmm-prestress-mode-card">'
+        f'<div class="cpmm-prestress-mode-title">{escape(title)}</div>'
+        f'<div class="cpmm-prestress-mode-text">{escape(text)}</div>'
+        '</div>'
+        for title, text in cards
+    )
+    return f'<div class="cpmm-prestress-mode-guide">{card_html}</div>'
+
+
 def _row_numbers_from_errors(errors: list[str]) -> set[int]:
     row_numbers: set[int] = set()
     for message in errors:
@@ -1301,6 +1392,7 @@ def render_prestress_page() -> None:
         )
         st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
         product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+        st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
         show_full_engineering_columns = st.checkbox(
             "Show full engineering columns",
             value=False,
@@ -1320,7 +1412,14 @@ def render_prestress_page() -> None:
                 "Active": st.column_config.CheckboxColumn("Active"),
                 "Label": st.column_config.TextColumn("Label"),
                 "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
-                "Product": st.column_config.SelectboxColumn("Product", options=product_options),
+                "Product": st.column_config.SelectboxColumn(
+                    "Product",
+                    options=product_options,
+                    help=(
+                        "Select a prestress product. Standard tendons are listed as Tendon 6-1 to Tendon 6-55; "
+                        "single strands and PT/PS bars follow. Legacy labels such as 6-12 are still accepted."
+                    ),
+                ),
                 "x_mm": st.column_config.NumberColumn("x_mm"),
                 "y_mm": st.column_config.NumberColumn("y_mm"),
                 "Area_mm2": st.column_config.NumberColumn("Area_mm2"),

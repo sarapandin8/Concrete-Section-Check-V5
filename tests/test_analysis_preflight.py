@@ -111,10 +111,12 @@ def test_check_analysis_readiness_errors_when_no_uls_load_cases() -> None:
     assert any("No active ULS load cases" in error for error in result.errors)
 
 
-def test_check_analysis_readiness_warns_when_sls_load_cases_exist() -> None:
+def test_check_analysis_readiness_keeps_sls_limitation_out_of_uls_warnings() -> None:
     result = check_analysis_readiness(_valid_session())
 
-    assert any("SLS load cases are present" in warning for warning in result.warnings)
+    assert not any("SLS load cases are present" in warning for warning in result.warnings)
+    assert any("SLS load cases are stored" in item for item in result.info)
+    assert any("not used in the ULS PMM" in item for item in result.info)
 
 
 def test_check_analysis_readiness_reports_total_as() -> None:

@@ -404,7 +404,7 @@ def _render_readiness_panel() -> None:
         {
             "title": "Ready",
             "value": "Yes" if result.ready else "No",
-            "detail": "Ready for current ULS/SLS workflow" if result.ready else "Resolve errors before running analysis",
+            "detail": "Ready for current ULS / PMM workflow" if result.ready else "Resolve errors before running analysis",
             "status": "ready" if result.ready else "danger",
             "strong": True,
         },
@@ -417,7 +417,7 @@ def _render_readiness_panel() -> None:
         {
             "title": "Warnings",
             "value": f"{len(result.warnings):,}",
-            "detail": "Review before final design",
+            "detail": "Review before relying on ULS results",
             "status": "warning" if result.warnings else "ready",
         },
         {
@@ -1771,9 +1771,17 @@ def _render_pmm_slice_dashboard(
 
     with sls_tab:
         st.subheader("SLS")
-        st.info(
-            "Service stress and cracking checks are handled in the Analysis main tab 'SLS / Stress & Cracking'. "
-            "This placeholder keeps the ULS workspace aligned with the commercial workflow shell."
+        active_sls_count = _active_load_case_usage_summary(load_cases)["active_sls"]
+        if active_sls_count:
+            st.info(
+                f"{active_sls_count:,} active SLS load case(s) are stored for the SLS / Stress & Cracking workspace. "
+                "They are not used in the ULS PMM demand/capacity ranking."
+            )
+        else:
+            st.info("No active SLS load cases are currently stored.")
+        st.caption(
+            "Open the main Analysis tab 'SLS / Stress & Cracking' for serviceability settings, stress check points, "
+            "gross/transformed section properties, and available SLS checks."
         )
 
     with diagnostics_tab:

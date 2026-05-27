@@ -91,8 +91,6 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
         warnings.append("No rebars are defined.")
     if not prestress_elements:
         warnings.append("No prestress elements are defined.")
-    if any(load_case.load_type == "SLS" for load_case in load_cases):
-        warnings.append("SLS load cases are present, but serviceability checks are not implemented yet.")
     if any(not element.bonded for element in prestress_elements):
         warnings.append("Unbonded prestress elements are present; unbonded prestress modeling is future work.")
     if not rebar_materials:
@@ -113,6 +111,11 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
             f"Total Pe_eff = {_total_pe_eff(prestress_elements):,.1f} N.",
         ]
     )
+    if sls_count:
+        info.append(
+            "SLS load cases are stored for the SLS workspace and are not used in the ULS PMM D/C check."
+        )
+
     if isinstance(concrete_material, ConcreteMaterial):
         beta1 = concrete_material.beta1 if concrete_material.beta1 is not None else aci_beta1(concrete_material.fc_MPa)
         info.append(f"Concrete f'c = {concrete_material.fc_MPa:g} MPa.")

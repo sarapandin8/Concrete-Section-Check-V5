@@ -155,6 +155,7 @@ Implemented or partially implemented items include:
 - Prestress strain convention spot checks.
 - Bonded prestress PS-only and RC+PS benchmark checks.
 - Prestress stress-state governing-region benchmark checks.
+- Active-prestress fpu-cap metadata policy checks.
 - Prestress-aware `Po` helper tests.
 - Directional D/C and slice-envelope regression coverage.
 - Actionable warning guidance and governing-impact classification coverage.
@@ -166,7 +167,7 @@ Implemented or partially implemented items include:
 | PMM prototype result | Limitation / note | Add published/reference PMM benchmark cases and validation tolerances. |
 | ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
 | Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
-| Prestress reached `fpu` cap | Engineering review | Active prestress uses VALID.PS2 point-level metadata and governing-region classification. Passive Pe_eff=0 rows are separated by SOLVER.PS.PASSIVE1 and should not emit active fpu-cap warnings. |
+| Prestress reached `fpu` cap | Numerical / QA metadata unless governing-related | Active prestress keeps fpu-cap events as PMM point metadata. Background cap events are not standalone engineering warnings; they are escalated only when governing-region checks indicate possible impact. |
 | Prestress compression reversal clamp | Engineering review | Active prestress uses VALID.PS2 region tracing. Passive Pe_eff=0 rows are separated by SOLVER.PS.PASSIVE1 and should not emit active compression-reversal warnings. |
 | NaN `eps_t` | Numerical note | Confirm no capacity-critical fields are invalid and document expected compression-controlled missingness. |
 
@@ -198,7 +199,12 @@ Implemented or partially implemented items include:
    - Prevents passive PT bars/strands from producing active-prestress fpu-cap or compression-reversal warnings.
    - Next: retain active prestress stress-state validation for rows with nonzero initial prestress.
 
-7. **UI.WARN.POLICY1 — Commercial warning policy**
+7. **SOLVER.PS.STRESS1 — Active prestress fpu-cap metadata policy** — implemented.
+   - Keeps fpu-cap events as PMM point metadata instead of standalone global warnings when they occur on background ultimate envelope points.
+   - Escalates fpu-cap guidance only when governing-region classification indicates possible direct impact.
+   - Next: develop compression-reversal handling/reference cases.
+
+8. **UI.WARN.POLICY1 — Commercial warning policy**
    - Move validated method assumptions into report notes/manuals.
    - Show only result-affecting warnings in the main ULS summary.
 

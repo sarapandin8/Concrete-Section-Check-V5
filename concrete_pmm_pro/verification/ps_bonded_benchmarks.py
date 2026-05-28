@@ -363,7 +363,10 @@ def _check_stress_warning_metadata() -> PSBenchmarkCheck:
         )
     fpu_cap_points = int((df["prestress_reached_fpu_cap_count"] > 0).sum())
     stress_warning_points = int((df["prestress_stress_warning_count"] > 0).sum())
-    ok = fpu_cap_points > 0 and stress_warning_points >= fpu_cap_points and any("fpu cap" in warning for warning in result.warnings)
+    # fpu-cap events are expected at some ultimate PMM failure-envelope points.
+    # They are retained as PMM metadata, not emitted as standalone global
+    # engineering warnings unless governing-impact checks require escalation.
+    ok = fpu_cap_points > 0 and not any("fpu cap" in warning for warning in result.warnings)
     return PSBenchmarkCheck(
         check_id="VALID.PS1.STRESS_WARNING_METADATA",
         title="Prestress fpu-cap warnings are traceable to PMM point metadata",
@@ -373,9 +376,9 @@ def _check_stress_warning_metadata() -> PSBenchmarkCheck:
         percent_difference=0.0 if ok else 100.0,
         tolerance_percent=0.0,
         message=(
-            "High-prestress benchmark records fpu-cap events in PMM point metadata for later governing-impact classification."
+            "High-prestress benchmark records fpu-cap events in PMM point metadata without promoting background cap events to global warnings."
             if ok
-            else "High-prestress benchmark did not expose expected fpu-cap metadata; review stress-warning instrumentation."
+            else "High-prestress benchmark did not expose expected fpu-cap metadata or still emits background fpu-cap global warnings; review stress-state instrumentation."
         ),
         details={
             "point_count": len(df),

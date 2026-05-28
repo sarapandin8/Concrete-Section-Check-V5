@@ -341,3 +341,17 @@ def test_bonded_prestress_result_differs_from_rc_only_result() -> None:
         prestress_point.Pn_N != pytest.approx(rc_point.Pn_N)
         for prestress_point, rc_point in zip(with_prestress.points, rc_only.points)
     )
+
+
+def test_active_prestress_fpu_cap_is_metadata_not_global_warning() -> None:
+    result = run_rc_pmm_solver(
+        _analysis_input_with_model(
+            _bonded_strand(fpy_mpa=1080.0, fpu_mpa=1230.0, initial_strain=0.08, steel_type="prestressing_bar"),
+            "bilinear",
+        )
+    )
+    df = pmm_result_to_display_dataframe(result)
+
+    assert int(df["prestress_reached_fpu_cap_count"].sum()) > 0
+    assert any("retained as PMM stress-state metadata" in item for item in result.info)
+    assert not any("reached fpu cap" in warning.lower() for warning in result.warnings)

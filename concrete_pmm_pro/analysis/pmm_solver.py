@@ -375,9 +375,19 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
                         warnings.append(f"Active prestress element {_element_label(element)} stress calculation error: {exc}")
                         fps = 0.0
                         stress_warnings = []
-                    if stress_warnings:
-                        point_stress_warnings.extend(stress_warnings)
-                        for stress_warning in stress_warnings:
+                    # Reaching fpu is an expected material cap in some ultimate
+                    # PMM failure states.  Keep it as per-point metadata for
+                    # QA/governing-region checks, but do not emit it as a
+                    # global engineering warning by itself.  Compression
+                    # reversal and model fallback remain review warnings.
+                    actionable_stress_warnings = [
+                        stress_warning
+                        for stress_warning in stress_warnings
+                        if stress_warning != PRESTRESS_FPU_CAP_WARNING
+                    ]
+                    if actionable_stress_warnings:
+                        point_stress_warnings.extend(actionable_stress_warnings)
+                        for stress_warning in actionable_stress_warnings:
                             warnings.append(f"{_element_label(element)}: {stress_warning}")
                     if PRESTRESS_FPU_CAP_WARNING in stress_warnings:
                         point_fpu_cap_count += element.count
@@ -447,6 +457,6 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
         info.append("Prestress linear_cap fallback occurred for at least one PMM point.")
     if any(PRESTRESS_COMPRESSION_REVERSAL_WARNING in warning for warning in warnings):
         info.append("Active prestress compression reversal clamp occurred for at least one PMM point.")
-    if any(PRESTRESS_FPU_CAP_WARNING in warning for warning in warnings):
-        info.append("Active prestress stress reached fpu cap for at least one PMM point.")
+    if any(point.prestress_reached_fpu_cap_count > 0 for point in points):
+        info.append("Active prestress stress reached fpu cap for at least one PMM point; retained as PMM stress-state metadata, not a standalone engineering warning.")
     return PMMSolverResult(points=points, warnings=deduplicate_warnings(warnings), info=info)

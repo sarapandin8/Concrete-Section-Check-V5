@@ -579,11 +579,15 @@ def _classify_diagnostic_message(message: str) -> str:
     if "numeric" in text or "nan" in text:
         return "Numerical note"
 
+    # Reaching fpu is an expected material cap in some ultimate PMM failure
+    # states.  It is actionable only if governing-impact classification later
+    # shows it occurs near the governing demand; otherwise retain it as QA.
+    if "prestress stress reached fpu" in text or "reached fpu cap" in text:
+        return "Numerical note"
+
     # Actionable model-behavior warnings that a reviewer should inspect.
     if (
-        "prestress stress reached fpu" in text
-        or "reached fpu cap" in text
-        or "compression reversal" in text
+        "compression reversal" in text
         or "tensile strain was clamped" in text
         or "directional moment" in text
         or "falls back" in text
@@ -778,6 +782,7 @@ def _diagnostic_guidance(
     severity = _classify_diagnostic_message(message)
     source = _diagnostic_source(message)
 
+    governing_impact = _diagnostic_governing_impact(message, df=df, dc_summary=dc_summary)
     guidance = {
         "Source": source,
         "Severity": severity,
@@ -785,7 +790,7 @@ def _diagnostic_guidance(
         "Meaning": "Solver or QA diagnostic retained for engineering review.",
         "Possible Cause": "Review the related input and calculation diagnostics.",
         "Recommended Action": "Open the related diagnostics panel and verify the governing case before final design use.",
-        "Governing Impact": _diagnostic_governing_impact(message, df=df, dc_summary=dc_summary),
+        "Governing Impact": governing_impact,
         "Action Priority": "Review required",
         "Where to Check": "Analysis > Diagnostics / QA",
     }
@@ -793,10 +798,10 @@ def _diagnostic_guidance(
     if "prestress stress reached fpu" in text or "reached fpu cap" in text:
         guidance.update(
             {
-                "Meaning": "Prestressing steel stress reached the material ultimate-stress cap in part of the generated PMM interaction surface.",
+                "Meaning": "Prestressing steel stress reached the material ultimate-stress cap in part of the generated PMM interaction surface. This can be expected at ultimate failure-envelope points.",
                 "Possible Cause": "High Pe_eff/fpe, tendon close to the extreme tension zone, high curvature failure states, or an aggressive prestress material definition.",
-                "Recommended Action": "Check the named prestress row in Prestress: Product, Area, Pe_eff/fpe, fpu/fpy, x/y location, and Bonded state. If the governing case is near this region, treat the result as preliminary and verify manually.",
-                "Governing Impact": "Potential if near governing case",
+                "Recommended Action": "Review the named prestress row in Prestress: Product, Area, Pe_eff/fpe, fpu/fpy, x/y location, and Bonded state. No input change is usually required when the cap occurs only away from the governing case.",
+                "Governing Impact": governing_impact,
                 "Where to Check": "Prestress tab + Analysis > PMM Check / governing trace",
             }
         )
@@ -873,6 +878,10 @@ def _diagnostic_guidance(
 
     # Recompute governing impact after the rule-specific message has been assigned.
     guidance["Governing Impact"] = _diagnostic_governing_impact(message, df=df, dc_summary=dc_summary)
+    # Escalate fpu-cap metadata only when governing-impact logic detects a
+    # near-governing occurrence.  Otherwise it remains a QA/numerical note.
+    if ("prestress stress reached fpu" in text or "reached fpu cap" in text) and "potential governing impact" in str(guidance["Governing Impact"]).casefold():
+        guidance["Severity"] = "Engineering review warning"
     guidance["Action Priority"] = _diagnostic_priority(guidance["Governing Impact"], guidance["Severity"])
     return guidance
 

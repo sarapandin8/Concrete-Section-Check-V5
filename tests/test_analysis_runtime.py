@@ -430,7 +430,7 @@ def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
     ) == "Numerical note"
     assert analysis_page_module._classify_diagnostic_message(
         "PS1: Prestress stress reached fpu cap."
-    ) == "Engineering review warning"
+    ) == "Numerical note"
     assert analysis_page_module._classify_diagnostic_message(
         "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed."
     ) == "Engineering review warning"
@@ -439,11 +439,11 @@ def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
 def test_diagnostic_guidance_explains_prestress_fpu_cap_action() -> None:
     guidance = analysis_page_module._diagnostic_guidance("PS1: Prestress stress reached fpu cap.")
 
-    assert guidance["Severity"] == "Engineering review warning"
+    assert guidance["Severity"] == "Numerical note"
     assert guidance["Source"] == "Prestress model"
     assert "Pe_eff/fpe" in guidance["Recommended Action"]
     assert "Prestress tab" in guidance["Where to Check"]
-    assert "Potential" in guidance["Governing Impact"]
+    assert "Potential" in guidance["Governing Impact"] or "Unknown" in guidance["Governing Impact"]
 
 
 def test_diagnostic_guidance_explains_eps_t_nan_as_numerical_note() -> None:
@@ -591,4 +591,5 @@ def test_diagnostic_guidance_distinguishes_background_prestress_surface_warning(
     guidance = _diagnostics_to_dataframe(["PS1: Prestress stress reached fpu cap."], df=df, dc_summary=dc_summary)
 
     assert "Background PMM-surface warning" in guidance.loc[0, "Governing Impact"]
-    assert guidance.loc[0, "Action Priority"] == "Review for final design"
+    assert guidance.loc[0, "Severity"] == "Numerical note"
+    assert guidance.loc[0, "Action Priority"] == "Usually no action"

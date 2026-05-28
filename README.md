@@ -16,8 +16,18 @@ Latest validation milestones add a traceable path from prototype PMM results tow
 - `VALID.PS1` adds bonded-prestress PS-only and RC+PS benchmark checks for `eps_t`, `Pe_eff/fpe`, `Po + Aps`, stress-warning metadata, and RC+PS numeric schema.
 - `VALID.PS2` adds prestress stress-state governing-region checks so fpu-cap and compression-reversal warnings can be classified as governing-related or background PMM-surface events.
 - `SOLVER.PS.PASSIVE1` separates Pe_eff=0/fpe=0 passive PT bars/strands from active prestress, so passive high-strength steel contributes to PMM strength without active-prestress fpu-cap or compression-reversal warnings.
+- `SOLVER.PS.STRESS1` treats active-prestress fpu-cap events as PMM stress-state metadata rather than standalone global warnings, with escalation reserved for governing-region impact.
 
 These validation packs do not hide solver warnings.  They provide the evidence needed to later downgrade prototype wording into documented method notes or keep true governing-impact warnings visible.
+
+
+## Milestone SOLVER.PS.STRESS1 Scope
+
+- Keeps active-prestress fpu-cap events in PMM point metadata for QA and governing-region checks.
+- Stops promoting background fpu-cap events from ultimate PMM surface generation into standalone engineering warnings.
+- Keeps active-prestress compression-reversal and fallback warnings as engineering-review items.
+- Updates warning guidance so fpu-cap events are usually QA/numerical notes unless governing-impact classification escalates them.
+- Does not change PMM force equilibrium, material stress calculation, D/C equations, load import, report export, or prestress input behavior.
 
 ## Milestone SOLVER.PS.PASSIVE1 Scope
 

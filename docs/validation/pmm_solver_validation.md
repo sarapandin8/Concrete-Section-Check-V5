@@ -106,6 +106,26 @@ The pack is deliberately benchmark-oriented.  It does not change the solver equa
 VALID.PS1 is not final prestress solver certification.  It is the first executable evidence pack for PS-only and RC+PS behavior.  Published prestressed section examples and stress-state governing-region checks remain required before retiring prestress prototype warnings.
 
 
+## VALID.PS2 — Prestress stress-state governing-region benchmark pack
+
+Milestone **VALID.PS2** adds executable checks for classifying prestress stress-state warnings by their relationship to the governing demand region.  It is still a validation/QA layer and does not change prestress stress equations.
+
+Added files:
+
+- `concrete_pmm_pro/verification/ps_stress_region_benchmarks.py`
+- `tests/test_valid_ps2_stress_region.py`
+
+| Check | Purpose | Current acceptance |
+|---|---|---|
+| `VALID.PS2.METADATA_SCHEMA` | Confirm PMM point data exposes `prestress_reached_fpu_cap_count`, `prestress_compression_reversal_count`, and `prestress_stress_warning_count`. | Metadata exists and is numeric for every PMM point. |
+| `VALID.PS2.GOVERNING_TRACE_AVAILABLE` | Confirm a governing D/C result has capacity method metadata for impact review. | Governing combo, D/C, capacity, and capacity method are available. |
+| `VALID.PS2.FPU_BACKGROUND_CLASSIFICATION` | Distinguish global fpu-cap events from events near the governing Pu slice. | Deterministic RC+PS benchmark has fpu-cap events globally but none near the governing Pu region. |
+| `VALID.PS2.COMPRESSION_REVERSAL_REGION` | Confirm compression-reversal events are traceable to PMM point regions. | Compression-reversal counts are available globally and near governing Pu for benchmark review. |
+| `VALID.PS2.PS_ONLY_REGION_SLICE` | Confirm PS-only PMM data can be sliced near governing Pu. | PS-only benchmark has PMM points near governing Pu for stress-warning impact review. |
+
+VALID.PS2 is the first step toward reducing prestress warnings based on evidence.  It does not remove fpu-cap or compression-reversal warnings; it gives the app a testable basis to decide whether those warnings are governing-related or background PMM-surface events.
+
+
 Implemented or partially implemented items include:
 
 - RC concentric axial compression / `phiPn` cap checks.
@@ -114,6 +134,7 @@ Implemented or partially implemented items include:
 - Symmetry sanity checks for positive/negative `Mnx` and `Mny`.
 - Prestress strain convention spot checks.
 - Bonded prestress PS-only and RC+PS benchmark checks.
+- Prestress stress-state governing-region benchmark checks.
 - Prestress-aware `Po` helper tests.
 - Directional D/C and slice-envelope regression coverage.
 - Actionable warning guidance and governing-impact classification coverage.
@@ -125,8 +146,8 @@ Implemented or partially implemented items include:
 | PMM prototype result | Limitation / note | Add published/reference PMM benchmark cases and validation tolerances. |
 | ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
 | Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
-| Prestress reached `fpu` cap | Engineering review | Add solver-level stress-state metadata and governing-region classification. |
-| Prestress compression reversal clamp | Engineering review | Define/validate compression-side prestress behavior or retain a documented limitation. |
+| Prestress reached `fpu` cap | Engineering review | VALID.PS2 now adds point-level metadata and governing-region classification; next add published/reference stress-state cases before downgrading warnings. |
+| Prestress compression reversal clamp | Engineering review | VALID.PS2 now traces compression-reversal events by PMM region; next define/validate compression-side prestress behavior or retain a documented limitation. |
 | NaN `eps_t` | Numerical note | Confirm no capacity-critical fields are invalid and document expected compression-controlled missingness. |
 
 ## Recommended next milestones
@@ -148,9 +169,10 @@ Implemented or partially implemented items include:
    - Validate `fpe`, `Pe_eff`, `eps_t`, `fpu` cap metadata, and numeric schema.
    - Add published prestressed reference examples before lowering prestress prototype wording.
 
-5. **VALID.PS2 — Prestress stress-state governing-region benchmark**
-   - Classify `fpu` cap and compression reversal events against the governing demand region.
-   - Distinguish background PMM-surface stress events from result-affecting warnings.
+5. **VALID.PS2 — Prestress stress-state governing-region benchmark** — executable pack added.
+   - Classifies `fpu` cap and compression reversal events against the governing demand region.
+   - Distinguishes background PMM-surface stress events from result-affecting warnings.
+   - Next: add reference stress-state examples and use the evidence to reduce non-governing prestress warning severity.
 
 6. **UI.WARN.POLICY1 — Commercial warning policy**
    - Move validated method assumptions into report notes/manuals.

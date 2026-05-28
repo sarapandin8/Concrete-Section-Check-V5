@@ -14,8 +14,17 @@ Latest validation milestones add a traceable path from prototype PMM results tow
 - `VALID.RC1` adds rectangular RC axial/bending/symmetry benchmark checks.
 - `VALID.RC2` adds ACI-style phi transition and tension-control benchmark checks.
 - `VALID.PS1` adds bonded-prestress PS-only and RC+PS benchmark checks for `eps_t`, `Pe_eff/fpe`, `Po + Aps`, stress-warning metadata, and RC+PS numeric schema.
+- `VALID.PS2` adds prestress stress-state governing-region checks so fpu-cap and compression-reversal warnings can be classified as governing-related or background PMM-surface events.
 
 These validation packs do not hide solver warnings.  They provide the evidence needed to later downgrade prototype wording into documented method notes or keep true governing-impact warnings visible.
+
+## Milestone VALID.PS2 Scope
+
+- Adds prestress stress-state governing-region benchmark pack.
+- Adds per-PMM-point compression-reversal metadata alongside existing fpu-cap metadata.
+- Checks that fpu-cap events can be separated into global PMM-surface events and events near the governing Pu region.
+- Checks that compression-reversal events are traceable by PMM region for later warning-policy refinement.
+- Does not change PMM solver equations, D/C equations, load import, report export, or prestress input behavior.
 
 ## Milestone VALID.RC2 Scope
 

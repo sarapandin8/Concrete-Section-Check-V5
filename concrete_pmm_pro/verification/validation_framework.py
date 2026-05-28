@@ -21,6 +21,10 @@ from concrete_pmm_pro.verification.pmm_benchmarks import PMMVerificationSummary,
 from concrete_pmm_pro.verification.rc_rectangular_benchmarks import RCBenchmarkSummary, run_valid_rc1_benchmark_pack
 from concrete_pmm_pro.verification.rc_phi_transition_benchmarks import run_valid_rc2_phi_transition_benchmark_pack
 from concrete_pmm_pro.verification.ps_bonded_benchmarks import PSBenchmarkSummary, run_valid_ps1_bonded_prestress_benchmark_pack
+from concrete_pmm_pro.verification.ps_stress_region_benchmarks import (
+    PSStressRegionSummary,
+    run_valid_ps2_stress_region_benchmark_pack,
+)
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -63,6 +67,7 @@ class PMMSolverValidationReport:
     rc_benchmarks: RCBenchmarkSummary
     rc_phi_transition: RCBenchmarkSummary
     ps_benchmarks: PSBenchmarkSummary
+    ps_stress_regions: PSStressRegionSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -86,6 +91,7 @@ class PMMSolverValidationReport:
             self.rc_benchmarks.overall_status,
             self.rc_phi_transition.overall_status,
             self.ps_benchmarks.overall_status,
+            self.ps_stress_regions.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -201,15 +207,27 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             warnings_addressed=("bonded prestress", "fpu cap", "compression reversal", "prestress Po", "prestress eps_t"),
         ),
         ValidationCaseSpec(
+            case_id="VALID.PS2",
+            title="Prestress stress-state governing-region benchmark pack",
+            category="Prestress PMM",
+            status="implemented",
+            purpose="Validate that prestress fpu-cap and compression-reversal events are traceable per PMM point and can be separated into background PMM-surface events versus near-governing Pu events.",
+            acceptance="Stress-state metadata columns exist; governing D/C trace is available; fpu-cap and compression-reversal event counts can be evaluated globally and near the governing Pu region.",
+            source="Deterministic RC+PS and PS-only benchmark runners using PMM result metadata.",
+            current_location="concrete_pmm_pro/verification/ps_stress_region_benchmarks.py; tests/test_valid_ps2_stress_region.py",
+            next_action="Use VALID.PS2 evidence to refine governing-impact warning display, then develop stress-model reference cases for compression reversal behavior.",
+            warnings_addressed=("fpu cap", "compression reversal", "governing impact", "prestress stress metadata"),
+        ),
+        ValidationCaseSpec(
             case_id="VALID.PS.STRESS1",
             title="Prestress fpu cap and compression reversal classification",
             category="Prestress PMM",
             status="partial",
             purpose="Detect fpu-cap and compression-reversal events and classify whether they are background PMM-surface events or governing-impact events.",
             acceptance="Warnings are actionable and governing-impact classification tests pass; root stress model remains documented.",
-            source="Current warning guidance and governing-impact UI tests.",
-            current_location="concrete_pmm_pro/ui/analysis_page.py; tests/test_analysis_runtime.py",
-            next_action="Develop solver-level stress-state metadata per PMM point, then validate against prestress stress-strain reference cases.",
+            source="VALID.PS2 stress-region benchmark pack plus current warning guidance and governing-impact UI tests.",
+            current_location="concrete_pmm_pro/verification/ps_stress_region_benchmarks.py; concrete_pmm_pro/ui/analysis_page.py; tests/test_valid_ps2_stress_region.py; tests/test_analysis_runtime.py",
+            next_action="Develop solver-level stress-strain reference cases for compression reversal handling before removing stress-model warnings.",
             warnings_addressed=("fpu cap", "compression reversal"),
         ),
         ValidationCaseSpec(
@@ -283,4 +301,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         rc_benchmarks=run_valid_rc1_benchmark_pack(),
         rc_phi_transition=run_valid_rc2_phi_transition_benchmark_pack(),
         ps_benchmarks=run_valid_ps1_bonded_prestress_benchmark_pack(),
+        ps_stress_regions=run_valid_ps2_stress_region_benchmark_pack(),
     )

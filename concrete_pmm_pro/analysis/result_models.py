@@ -37,6 +37,7 @@ class PMMPoint(BaseModel):
     prestress_stress_warning_count: int = 0
     max_prestress_stress_MPa: float = 0.0
     prestress_reached_fpu_cap_count: int = 0
+    prestress_compression_reversal_count: int = 0
     rebar_displaced_concrete_subtracted_N: float = 0.0
     rebar_inside_compression_count: int = 0
 
@@ -79,6 +80,7 @@ def pmm_result_to_display_dataframe(result: PMMSolverResult) -> pd.DataFrame:
             "prestress_stress_warning_count",
             "max_prestress_stress_MPa",
             "prestress_reached_fpu_cap_count",
+            "prestress_compression_reversal_count",
             "rebar_displaced_concrete_subtracted_N",
             "rebar_displaced_concrete_subtracted_kN",
             "rebar_inside_compression_count",
@@ -114,6 +116,8 @@ def pmm_result_to_display_dataframe(result: PMMSolverResult) -> pd.DataFrame:
         df["max_prestress_stress_MPa"] = 0.0
     if "prestress_reached_fpu_cap_count" not in df.columns:
         df["prestress_reached_fpu_cap_count"] = 0
+    if "prestress_compression_reversal_count" not in df.columns:
+        df["prestress_compression_reversal_count"] = 0
     if "rebar_displaced_concrete_subtracted_N" not in df.columns:
         df["rebar_displaced_concrete_subtracted_N"] = 0.0
     if "rebar_inside_compression_count" not in df.columns:

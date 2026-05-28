@@ -299,6 +299,7 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
             point_stress_warnings: list[str] = []
             point_max_prestress_stress = 0.0
             point_fpu_cap_count = 0
+            point_compression_reversal_count = 0
             for element in bonded_prestress_elements:
                 if element.fpu_mpa is None:
                     continue
@@ -322,6 +323,8 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
                         warnings.append(f"{_element_label(element)}: {stress_warning}")
                 if PRESTRESS_FPU_CAP_WARNING in stress_warnings:
                     point_fpu_cap_count += element.count
+                if PRESTRESS_COMPRESSION_REVERSAL_WARNING in stress_warnings:
+                    point_compression_reversal_count += element.count
                 point_max_prestress_stress = max(point_max_prestress_stress, fps)
                 force = -element.area_mm2 * element.count * fps
                 prestress_force += force
@@ -368,6 +371,7 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
                     prestress_stress_warning_count=len(point_stress_warnings),
                     max_prestress_stress_MPa=point_max_prestress_stress,
                     prestress_reached_fpu_cap_count=point_fpu_cap_count,
+                    prestress_compression_reversal_count=point_compression_reversal_count,
                     rebar_displaced_concrete_subtracted_N=rebar_displaced_concrete_subtracted,
                     rebar_inside_compression_count=rebar_inside_compression_count,
                 )

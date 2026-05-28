@@ -29,6 +29,10 @@ from concrete_pmm_pro.verification.ps_passive_benchmarks import (
     PSPassiveBenchmarkSummary,
     run_valid_ps_passive_benchmark_pack,
 )
+from concrete_pmm_pro.verification.dc_directional_benchmarks import (
+    DCDirectionalBenchmarkSummary,
+    run_valid_dc1_directional_benchmark_pack,
+)
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -73,6 +77,7 @@ class PMMSolverValidationReport:
     ps_benchmarks: PSBenchmarkSummary
     ps_stress_regions: PSStressRegionSummary
     ps_passive: PSPassiveBenchmarkSummary
+    dc_directional: DCDirectionalBenchmarkSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -98,6 +103,7 @@ class PMMSolverValidationReport:
             self.ps_benchmarks.overall_status,
             self.ps_stress_regions.overall_status,
             self.ps_passive.overall_status,
+            self.dc_directional.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -262,15 +268,15 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
         ),
         ValidationCaseSpec(
             case_id="VALID.PMM.DC1",
-            title="Directional PMM demand/capacity interpolation",
+            title="Robust directional PMM demand/capacity extraction",
             category="Demand/Capacity",
-            status="partial",
-            purpose="Check capacity extraction at a demand Pu and moment direction using cleaned slice envelope and fallback methods.",
-            acceptance="Known benchmark demand points return stable D/C, and fallback is not used silently for governing cases.",
-            source="Slice envelope and dashboard regression tests.",
-            current_location="tests/test_slice_envelope.py; tests/test_pmm_dashboard.py; tests/test_capacity_check.py",
-            next_action="Add analytic/reference D/C benchmark cases and require governing fallback reason in report.",
-            warnings_addressed=("directional D/C", "PMM interpolation", "fallback"),
+            status="implemented",
+            purpose="Use cleaned Pu-slice PMM envelopes with a boundary ray-intersection capacity method before any fallback method is considered.",
+            acceptance="Analytic rectangular slice benchmarks match known ray capacities; governing D/C uses the primary slice-envelope path without silent fallback when the envelope is valid.",
+            source="Synthetic rectangular PMM slice benchmarks and D/C summary regression tests.",
+            current_location="concrete_pmm_pro/analysis/slice_envelope.py; concrete_pmm_pro/verification/dc_directional_benchmarks.py; tests/test_valid_dc1_directional_capacity.py",
+            next_action="Add published/reference biaxial PMM demand-capacity examples before retiring all D/C validation limitation notes.",
+            warnings_addressed=("directional D/C", "PMM interpolation", "fallback", "slice envelope"),
         ),
         ValidationCaseSpec(
             case_id="VALID.NUM1",
@@ -333,4 +339,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         ps_benchmarks=run_valid_ps1_bonded_prestress_benchmark_pack(),
         ps_stress_regions=run_valid_ps2_stress_region_benchmark_pack(),
         ps_passive=run_valid_ps_passive_benchmark_pack(),
+        dc_directional=run_valid_dc1_directional_benchmark_pack(),
     )

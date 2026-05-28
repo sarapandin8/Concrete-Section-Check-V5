@@ -4,7 +4,7 @@ PMM_PROTOTYPE_WARNING = (
     "PMM results are prototype results for engineering review. Final production-grade validation is future work."
 )
 DCR_PROTOTYPE_WARNING = (
-    "Demand/capacity check uses prototype PMM interpolation. Independent engineering verification is required."
+    "Demand/capacity check uses cleaned Pu-slice PMM capacity extraction with ray-intersection; benchmark validation remains in progress."
 )
 BONDED_PRESTRESS_PROTOTYPE_WARNING = (
     "Bonded prestress is included using the current prototype strain compatibility model."

@@ -221,7 +221,6 @@ def check_uls_demands_against_rc_pmm(
     warnings = [
         PMM_PROTOTYPE_WARNING,
         DCR_PROTOTYPE_WARNING,
-        "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed.",
         RC_AXIAL_CAP_LIMITATION_WARNING,
     ]
     if any(getattr(point, "active_prestress_count", point.bonded_prestress_count) > 0 for point in pmm_result.points):
@@ -310,7 +309,11 @@ def check_uls_demands_against_rc_pmm(
                     capacity = float(capacity_kNm) * 1_000_000.0
                     capacity_phiPn_N = combo.Pu_N
                     interpolation_status = envelope_estimate.get("status", PASS)
-                    message = "Checked using PMM slice envelope at Pu."
+                    method_name = str(envelope_estimate.get("method") or "slice_envelope")
+                    if method_name == "slice_envelope_ray":
+                        message = "Checked using PMM slice envelope ray-intersection at Pu."
+                    else:
+                        message = "Checked using PMM slice envelope at Pu."
                     capacity_method = "slice_envelope"
 
             if (

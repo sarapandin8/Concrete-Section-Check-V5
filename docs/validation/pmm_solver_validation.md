@@ -181,9 +181,10 @@ Implemented or partially implemented items include:
    - Use as the baseline before prestress-only and RC+PS phi validation.
    - Add published examples documenting ACI phi transition behavior where available.
 
-3. **SOLVER.PMM.DC1 — Robust directional PMM capacity check**
-   - Strengthen capacity extraction at governing `Pu` and moment direction.
-   - Reduce fallback usage and document fallback only when needed.
+3. **SOLVER.PMM.DC1 — Robust directional PMM capacity check** — implemented.
+   - Uses cleaned selected-Pu slice envelopes with ray-intersection capacity extraction as the primary D/C path.
+   - Adds analytic rectangular slice benchmarks to prevent polar-radius interpolation from overestimating faceted envelopes.
+   - Remaining work: add published/reference biaxial PMM D/C examples before retiring all D/C validation limitation notes.
 
 4. **VALID.PS1 — Bonded prestress PMM benchmark pack** — executable pack added.
    - Validate PS-only and RC+PS behavior.

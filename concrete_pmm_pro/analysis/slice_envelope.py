@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass, field
 
 import pandas as pd
-from shapely.geometry import LineString, MultiPoint, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, MultiPoint, Point, Polygon
 from shapely.errors import GEOSException
 
 from concrete_pmm_pro.analysis.warnings import CONVEX_HULL_FALLBACK_WARNING
@@ -150,6 +150,88 @@ def _boundary_warnings(cleaned: pd.DataFrame) -> tuple[list[str], bool]:
         warnings.append("Large radius jump detected in slice envelope.")
     return warnings, True
 
+
+
+def _positive_ray_intersections(geometry: object, alpha_rad: float) -> list[float]:
+    """Return positive distances where a ray from the origin intersects geometry.
+
+    The PMM D/C check needs the boundary distance in the demand moment
+    direction.  A polygon/ray intersection is more robust than polar radius
+    interpolation for rectangular or faceted envelopes because it intersects the
+    actual Mx-My boundary segment rather than interpolating radii between
+    neighboring angular vertices.
+    """
+
+    direction_x = math.cos(alpha_rad)
+    direction_y = math.sin(alpha_rad)
+    distances: list[float] = []
+
+    def add_point(x: float, y: float) -> None:
+        projection = x * direction_x + y * direction_y
+        perpendicular = abs(-direction_y * x + direction_x * y)
+        if projection > 1.0e-9 and perpendicular <= max(1.0e-6, 1.0e-8 * abs(projection)):
+            distances.append(float(projection))
+
+    def walk(geom: object) -> None:
+        if getattr(geom, "is_empty", False):
+            return
+        if isinstance(geom, Point):
+            add_point(float(geom.x), float(geom.y))
+            return
+        if isinstance(geom, MultiPoint):
+            for part in geom.geoms:
+                add_point(float(part.x), float(part.y))
+            return
+        if isinstance(geom, LineString):
+            coords = list(geom.coords)
+            for x, y in coords:
+                add_point(float(x), float(y))
+            return
+        if isinstance(geom, MultiLineString):
+            for part in geom.geoms:
+                walk(part)
+            return
+        if isinstance(geom, GeometryCollection):
+            for part in geom.geoms:
+                walk(part)
+            return
+
+    walk(geometry)
+    return sorted(set(round(distance, 9) for distance in distances))
+
+
+def _estimate_capacity_by_ray_intersection(
+    envelope: SliceEnvelopeResult,
+    alpha_rad: float,
+) -> tuple[float | None, list[str]]:
+    """Estimate boundary radius from the actual PMM envelope polygon.
+
+    Returns capacity in kN-m and diagnostic warnings.  It intentionally uses
+    the envelope boundary itself; if a clean ray intersection cannot be formed,
+    the caller may fall back to angular polar interpolation.
+    """
+
+    warnings: list[str] = []
+    if envelope.envelope_df.empty or len(envelope.envelope_df) < 3:
+        return None, ["Slice envelope has too few points for ray-intersection capacity."]
+
+    try:
+        polar_df = compute_polar_angle_and_radius(envelope.envelope_df)
+        max_radius = float(polar_df["radius_kNm"].max())
+        if not math.isfinite(max_radius) or max_radius <= 0.0:
+            return None, ["Slice envelope has no positive radius for ray-intersection capacity."]
+        coords = [(float(row.phiMnx_kNm), float(row.phiMny_kNm)) for row in polar_df.itertuples()]
+        polygon = Polygon(coords)
+        if not polygon.is_valid or polygon.is_empty:
+            return None, ["Slice envelope polygon is invalid for ray-intersection capacity."]
+        ray_length = max(2.0 * max_radius, max_radius + 1.0)
+        ray = LineString([(0.0, 0.0), (ray_length * math.cos(alpha_rad), ray_length * math.sin(alpha_rad))])
+        intersections = _positive_ray_intersections(polygon.boundary.intersection(ray), alpha_rad)
+        if not intersections:
+            return None, ["Demand direction ray did not intersect the slice envelope boundary."]
+        return max(intersections), warnings
+    except (GEOSException, TypeError, ValueError, ArithmeticError) as exc:
+        return None, [f"Ray-intersection slice capacity failed: {exc}"]
 
 def build_convex_hull_envelope(slice_df: pd.DataFrame) -> SliceEnvelopeResult:
     """Build a convex hull fallback envelope from slice points."""
@@ -299,6 +381,22 @@ def estimate_directional_capacity_from_envelope(
             "warnings": warnings + ["Slice envelope is invalid; directional capacity was not checked from envelope."],
         }
 
+    capacity_radius, ray_warnings = _estimate_capacity_by_ray_intersection(envelope, alpha_rad)
+    if capacity_radius is not None and capacity_radius > 0.0:
+        return {
+            "capacity_phiMn_kNm": capacity_radius,
+            "demand_Mu_kNm": demand_Mu_kNm,
+            "dcr": demand_Mu_kNm / capacity_radius,
+            "alpha_rad": alpha_rad,
+            "method": "slice_envelope_ray",
+            "status": PASS,
+            "warnings": warnings,
+        }
+
+    # Fallback: angular interpolation is retained only as a secondary method for
+    # envelopes that cannot form a valid polygon/ray intersection.  This keeps
+    # legacy behavior available while making the primary D/C path more faithful
+    # to the actual Mx-My boundary segment.
     polar_df = compute_polar_angle_and_radius(envelope.envelope_df).sort_values("angle_rad")
     polar_points = [
         (_angle_0_to_2pi(float(row.angle_rad)), float(row.radius_kNm))
@@ -311,9 +409,9 @@ def estimate_directional_capacity_from_envelope(
             "demand_Mu_kNm": demand_Mu_kNm,
             "dcr": None,
             "alpha_rad": alpha_rad,
-            "method": "slice_envelope",
+            "method": "slice_envelope_ray",
             "status": NOT_CHECKED,
-            "warnings": warnings + ["Slice envelope has too few positive-radius points."],
+            "warnings": warnings + ray_warnings + ["Slice envelope has too few positive-radius points."],
         }
 
     polar_points = sorted(polar_points, key=lambda item: item[0])
@@ -322,7 +420,7 @@ def estimate_directional_capacity_from_envelope(
     if alpha < polar_points[0][0]:
         alpha += 2.0 * math.pi
 
-    capacity_radius: float | None = None
+    capacity_radius = None
     for (angle_1, radius_1), (angle_2, radius_2) in zip(wrapped_points[:-1], wrapped_points[1:]):
         if angle_1 <= alpha <= angle_2:
             if abs(angle_2 - angle_1) <= 1.0e-12:
@@ -338,16 +436,16 @@ def estimate_directional_capacity_from_envelope(
             "demand_Mu_kNm": demand_Mu_kNm,
             "dcr": None,
             "alpha_rad": alpha_rad,
-            "method": "slice_envelope",
+            "method": "slice_envelope_ray",
             "status": OUT_OF_RANGE,
-            "warnings": warnings + ["Could not bracket demand angle on slice envelope."],
+            "warnings": warnings + ray_warnings + ["Could not bracket demand angle on slice envelope."],
         }
     return {
         "capacity_phiMn_kNm": capacity_radius,
         "demand_Mu_kNm": demand_Mu_kNm,
         "dcr": demand_Mu_kNm / capacity_radius,
         "alpha_rad": alpha_rad,
-        "method": "slice_envelope",
+        "method": "slice_envelope_polar_fallback",
         "status": PASS,
-        "warnings": warnings,
+        "warnings": warnings + ray_warnings + ["Ray-intersection capacity was unavailable; polar radius interpolation fallback used."],
     }

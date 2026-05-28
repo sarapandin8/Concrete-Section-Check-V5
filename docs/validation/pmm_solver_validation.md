@@ -25,6 +25,7 @@ The validation framework combines existing checks with a formal validation matri
 
 - Independent hand-calculation spot checks: `concrete_pmm_pro/verification/hand_checks.py`
 - PMM benchmark-style checks: `concrete_pmm_pro/verification/pmm_benchmarks.py`
+- RC phi transition benchmarks: `concrete_pmm_pro/verification/rc_phi_transition_benchmarks.py`
 - Validation matrix and report runner: `concrete_pmm_pro/verification/validation_framework.py`
 - Tests: `tests/test_validation_framework.py`
 
@@ -62,10 +63,33 @@ The pack checks a simple rectangular RC section using independent rectangular st
 
 This benchmark pack is still not a full commercial certification.  It gives the project traceable RC-only evidence before reducing prototype wording.  Published reference examples and biaxial reference checks are still required before fully retiring general PMM prototype notes.
 
+## VALID.RC2 — RC phi transition / tension-control benchmark pack
+
+Milestone **VALID.RC2** adds executable checks for the ACI-style phi transition used by the RC PMM solver:
+
+- `concrete_pmm_pro/verification/rc_phi_transition_benchmarks.py`
+- `tests/test_valid_rc2_phi_transition.py`
+
+The pack checks both the direct phi helper and the PMM solver points for a rectangular RC section.
+
+| Check | Purpose | Current acceptance |
+|---|---|---|
+| `VALID.RC2.PHI_COMPRESSION_EDGE` | Verify compression-controlled phi at the yield-strain boundary. | `phi = 0.65` and condition = compression-controlled. |
+| `VALID.RC2.PHI_TRANSITION_MID` | Verify linear transition interpolation halfway to the tension-controlled threshold. | `phi = 0.775` for tied reinforcement. |
+| `VALID.RC2.PHI_TENSION_EDGE` | Verify tension-controlled phi at `eps_y + 0.003`. | `phi = 0.90` and condition = tension-controlled. |
+| `VALID.RC2.PHI_NONE_COMPRESSION` | Verify missing tensile strain defaults to compression-controlled behavior. | `phi = 0.65`. |
+| `VALID.RC2.SOLVER_REGION_COVERAGE` | Confirm the rectangular RC PMM sweep samples compression-controlled, transition, and tension-controlled regions. | All three strain regions are present. |
+| `VALID.RC2.SOLVER_PHI_MATCH` | Confirm every RC PMM point matches the independent phi helper for `phi` and strain-condition label. | No mismatches. |
+| `VALID.RC2.SOLVER_PHI_RANGE` | Confirm solver phi range remains within tied-column ACI limits. | `0.65 <= phi <= 0.90`, currently spanning both endpoints. |
+
+VALID.RC2 strengthens confidence in `eps_t` interpretation and phi classification before the project attempts prestress-specific phi and stress-model validation.
+
+
 Implemented or partially implemented items include:
 
 - RC concentric axial compression / `phiPn` cap checks.
 - Rectangular RC uniaxial hand spot check.
+- RC phi transition and tension-control checks.
 - Symmetry sanity checks for positive/negative `Mnx` and `Mny`.
 - Prestress strain convention spot checks.
 - Prestress-aware `Po` helper tests.
@@ -87,17 +111,21 @@ Implemented or partially implemented items include:
 
 1. **VALID.RC1 — Rectangular RC PMM benchmark pack** — initial executable pack added.
    - Keep expanding with published reference examples.
-   - Add stronger biaxial reference points and phi transition benchmarks.
+   - Add stronger biaxial reference points and published reference examples.
 
-2. **SOLVER.PMM.DC1 — Robust directional PMM capacity check**
+2. **VALID.RC2 — RC phi transition / tension-control benchmark pack** — executable pack added.
+   - Use as the baseline before prestress-only and RC+PS phi validation.
+   - Add published examples documenting ACI phi transition behavior where available.
+
+3. **SOLVER.PMM.DC1 — Robust directional PMM capacity check**
    - Strengthen capacity extraction at governing `Pu` and moment direction.
    - Reduce fallback usage and document fallback only when needed.
 
-3. **VALID.PS1 — Bonded prestress PMM benchmark pack**
+4. **VALID.PS1 — Bonded prestress PMM benchmark pack**
    - Validate PS-only and RC+PS behavior.
    - Validate `fpe`, `Pe_eff`, `eps_t`, `fpu` cap, and compression reversal treatment.
 
-4. **UI.WARN.POLICY1 — Commercial warning policy**
+5. **UI.WARN.POLICY1 — Commercial warning policy**
    - Move validated method assumptions into report notes/manuals.
    - Show only result-affecting warnings in the main ULS summary.
 

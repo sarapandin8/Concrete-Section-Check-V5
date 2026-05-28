@@ -19,6 +19,7 @@ import pandas as pd
 from concrete_pmm_pro.verification.hand_checks import HandCheckSummary, run_independent_hand_check_suite
 from concrete_pmm_pro.verification.pmm_benchmarks import PMMVerificationSummary, run_pmm_verification_suite
 from concrete_pmm_pro.verification.rc_rectangular_benchmarks import RCBenchmarkSummary, run_valid_rc1_benchmark_pack
+from concrete_pmm_pro.verification.rc_phi_transition_benchmarks import run_valid_rc2_phi_transition_benchmark_pack
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -59,6 +60,7 @@ class PMMSolverValidationReport:
     hand_checks: HandCheckSummary
     pmm_checks: PMMVerificationSummary
     rc_benchmarks: RCBenchmarkSummary
+    rc_phi_transition: RCBenchmarkSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -76,7 +78,12 @@ class PMMSolverValidationReport:
     def overall_execution_status(self) -> str:
         """Return the worst current status from executable validation runners."""
 
-        statuses = {self.hand_checks.overall_status, self.pmm_checks.overall_status, self.rc_benchmarks.overall_status}
+        statuses = {
+            self.hand_checks.overall_status,
+            self.pmm_checks.overall_status,
+            self.rc_benchmarks.overall_status,
+            self.rc_phi_transition.overall_status,
+        }
         if "FAIL" in statuses:
             return "FAIL"
         if "WARNING" in statuses:
@@ -140,6 +147,19 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             current_location="concrete_pmm_pro/verification/pmm_benchmarks.py",
             next_action="Add true biaxial hand/reference benchmark with known P-Mx-My capacity point.",
             warnings_addressed=("PMM point cloud", "directional capacity"),
+        ),
+
+        ValidationCaseSpec(
+            case_id="VALID.RC2",
+            title="RC phi transition and tension-control benchmark pack",
+            category="RC-only PMM",
+            status="implemented",
+            purpose="Validate ACI-style phi classification for compression-controlled, transition, and tension-controlled RC section states before reducing phi/prototype warnings.",
+            acceptance="Direct phi helper spot checks pass; the rectangular RC PMM sweep samples all phi regions; each solver point matches the independent phi helper classification.",
+            source="ACI-style phi helper reference and rectangular RC PMM sweep.",
+            current_location="concrete_pmm_pro/verification/rc_phi_transition_benchmarks.py; tests/test_valid_rc2_phi_transition.py",
+            next_action="Add published-code examples documenting phi transition behavior for final validation notes.",
+            warnings_addressed=("phi transition", "tension-controlled", "compression-controlled", "eps_t"),
         ),
         ValidationCaseSpec(
             case_id="VALID.PS.EPST1",
@@ -246,4 +266,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         hand_checks=run_independent_hand_check_suite(),
         pmm_checks=run_pmm_verification_suite(),
         rc_benchmarks=run_valid_rc1_benchmark_pack(),
+        rc_phi_transition=run_valid_rc2_phi_transition_benchmark_pack(),
     )

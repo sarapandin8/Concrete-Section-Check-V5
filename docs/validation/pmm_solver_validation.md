@@ -42,6 +42,26 @@ The validation framework combines existing checks with a formal validation matri
 
 The milestone introduces a formal validation matrix with implemented, partial, and planned coverage status.  It does not change PMM solver equations.  It gives the project a stable engineering QA structure.
 
+
+## VALID.RC1 — Rectangular RC PMM benchmark pack
+
+Milestone **VALID.RC1** adds the first executable RC-only benchmark pack under:
+
+- `concrete_pmm_pro/verification/rc_rectangular_benchmarks.py`
+- `tests/test_valid_rc1_benchmarks.py`
+
+The pack checks a simple rectangular RC section using independent rectangular stress-block formulas and solver comparisons:
+
+| Check | Purpose | Current acceptance |
+|---|---|---|
+| `VALID.RC1.PHI_PN_MAX` | Compare solver capped axial compression strength against independent ACI-style tied-column `phiPn,max`. | Within documented prototype tolerance. |
+| `VALID.RC1.MX_C300_PN` | Compare solver `Pn` near a uniaxial neutral-axis depth `c ≈ 300 mm` against hand calculation. | Within documented prototype tolerance. |
+| `VALID.RC1.MX_C300_MNX` | Compare solver `Mnx` near the same neutral-axis state against hand calculation. | Within documented prototype tolerance. |
+| `VALID.RC1.MX_SYMMETRY` | Check positive/negative `Mx` envelope balance for a symmetric section. | Within discretization tolerance. |
+| `VALID.RC1.NUMERIC_SCHEMA` | Confirm capacity-critical PMM result fields contain no NaN/Inf values. | No invalid values in critical columns. |
+
+This benchmark pack is still not a full commercial certification.  It gives the project traceable RC-only evidence before reducing prototype wording.  Published reference examples and biaxial reference checks are still required before fully retiring general PMM prototype notes.
+
 Implemented or partially implemented items include:
 
 - RC concentric axial compression / `phiPn` cap checks.
@@ -65,9 +85,9 @@ Implemented or partially implemented items include:
 
 ## Recommended next milestones
 
-1. **VALID.RC1 — Rectangular RC PMM benchmark pack**
-   - Add published or independently verified RC examples.
-   - Cover axial compression, uniaxial bending, biaxial sanity, and phi transitions.
+1. **VALID.RC1 — Rectangular RC PMM benchmark pack** — initial executable pack added.
+   - Keep expanding with published reference examples.
+   - Add stronger biaxial reference points and phi transition benchmarks.
 
 2. **SOLVER.PMM.DC1 — Robust directional PMM capacity check**
    - Strengthen capacity extraction at governing `Pu` and moment direction.

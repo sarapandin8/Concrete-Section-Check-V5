@@ -18,6 +18,7 @@ import pandas as pd
 
 from concrete_pmm_pro.verification.hand_checks import HandCheckSummary, run_independent_hand_check_suite
 from concrete_pmm_pro.verification.pmm_benchmarks import PMMVerificationSummary, run_pmm_verification_suite
+from concrete_pmm_pro.verification.rc_rectangular_benchmarks import RCBenchmarkSummary, run_valid_rc1_benchmark_pack
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -57,6 +58,7 @@ class PMMSolverValidationReport:
     validation_cases: list[ValidationCaseSpec]
     hand_checks: HandCheckSummary
     pmm_checks: PMMVerificationSummary
+    rc_benchmarks: RCBenchmarkSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -74,7 +76,7 @@ class PMMSolverValidationReport:
     def overall_execution_status(self) -> str:
         """Return the worst current status from executable validation runners."""
 
-        statuses = {self.hand_checks.overall_status, self.pmm_checks.overall_status}
+        statuses = {self.hand_checks.overall_status, self.pmm_checks.overall_status, self.rc_benchmarks.overall_status}
         if "FAIL" in statuses:
             return "FAIL"
         if "WARNING" in statuses:
@@ -104,14 +106,26 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             warnings_addressed=("ACI axial cap", "rebar displaced concrete"),
         ),
         ValidationCaseSpec(
+            case_id="VALID.RC1",
+            title="Rectangular RC PMM benchmark pack",
+            category="RC-only PMM",
+            status="implemented",
+            purpose="Validate a simple rectangular RC section against independent axial-cap, uniaxial bending, symmetry, and numeric-schema checks before lowering RC-only prototype warnings.",
+            acceptance="All VALID.RC1 checks pass or remain within documented prototype tolerances; capacity-critical columns contain no NaN/Inf values.",
+            source="Independent rectangular stress-block hand formulas plus PMM solver benchmark runner.",
+            current_location="concrete_pmm_pro/verification/rc_rectangular_benchmarks.py; tests/test_valid_rc1_benchmarks.py",
+            next_action="Add published-code reference examples for uniaxial and biaxial bending before retiring general PMM prototype wording.",
+            warnings_addressed=("PMM prototype", "RC strain compatibility", "NaN capacity fields"),
+        ),
+        ValidationCaseSpec(
             case_id="VALID.RC.MX1",
             title="RC rectangular uniaxial bending spot check",
             category="RC-only PMM",
             status="implemented",
             purpose="Compare a selected rectangular RC neutral-axis state against an independent concrete-block plus rebar-force hand calculation.",
             acceptance="Pn and Mnx are within benchmark tolerance for the selected neutral-axis state.",
-            source="Independent hand spot calculation.",
-            current_location="concrete_pmm_pro/verification/hand_checks.py",
+            source="Independent hand spot calculation and VALID.RC1 benchmark pack.",
+            current_location="concrete_pmm_pro/verification/hand_checks.py; concrete_pmm_pro/verification/rc_rectangular_benchmarks.py",
             next_action="Add at least one published reference example for Mx and My bending.",
             warnings_addressed=("PMM prototype", "strain compatibility"),
         ),
@@ -231,4 +245,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         validation_cases=build_pmm_solver_validation_matrix(),
         hand_checks=run_independent_hand_check_suite(),
         pmm_checks=run_pmm_verification_suite(),
+        rc_benchmarks=run_valid_rc1_benchmark_pack(),
     )

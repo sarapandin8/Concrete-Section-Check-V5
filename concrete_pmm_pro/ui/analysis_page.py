@@ -585,6 +585,12 @@ def _classify_diagnostic_message(message: str) -> str:
     if "prestress stress reached fpu" in text or "reached fpu cap" in text:
         return "Numerical note"
 
+    # Generic active-prestress model descriptions are method limitations,
+    # not input/action warnings by themselves.  Specific governing-region
+    # compression-reversal diagnostics are handled separately below.
+    if "active prestress stress model" in text or "stress uses initial tensile strain" in text:
+        return "Solver limitation note"
+
     # Actionable model-behavior warnings that a reviewer should inspect.
     if (
         "compression reversal" in text
@@ -908,6 +914,29 @@ def _diagnostics_to_dataframe(
     return diagnostics_df.sort_values(["_priority_order", "_order", "Severity", "Source", "Message"]).drop(columns=["_order", "_priority_order"]).reset_index(drop=True)
 
 
+def _compression_reversal_near_governing(df: pd.DataFrame | None, dc_summary: DemandCapacitySummary | None) -> bool:
+    """Return True when compression-reversal metadata occurs near governing Pu.
+
+    Compression reversal can appear at remote PMM failure-surface points.  The
+    commercial UI should escalate it to a review warning only when the event is
+    detected near the governing axial level used by the D/C trace.
+    """
+
+    governing = _governing_dc_result(dc_summary)
+    if governing is None or df is None or df.empty or "prestress_compression_reversal_count" not in df.columns:
+        return False
+    band = _pmm_points_near_governing_pu(df, governing.Pu_N)
+    if band.empty or "prestress_compression_reversal_count" not in band.columns:
+        return False
+    return bool(pd.to_numeric(band["prestress_compression_reversal_count"], errors="coerce").fillna(0).gt(0).any())
+
+
+def _compression_reversal_metadata_present(df: pd.DataFrame | None) -> bool:
+    if df is None or df.empty or "prestress_compression_reversal_count" not in df.columns:
+        return False
+    return bool(pd.to_numeric(df["prestress_compression_reversal_count"], errors="coerce").fillna(0).gt(0).any())
+
+
 def _render_solver_diagnostic_messages(
     *,
     result_has_bonded_prestress: bool,
@@ -940,8 +969,20 @@ def _render_solver_diagnostic_messages(
     if not settings.subtract_rebar_displaced_concrete:
         base_warnings.append("Displaced concrete at ordinary rebar locations is not subtracted. Compression capacity may be overestimated.")
 
+    if _compression_reversal_near_governing(df, dc_summary):
+        base_warnings.append(
+            "Active prestress compression reversal occurs near the governing PMM region; "
+            "tensile strain is clamped to zero in the current model."
+        )
+
     warnings = _deduplicate_diagnostic_messages(base_warnings + list(result_warnings or []) + list(numeric_warnings or []))
-    info_items = _deduplicate_diagnostic_messages(list(result_info or []))
+    info_items = list(result_info or [])
+    if _compression_reversal_metadata_present(df) and not _compression_reversal_near_governing(df, dc_summary):
+        info_items.append(
+            "Active prestress compression reversal occurred only as PMM stress-state metadata away from the governing region; "
+            "not escalated to a global engineering warning."
+        )
+    info_items = _deduplicate_diagnostic_messages(info_items)
 
     counts = _diagnostic_counts(warnings)
 

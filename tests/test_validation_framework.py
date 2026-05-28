@@ -15,7 +15,7 @@ def test_validation_matrix_contains_core_solver_risk_areas() -> None:
     assert "VALID.RC.MX1" in case_ids
     assert "VALID.PS.EPST1" in case_ids
     assert "VALID.PS.PO1" in case_ids
-    assert "VALID.PS.STRESS1" in case_ids
+    assert "SOLVER.PS.COMP1" in case_ids
     assert "VALID.PMM.DC1" in case_ids
     assert "VALID.NUM1" in case_ids
     assert "VALID.WARN1" in case_ids

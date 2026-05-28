@@ -280,7 +280,7 @@ These validation packs do not hide solver warnings.  They provide the evidence n
 - Neutral-axis sweep resolution limitation is listed for engineering review.
 - Cracked section SLS remains future work.
 - Prestress axial cap limitation remains listed: ACI axial cap currently uses RC `Po` only.
-- Prestress compression reversal remains a simplification; negative tensile strain is clamped to zero.
+- Prestress compression reversal remains a simplification; negative tensile strain is clamped to zero, but SOLVER.PS.COMP1 retains reversal events as PMM metadata and escalates them only when detected near the governing region.
 - Unbonded prestress is still ignored with warning.
 - Lightweight concrete Ec warning is available when the normal-weight ACI Ec estimate is used with low density.
 - Ultimate concrete strain `ecu` default/code-basis note is listed for non-ACI/AASHTO workflow review.

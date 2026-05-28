@@ -168,7 +168,7 @@ Implemented or partially implemented items include:
 | ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
 | Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
 | Prestress reached `fpu` cap | Numerical / QA metadata unless governing-related | Active prestress keeps fpu-cap events as PMM point metadata. Background cap events are not standalone engineering warnings; they are escalated only when governing-region checks indicate possible impact. |
-| Prestress compression reversal clamp | Engineering review | Active prestress uses VALID.PS2 region tracing. Passive Pe_eff=0 rows are separated by SOLVER.PS.PASSIVE1 and should not emit active compression-reversal warnings. |
+| Prestress compression reversal clamp | Governing-region review only | Active prestress compression-reversal events are retained as PMM point metadata by SOLVER.PS.COMP1. They are escalated to engineering review only when detected near the governing demand region; background PMM-surface events remain QA metadata. |
 | NaN `eps_t` | Numerical note | Confirm no capacity-critical fields are invalid and document expected compression-controlled missingness. |
 
 ## Recommended next milestones
@@ -213,3 +213,8 @@ Implemented or partially implemented items include:
 Until validation benchmarks are expanded, PMM output should be described as:
 
 > ULS PMM results are engineering-review results based on the current strain compatibility solver and documented assumptions.  Governing D/C may be used for internal review, but final design should be independently checked until the relevant validation cases are completed.
+
+
+### SOLVER.PS.COMP1 compression-reversal warning policy
+
+Active prestress compression reversal is still modeled conservatively by clamping negative total tensile strain to zero.  The event is no longer emitted as a standalone global engineering warning for every PMM surface point.  Instead, `prestress_compression_reversal_count` is retained per PMM point and the Analysis diagnostics escalate it only when the event is detected near the governing Pu region.  This keeps the ULS summary focused on governing-impact items while preserving the QA trail for future prestress stress-model validation.

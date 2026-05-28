@@ -355,3 +355,17 @@ def test_active_prestress_fpu_cap_is_metadata_not_global_warning() -> None:
     assert int(df["prestress_reached_fpu_cap_count"].sum()) > 0
     assert any("retained as PMM stress-state metadata" in item for item in result.info)
     assert not any("reached fpu cap" in warning.lower() for warning in result.warnings)
+
+
+def test_active_prestress_compression_reversal_is_metadata_not_global_warning() -> None:
+    result = run_rc_pmm_solver(
+        _analysis_input_with_model(
+            _bonded_strand(initial_strain=0.0001, fpy_mpa=1580.0, fpu_mpa=1860.0),
+            "bilinear",
+        )
+    )
+    df = pmm_result_to_display_dataframe(result)
+
+    assert int(df["prestress_compression_reversal_count"].sum()) > 0
+    assert any("compression reversal" in item.lower() and "metadata" in item.lower() for item in result.info)
+    assert not any("compression reversal" in warning.lower() for warning in result.warnings)

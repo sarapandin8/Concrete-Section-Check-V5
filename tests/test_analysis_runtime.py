@@ -593,3 +593,63 @@ def test_diagnostic_guidance_distinguishes_background_prestress_surface_warning(
     assert "Background PMM-surface warning" in guidance.loc[0, "Governing Impact"]
     assert guidance.loc[0, "Severity"] == "Numerical note"
     assert guidance.loc[0, "Action Priority"] == "Usually no action"
+
+
+def test_compression_reversal_is_escalated_only_when_near_governing_region() -> None:
+    import pandas as pd
+    from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary
+
+    df = pd.DataFrame(
+        {
+            "phiPn_capped_N": [100_000.0, 1_000_000.0],
+            "prestress_compression_reversal_count": [0, 2],
+        }
+    )
+    dc_summary = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-01",
+                Pu_N=100_000.0,
+                Mux_Nmm=1.0,
+                Muy_Nmm=0.0,
+                Mu_Nmm=1.0,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=12.0,
+                capacity_phiMn_Nmm=10.0,
+                capacity_phiPn_N=100_000.0,
+                dcr=0.1,
+                status="PASS",
+                message="OK",
+                capacity_method="slice_envelope",
+            )
+        ],
+        governing_combo="ULS-01",
+        max_dcr=0.1,
+        warnings=[],
+    )
+
+    assert not analysis_page_module._compression_reversal_near_governing(df, dc_summary)
+
+    near_summary = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-01",
+                Pu_N=1_000_000.0,
+                Mux_Nmm=1.0,
+                Muy_Nmm=0.0,
+                Mu_Nmm=1.0,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=12.0,
+                capacity_phiMn_Nmm=10.0,
+                capacity_phiPn_N=1_000_000.0,
+                dcr=0.1,
+                status="PASS",
+                message="OK",
+                capacity_method="slice_envelope",
+            )
+        ],
+        governing_combo="ULS-01",
+        max_dcr=0.1,
+        warnings=[],
+    )
+    assert analysis_page_module._compression_reversal_near_governing(df, near_summary)

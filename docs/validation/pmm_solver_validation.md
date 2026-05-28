@@ -85,6 +85,27 @@ The pack checks both the direct phi helper and the PMM solver points for a recta
 VALID.RC2 strengthens confidence in `eps_t` interpretation and phi classification before the project attempts prestress-specific phi and stress-model validation.
 
 
+## VALID.PS1 — Bonded prestress PMM benchmark pack
+
+Milestone **VALID.PS1** adds the first executable bonded-prestress PMM benchmark pack under:
+
+- `concrete_pmm_pro/verification/ps_bonded_benchmarks.py`
+- `tests/test_valid_ps1_bonded_prestress.py`
+
+The pack is deliberately benchmark-oriented.  It does not change the solver equation.  It creates deterministic PS-only and RC+PS sections so prestress warnings can be interpreted against evidence rather than hidden from the UI.
+
+| Check | Purpose | Current acceptance |
+|---|---|---|
+| `VALID.PS1.PS_ONLY_EPST` | Confirm a bonded prestress-only section can provide the controlling tensile strain `eps_t` for phi evaluation. | PS-only PMM sweep produces transition or tension-controlled points. |
+| `VALID.PS1.PE_EFF_TO_FPE` | Confirm `Pe_eff` converts to `fpe` and initial strain using only area and `Ep`. | `fpe = Pe_eff / Aps`; no product breaking load is used. |
+| `VALID.PS1.PO_INCLUDES_APS` | Confirm prestress-aware nominal `Po` includes bonded `Aps` with `fpy` and deducts displaced concrete area. | Delta relative to RC-only equals `Aps(fpy - 0.85fc')`. |
+| `VALID.PS1.RCPS_CAPACITY_TREND` | Confirm RC+PS benchmark produces nonzero prestress force and a changed Mx capacity trend relative to RC-only control. | RC+PS envelope changes in the expected direction for the deterministic tendon layout. |
+| `VALID.PS1.STRESS_WARNING_METADATA` | Confirm high-prestress cases expose fpu-cap events in PMM point metadata. | fpu-cap warnings are traceable to PMM points for future governing-impact classification. |
+| `VALID.PS1.NUMERIC_SCHEMA` | Confirm RC+PS capacity-critical PMM result fields are finite. | No NaN/Inf in `Pn`, `Mnx`, `Mny`, `phi`, `phiPn`, `phiMn`, prestress force, or max prestress stress fields. |
+
+VALID.PS1 is not final prestress solver certification.  It is the first executable evidence pack for PS-only and RC+PS behavior.  Published prestressed section examples and stress-state governing-region checks remain required before retiring prestress prototype warnings.
+
+
 Implemented or partially implemented items include:
 
 - RC concentric axial compression / `phiPn` cap checks.
@@ -92,6 +113,7 @@ Implemented or partially implemented items include:
 - RC phi transition and tension-control checks.
 - Symmetry sanity checks for positive/negative `Mnx` and `Mny`.
 - Prestress strain convention spot checks.
+- Bonded prestress PS-only and RC+PS benchmark checks.
 - Prestress-aware `Po` helper tests.
 - Directional D/C and slice-envelope regression coverage.
 - Actionable warning guidance and governing-impact classification coverage.
@@ -121,11 +143,16 @@ Implemented or partially implemented items include:
    - Strengthen capacity extraction at governing `Pu` and moment direction.
    - Reduce fallback usage and document fallback only when needed.
 
-4. **VALID.PS1 — Bonded prestress PMM benchmark pack**
+4. **VALID.PS1 — Bonded prestress PMM benchmark pack** — executable pack added.
    - Validate PS-only and RC+PS behavior.
-   - Validate `fpe`, `Pe_eff`, `eps_t`, `fpu` cap, and compression reversal treatment.
+   - Validate `fpe`, `Pe_eff`, `eps_t`, `fpu` cap metadata, and numeric schema.
+   - Add published prestressed reference examples before lowering prestress prototype wording.
 
-5. **UI.WARN.POLICY1 — Commercial warning policy**
+5. **VALID.PS2 — Prestress stress-state governing-region benchmark**
+   - Classify `fpu` cap and compression reversal events against the governing demand region.
+   - Distinguish background PMM-surface stress events from result-affecting warnings.
+
+6. **UI.WARN.POLICY1 — Commercial warning policy**
    - Move validated method assumptions into report notes/manuals.
    - Show only result-affecting warnings in the main ULS summary.
 

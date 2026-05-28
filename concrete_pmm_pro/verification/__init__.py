@@ -2,6 +2,7 @@
 
 from concrete_pmm_pro.verification.rc_rectangular_benchmarks import RCBenchmarkSummary, run_valid_rc1_benchmark_pack
 from concrete_pmm_pro.verification.rc_phi_transition_benchmarks import run_valid_rc2_phi_transition_benchmark_pack
+from concrete_pmm_pro.verification.ps_bonded_benchmarks import PSBenchmarkSummary, run_valid_ps1_bonded_prestress_benchmark_pack
 from concrete_pmm_pro.verification.validation_framework import (
     PMMSolverValidationReport,
     ValidationCaseSpec,
@@ -12,11 +13,13 @@ from concrete_pmm_pro.verification.validation_framework import (
 
 __all__ = [
     "PMMSolverValidationReport",
+    "PSBenchmarkSummary",
     "RCBenchmarkSummary",
     "ValidationCaseSpec",
     "build_pmm_solver_validation_matrix",
     "run_pmm_solver_validation_report",
     "run_valid_rc1_benchmark_pack",
     "run_valid_rc2_phi_transition_benchmark_pack",
+    "run_valid_ps1_bonded_prestress_benchmark_pack",
     "validation_matrix_to_dataframe",
 ]

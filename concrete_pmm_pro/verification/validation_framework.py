@@ -20,6 +20,7 @@ from concrete_pmm_pro.verification.hand_checks import HandCheckSummary, run_inde
 from concrete_pmm_pro.verification.pmm_benchmarks import PMMVerificationSummary, run_pmm_verification_suite
 from concrete_pmm_pro.verification.rc_rectangular_benchmarks import RCBenchmarkSummary, run_valid_rc1_benchmark_pack
 from concrete_pmm_pro.verification.rc_phi_transition_benchmarks import run_valid_rc2_phi_transition_benchmark_pack
+from concrete_pmm_pro.verification.ps_bonded_benchmarks import PSBenchmarkSummary, run_valid_ps1_bonded_prestress_benchmark_pack
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -61,6 +62,7 @@ class PMMSolverValidationReport:
     pmm_checks: PMMVerificationSummary
     rc_benchmarks: RCBenchmarkSummary
     rc_phi_transition: RCBenchmarkSummary
+    ps_benchmarks: PSBenchmarkSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -83,6 +85,7 @@ class PMMSolverValidationReport:
             self.pmm_checks.overall_status,
             self.rc_benchmarks.overall_status,
             self.rc_phi_transition.overall_status,
+            self.ps_benchmarks.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -186,6 +189,18 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             warnings_addressed=("ACI axial cap", "bonded prestress Aps"),
         ),
         ValidationCaseSpec(
+            case_id="VALID.PS1",
+            title="Bonded prestress PMM benchmark pack",
+            category="Prestress PMM",
+            status="implemented",
+            purpose="Validate PS-only and RC+PS benchmark behavior before reducing bonded-prestress PMM warning severity.",
+            acceptance="PS-only eps_t tracking, Pe_eff-to-fpe conversion, prestress-aware Po, RC+PS capacity trend, stress-warning metadata, and numeric-schema checks run without failures.",
+            source="Deterministic bonded-prestress benchmark runner and PMM solver outputs.",
+            current_location="concrete_pmm_pro/verification/ps_bonded_benchmarks.py; tests/test_valid_ps1_bonded_prestress.py",
+            next_action="Add published prestressed section reference examples and governing-region stress-state checks before lowering prestress prototype wording.",
+            warnings_addressed=("bonded prestress", "fpu cap", "compression reversal", "prestress Po", "prestress eps_t"),
+        ),
+        ValidationCaseSpec(
             case_id="VALID.PS.STRESS1",
             title="Prestress fpu cap and compression reversal classification",
             category="Prestress PMM",
@@ -267,4 +282,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         pmm_checks=run_pmm_verification_suite(),
         rc_benchmarks=run_valid_rc1_benchmark_pack(),
         rc_phi_transition=run_valid_rc2_phi_transition_benchmark_pack(),
+        ps_benchmarks=run_valid_ps1_bonded_prestress_benchmark_pack(),
     )

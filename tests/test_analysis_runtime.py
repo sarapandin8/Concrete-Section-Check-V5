@@ -475,3 +475,120 @@ def test_diagnostics_dataframe_contains_actionable_columns() -> None:
         "Where to Check",
     }
     assert expected_columns.issubset(set(df.columns))
+
+
+def test_diagnostic_guidance_reports_no_direct_eps_t_governing_impact() -> None:
+    from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary, PASS
+    from concrete_pmm_pro.ui.analysis_page import _diagnostics_to_dataframe
+
+    dc_summary = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-01",
+                Pu_N=1_000_000,
+                Mux_Nmm=100_000_000,
+                Muy_Nmm=0.0,
+                Mu_Nmm=100_000_000,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=None,
+                capacity_phiMn_Nmm=250_000_000,
+                capacity_phiPn_N=1_000_000,
+                dcr=0.4,
+                status=PASS,
+                message="Checked using PMM slice envelope at Pu.",
+                capacity_method="slice_envelope",
+            )
+        ],
+        governing_combo="ULS-01",
+        max_dcr=0.4,
+        overall_status=PASS,
+    )
+
+    guidance = _diagnostics_to_dataframe(
+        ["NaN values detected in PMM dataframe columns: eps_t."],
+        dc_summary=dc_summary,
+    )
+
+    assert guidance.loc[0, "Severity"] == "Numerical note"
+    assert "No direct governing impact" in guidance.loc[0, "Governing Impact"]
+    assert guidance.loc[0, "Action Priority"] == "Usually no action"
+
+
+def test_diagnostic_guidance_flags_governing_fallback_as_directly_relevant() -> None:
+    from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary, PASS
+    from concrete_pmm_pro.ui.analysis_page import _diagnostics_to_dataframe
+
+    dc_summary = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-02",
+                Pu_N=1_500_000,
+                Mux_Nmm=120_000_000,
+                Muy_Nmm=50_000_000,
+                Mu_Nmm=130_000_000,
+                moment_angle_rad=0.1,
+                capacity_Mn_Nmm=None,
+                capacity_phiMn_Nmm=300_000_000,
+                capacity_phiPn_N=1_500_000,
+                dcr=0.43,
+                status=PASS,
+                message="Checked using interpolated slice fallback at Pu.",
+                capacity_method="interpolated_slice",
+                used_fallback=True,
+                warning_count=2,
+            )
+        ],
+        governing_combo="ULS-02",
+        max_dcr=0.43,
+        overall_status=PASS,
+    )
+
+    guidance = _diagnostics_to_dataframe(
+        ["Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed."],
+        dc_summary=dc_summary,
+    )
+
+    assert guidance.loc[0, "Severity"] == "Engineering review warning"
+    assert "Directly relevant" in guidance.loc[0, "Governing Impact"]
+    assert guidance.loc[0, "Action Priority"] == "Check before relying on governing result"
+
+
+def test_diagnostic_guidance_distinguishes_background_prestress_surface_warning() -> None:
+    from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary, PASS
+    from concrete_pmm_pro.ui.analysis_page import _diagnostics_to_dataframe
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "phiPn_capped_N": [900_000.0, 1_000_000.0, 1_100_000.0],
+            "prestress_reached_fpu_cap_count": [0, 0, 0],
+            "prestress_stress_warning_count": [0, 0, 0],
+        }
+    )
+    dc_summary = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-03",
+                Pu_N=1_000_000,
+                Mux_Nmm=120_000_000,
+                Muy_Nmm=0.0,
+                Mu_Nmm=120_000_000,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=None,
+                capacity_phiMn_Nmm=300_000_000,
+                capacity_phiPn_N=1_000_000,
+                dcr=0.4,
+                status=PASS,
+                message="Checked using PMM slice envelope at Pu.",
+                capacity_method="slice_envelope",
+            )
+        ],
+        governing_combo="ULS-03",
+        max_dcr=0.4,
+        overall_status=PASS,
+    )
+
+    guidance = _diagnostics_to_dataframe(["PS1: Prestress stress reached fpu cap."], df=df, dc_summary=dc_summary)
+
+    assert "Background PMM-surface warning" in guidance.loc[0, "Governing Impact"]
+    assert guidance.loc[0, "Action Priority"] == "Review for final design"

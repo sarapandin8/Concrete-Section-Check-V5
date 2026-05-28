@@ -638,7 +638,134 @@ def _diagnostic_source(message: str) -> str:
     return "General QA"
 
 
-def _diagnostic_guidance(message: str) -> dict[str, str]:
+
+def _governing_dc_result(dc_summary: DemandCapacitySummary | None):
+    """Return the governing demand/capacity row when available."""
+
+    if dc_summary is None or dc_summary.governing_combo is None:
+        return None
+    for item in dc_summary.results:
+        if item.combo_name == dc_summary.governing_combo:
+            return item
+    return None
+
+
+def _pmm_points_near_governing_pu(df: pd.DataFrame | None, governing_pu_N: float | None) -> pd.DataFrame:
+    """Return a small PMM axial band near the governing Pu for warning-impact review.
+
+    This is intentionally a UI/QA diagnostic. It does not change the D/C solver.
+    The goal is to separate warnings that occur anywhere on the PMM surface from
+    warnings that occur near the axial level used by the governing ULS check.
+    """
+
+    if df is None or df.empty or governing_pu_N is None:
+        return pd.DataFrame()
+    p_column = "phiPn_capped_N" if "phiPn_capped_N" in df.columns else "phiPn_N"
+    if p_column not in df.columns:
+        return pd.DataFrame()
+    working = df.copy()
+    working[p_column] = pd.to_numeric(working[p_column], errors="coerce")
+    working = working[working[p_column].notna()]
+    if working.empty:
+        return pd.DataFrame()
+
+    p_range = float(working[p_column].max() - working[p_column].min())
+    tolerance = max(50_000.0, 0.025 * p_range) if p_range > 0 else 50_000.0
+    band = working[(working[p_column] - float(governing_pu_N)).abs() <= tolerance]
+    if not band.empty:
+        return band
+
+    # If no point falls inside the band, return the nearest few points so the
+    # reviewer still gets an honest impact classification instead of silence.
+    return working.assign(_p_dist=(working[p_column] - float(governing_pu_N)).abs()).nsmallest(12, "_p_dist")
+
+
+def _prestress_warning_governing_impact(message: str, df: pd.DataFrame | None, dc_summary: DemandCapacitySummary | None) -> str:
+    """Classify whether a prestress-model warning appears near the governing Pu."""
+
+    governing = _governing_dc_result(dc_summary)
+    if governing is None:
+        return "Potential if near governing case — no governing ULS case is available in this context."
+    band = _pmm_points_near_governing_pu(df, governing.Pu_N)
+    if band.empty:
+        return "Unknown — PMM points near the governing Pu could not be identified."
+
+    text = message.casefold()
+    if "fpu" in text or "cap" in text:
+        column = "prestress_reached_fpu_cap_count"
+        if column in band.columns and pd.to_numeric(band[column], errors="coerce").fillna(0).gt(0).any():
+            return f"Potential governing impact — fpu cap occurs in PMM points near governing case {governing.combo_name}."
+        return f"Background PMM-surface warning — fpu cap was not detected near governing case {governing.combo_name}."
+
+    if "compression reversal" in text or "tensile strain was clamped" in text:
+        column = "prestress_stress_warning_count"
+        if column in band.columns and pd.to_numeric(band[column], errors="coerce").fillna(0).gt(0).any():
+            return f"Potential governing impact — prestress stress warnings occur near governing case {governing.combo_name}."
+        return f"Background PMM-surface warning — not detected near governing case {governing.combo_name}."
+
+    return "Review with governing PMM trace."
+
+
+def _diagnostic_governing_impact(
+    message: str,
+    *,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
+) -> str:
+    """Return a practical impact classification for the current governing case."""
+
+    text = message.casefold()
+    governing = _governing_dc_result(dc_summary)
+
+    if "nan" in text and "eps_t" in text:
+        if governing is not None and governing.capacity_phiMn_Nmm is not None and governing.dcr is not None:
+            return f"No direct governing impact detected — governing case {governing.combo_name} has computed capacity and D/C."
+        return "Unknown — governing D/C is not available."
+
+    if "directional moment" in text or "fallback" in text or "falls back" in text:
+        if governing is None:
+            return "Unknown — no governing ULS case is available."
+        if governing.used_fallback or int(getattr(governing, "warning_count", 0) or 0) > 0:
+            return f"Directly relevant — governing case {governing.combo_name} uses fallback or has D/C method warnings."
+        return f"No direct governing impact detected — governing case {governing.combo_name} used {governing.capacity_method or 'the primary capacity method'}."
+
+    if "prestress stress reached fpu" in text or "reached fpu cap" in text or "compression reversal" in text or "tensile strain was clamped" in text:
+        return _prestress_warning_governing_impact(message, df, dc_summary)
+
+    if "axial cap" in text or "nominal po" in text:
+        if governing is None:
+            return "Global limitation — review compression-controlled cases."
+        return f"Potential only for high-compression cases — governing Pu = {N_to_kN(governing.Pu_N):,.1f} kN."
+
+    if "prototype" in text or "future work" in text or "independent engineering verification" in text:
+        return "Global solver-validation limitation — no specific input correction is implied."
+
+    if "sls" in text or "serviceability" in text:
+        return "Does not affect ULS PMM D/C."
+
+    return "Review required — see recommended action."
+
+
+def _diagnostic_priority(impact: str, severity: str) -> str:
+    """Convert severity + governing impact into a user action priority."""
+
+    text = impact.casefold()
+    if "directly relevant" in text or "potential governing impact" in text:
+        return "Check before relying on governing result"
+    if "unknown" in text:
+        return "Review before final design"
+    if severity == "Engineering review warning":
+        return "Review for final design"
+    if severity == "Numerical note":
+        return "Usually no action"
+    return "QA note"
+
+def _diagnostic_guidance(
+    message: str,
+    *,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
+) -> dict[str, str]:
     """Explain what a diagnostic means and how a user should respond.
 
     The solver messages are intentionally conservative, but raw warnings are
@@ -658,7 +785,8 @@ def _diagnostic_guidance(message: str) -> dict[str, str]:
         "Meaning": "Solver or QA diagnostic retained for engineering review.",
         "Possible Cause": "Review the related input and calculation diagnostics.",
         "Recommended Action": "Open the related diagnostics panel and verify the governing case before final design use.",
-        "Governing Impact": "Review required",
+        "Governing Impact": _diagnostic_governing_impact(message, df=df, dc_summary=dc_summary),
+        "Action Priority": "Review required",
         "Where to Check": "Analysis > Diagnostics / QA",
     }
 
@@ -743,16 +871,32 @@ def _diagnostic_guidance(message: str) -> dict[str, str]:
             }
         )
 
+    # Recompute governing impact after the rule-specific message has been assigned.
+    guidance["Governing Impact"] = _diagnostic_governing_impact(message, df=df, dc_summary=dc_summary)
+    guidance["Action Priority"] = _diagnostic_priority(guidance["Governing Impact"], guidance["Severity"])
     return guidance
 
 
-def _diagnostics_to_dataframe(messages: list[str]) -> pd.DataFrame:
-    df = pd.DataFrame([_diagnostic_guidance(message) for message in messages])
-    if df.empty:
-        return df
+def _diagnostics_to_dataframe(
+    messages: list[str],
+    *,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
+) -> pd.DataFrame:
+    diagnostics_df = pd.DataFrame([_diagnostic_guidance(message, df=df, dc_summary=dc_summary) for message in messages])
+    if diagnostics_df.empty:
+        return diagnostics_df
     order = {"Engineering review warning": 0, "Solver limitation note": 1, "Numerical note": 2}
-    df["_order"] = df["Severity"].map(order).fillna(99)
-    return df.sort_values(["_order", "Severity", "Source", "Message"]).drop(columns=["_order"]).reset_index(drop=True)
+    priority_order = {
+        "Check before relying on governing result": 0,
+        "Review before final design": 1,
+        "Review for final design": 2,
+        "QA note": 3,
+        "Usually no action": 4,
+    }
+    diagnostics_df["_order"] = diagnostics_df["Severity"].map(order).fillna(99)
+    diagnostics_df["_priority_order"] = diagnostics_df["Action Priority"].map(priority_order).fillna(99)
+    return diagnostics_df.sort_values(["_priority_order", "_order", "Severity", "Source", "Message"]).drop(columns=["_order", "_priority_order"]).reset_index(drop=True)
 
 
 def _render_solver_diagnostic_messages(
@@ -763,6 +907,8 @@ def _render_solver_diagnostic_messages(
     result_info: list[str],
     numeric_warnings: list[str],
     rebar_displacement_subtracted: bool,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
 ) -> None:
     """Render deduplicated solver messages as compact diagnostics.
 
@@ -797,8 +943,8 @@ def _render_solver_diagnostic_messages(
     cols[3].metric("Solver info", f"{len(info_items):,}")
 
     if warnings:
-        st.caption("Deduplicated solver messages are grouped by severity with meaning, likely cause, recommended action, and where to check.")
-        st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
+        st.caption("Deduplicated solver messages are grouped by severity, action priority, meaning, likely cause, recommended action, governing impact, and where to check.")
+        st.dataframe(_diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary), use_container_width=True, hide_index=True)
     else:
         st.success("No solver warnings were reported.")
 
@@ -848,9 +994,14 @@ def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
     return _deduplicate_diagnostic_messages(collected)
 
 
-def _render_engineering_warnings(warnings: list[str]) -> None:
+def _render_engineering_warnings(
+    warnings: list[str],
+    *,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
+) -> None:
     st.subheader("Actionable Engineering Review Guidance")
-    st.info("Each diagnostic is translated into meaning, possible cause, recommended action, governing impact, and where to check. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
+    st.info("Each diagnostic is translated into meaning, possible cause, recommended action, governing impact, action priority, and where to check. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
     if not warnings:
         st.success("No engineering review messages are currently reported.")
         return
@@ -860,7 +1011,13 @@ def _render_engineering_warnings(warnings: list[str]) -> None:
     cols[0].metric("Review warnings", f"{counts.get('Engineering review warning', 0):,}")
     cols[1].metric("Limitation notes", f"{counts.get('Solver limitation note', 0):,}")
     cols[2].metric("Numerical notes", f"{counts.get('Numerical note', 0):,}")
-    st.dataframe(_diagnostics_to_dataframe(warnings), use_container_width=True, hide_index=True)
+    guidance_df = _diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary)
+    priority_counts = guidance_df["Action Priority"].value_counts().to_dict() if not guidance_df.empty and "Action Priority" in guidance_df else {}
+    priority_cols = st.columns(3)
+    priority_cols[0].metric("Governing-related", f"{priority_counts.get('Check before relying on governing result', 0):,}")
+    priority_cols[1].metric("Review before final", f"{priority_counts.get('Review before final design', 0) + priority_counts.get('Review for final design', 0):,}")
+    priority_cols[2].metric("QA / usually no action", f"{priority_counts.get('QA note', 0) + priority_counts.get('Usually no action', 0):,}")
+    st.dataframe(guidance_df, use_container_width=True, hide_index=True)
 
 
 def _render_prestress_verification_summary(
@@ -1180,6 +1337,8 @@ def _render_input_summary() -> None:
                     rebar_displacement_subtracted=bool(
                         result.points and any(point.rebar_displaced_concrete_subtracted_N > 0.0 for point in result.points)
                     ),
+                    df=df,
+                    dc_summary=dc_summary,
                 )
                 cols = st.columns(4)
                 cols[0].metric("PMM points", f"{summary['point_count']:,}")
@@ -1268,7 +1427,7 @@ def _render_input_summary() -> None:
                         f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
                     )
             with st.expander("Engineering warnings / limitations", expanded=False):
-                _render_engineering_warnings(engineering_warnings)
+                _render_engineering_warnings(engineering_warnings, df=df, dc_summary=dc_summary)
 
             unbonded_ignored_count = int(df["unbonded_prestress_ignored_count"].max()) if "unbonded_prestress_ignored_count" in df else 0
             _render_pmm_slice_dashboard(
@@ -1969,7 +2128,7 @@ def _render_pmm_slice_dashboard(
         st.subheader("Diagnostics / QA")
         st.caption("Detailed method information, warnings, raw demand points, and exports are kept here to protect the main result view from clutter.")
         if dashboard_warnings:
-            _render_engineering_warnings(dashboard_warnings)
+            _render_engineering_warnings(dashboard_warnings, df=df, dc_summary=dc_summary)
         with st.expander("Active ULS demand points", expanded=False):
             if demand_df.empty:
                 st.info("No active ULS demand points are available.")

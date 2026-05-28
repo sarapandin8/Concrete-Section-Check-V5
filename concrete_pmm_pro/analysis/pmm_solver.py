@@ -13,12 +13,16 @@ Sign convention:
 - Internal units are mm, MPa (= N/mm^2), N, and N-mm.
 - Concrete and steel compression forces are positive.
 - Steel and bonded prestress tension forces are negative.
-- Prestress stress is handled as a tensile stress magnitude. In Milestone 3.1,
+- Active prestress stress is handled as a tensile stress magnitude.
   eps_ps,total = eps_pe - eps_section because positive section compression
   reduces tendon tensile strain and section tension increases it. The tensile
   strain is clamped from 0 before stress calculation, capped at fpu, then
   converted to a tension-negative section force. Compression reversal is not
-  modeled yet.
+  modeled yet for active prestress.
+- Passive prestressing steel rows (Pe_eff/initial stress/initial strain = 0)
+  are treated as bonded high-strength steel using ordinary strain
+  compatibility with symmetric tension/compression force signs. They do not
+  use active-prestress compression-reversal warnings.
 - x-axis is positive to the right; y-axis is positive upward.
 - Mnx is nominal moment about x: sum(F * (y - y_ref)).
 - Mny is nominal moment about y: sum(F * (x - x_ref)).
@@ -111,6 +115,22 @@ def _prestress_phi_yield_reference_mpa(element: PrestressElement) -> float:
     return 1670.0
 
 
+def _has_active_prestress(element: PrestressElement) -> bool:
+    """Return True when a bonded prestress row has nonzero initial prestress.
+
+    Passive mode in the UI intentionally creates bonded high-strength steel
+    rows with Pe_eff/fpe/initial_strain equal to zero. Those rows should still
+    contribute to PMM strength through strain compatibility, but they should
+    not trigger active-prestress model warnings such as compression reversal.
+    """
+
+    if element.initial_strain is not None and abs(float(element.initial_strain)) > 1.0e-12:
+        return True
+    if element.initial_stress_mpa is not None and float(element.initial_stress_mpa) > 1.0e-9:
+        return True
+    return float(element.pe_eff_n or 0.0) > 1.0e-6
+
+
 def _initial_prestress_strain(element: PrestressElement, warnings: list[str]) -> float:
     if element.initial_strain is not None:
         return float(element.initial_strain)
@@ -118,11 +138,31 @@ def _initial_prestress_strain(element: PrestressElement, warnings: list[str]) ->
         return element.initial_stress_mpa / element.ep_mpa
     if element.pe_eff_n > 0.0 and element.area_mm2 > 0.0:
         return (element.pe_eff_n / element.area_mm2) / element.ep_mpa
-    warnings.append(
-        f"Prestress element {_element_label(element)} has no initial strain, initial stress, or Pe_eff; "
-        "it is treated as passive high-strength bonded steel."
-    )
     return 0.0
+
+
+def _passive_prestress_strength_reference_mpa(element: PrestressElement) -> float:
+    """Return a symmetric passive-steel stress cap for prestressing steel rows."""
+
+    if element.fpy_mpa is not None:
+        return float(element.fpy_mpa)
+    if element.fpu_mpa is not None:
+        return 0.9 * float(element.fpu_mpa)
+    # Last-resort value is only used for incomplete custom rows; validation
+    # should normally ensure fpy/fpu are present.
+    return 1670.0
+
+
+def passive_prestress_steel_stress_mpa(element: PrestressElement, section_strain: float) -> float:
+    """Return signed passive high-strength steel stress in MPa.
+
+    Section strain follows the app convention: compression positive, tension
+    negative. Passive prestressing steel follows the same sign convention as
+    ordinary rebar, capped symmetrically at a proof/yield reference.
+    """
+
+    cap = _passive_prestress_strength_reference_mpa(element)
+    return _clamp(element.ep_mpa * section_strain, -cap, cap)
 
 
 def prestress_tensile_stress_mpa(
@@ -176,19 +216,33 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
     if settings.include_prestress:
         bonded_prestress_elements = [element for element in all_prestress_elements if element.bonded]
         unbonded_prestress_elements = [element for element in all_prestress_elements if not element.bonded]
-        if bonded_prestress_elements:
+        active_prestress_elements = [element for element in bonded_prestress_elements if _has_active_prestress(element)]
+        passive_prestress_elements = [element for element in bonded_prestress_elements if not _has_active_prestress(element)]
+        if active_prestress_elements:
             warnings.append(BONDED_PRESTRESS_PROTOTYPE_WARNING)
             warnings.append(
-                f"Prestress stress model: {prestress_stress_model}. Stress uses initial tensile strain minus "
+                f"Active prestress stress model: {prestress_stress_model}. Stress uses initial tensile strain minus "
                 "section strain, is clamped from 0, capped at fpu, and converted to a tension-negative section force."
             )
             if prestress_stress_model == "bilinear":
-                warnings.append("Bilinear prestress model uses fpy/proof stress when available with a prototype post-yield slope.")
-            for element in bonded_prestress_elements:
+                warnings.append("Bilinear active-prestress model uses fpy/proof stress when available with a prototype post-yield slope.")
+        if passive_prestress_elements:
+            info.append(
+                "Passive bonded prestressing steel is included as high-strength steel using strain compatibility; "
+                "no initial prestress force is applied."
+            )
+        if bonded_prestress_elements:
+            for element in active_prestress_elements:
                 if element.fpu_mpa is None:
-                    warnings.append(f"Prestress element {_element_label(element)} is missing fpu_mpa and is skipped in stress calculation.")
+                    warnings.append(f"Active prestress element {_element_label(element)} is missing fpu_mpa and is skipped in stress calculation.")
                 if element.steel_type == "prestressing_bar" and element.fpy_mpa is None:
                     warnings.append(f"Prestressing_bar / PT Bar {_element_label(element)} is missing fpy/proof stress.")
+            for element in passive_prestress_elements:
+                if element.fpy_mpa is None and element.fpu_mpa is None:
+                    warnings.append(
+                        f"Passive prestressing steel {_element_label(element)} is missing fpy/fpu; "
+                        "using a default high-strength stress cap for PMM review."
+                    )
             warnings.append(RC_AXIAL_CAP_LIMITATION_WARNING)
         if unbonded_prestress_elements:
             warnings.append(UNBONDED_PRESTRESS_IGNORED_WARNING)
@@ -232,9 +286,12 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
     info.append(f"RC PMM prototype using {len(rebars)} ordinary rebar object(s).")
     bonded_prestress_count = sum(element.count for element in bonded_prestress_elements)
     unbonded_prestress_ignored_count = sum(element.count for element in unbonded_prestress_elements)
+    active_bonded_prestress_count = sum(element.count for element in bonded_prestress_elements if _has_active_prestress(element))
+    passive_bonded_prestress_count = bonded_prestress_count - active_bonded_prestress_count
     total_prestress_pe_eff = sum(element.pe_eff_n * element.count for element in bonded_prestress_elements)
     total_prestress_area = sum(element.area_mm2 * element.count for element in bonded_prestress_elements)
     info.append(f"Bonded prestress included: {bonded_prestress_count} element count(s).")
+    info.append(f"Active prestress count: {active_bonded_prestress_count}; passive prestressing steel count: {passive_bonded_prestress_count}.")
     info.append(f"Unbonded prestress ignored: {unbonded_prestress_ignored_count} element count(s).")
     info.append(f"Included prestress Aps = {total_prestress_area:,.1f} mm^2; Pe_eff = {total_prestress_pe_eff:,.1f} N.")
     info.append(f"Strength load cases stored for future checks: {strength_load_count}.")
@@ -301,32 +358,38 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
             point_fpu_cap_count = 0
             point_compression_reversal_count = 0
             for element in bonded_prestress_elements:
-                if element.fpu_mpa is None:
-                    continue
                 eps_section = steel_strain_at_point(element.x_mm, element.y_mm, frame, c_mm, ecu)
-                total_tensile_strain = prestress_total_tensile_strain(prestress_initial_strains[element.id], eps_section)
-                try:
-                    fps, stress_warnings = prestress_stress_mpa(
-                        total_tensile_strain,
-                        element.ep_mpa,
-                        element.fpu_mpa,
-                        element.fpy_mpa,
-                        prestress_stress_model,
-                    )
-                except ValueError as exc:
-                    warnings.append(f"Prestress element {_element_label(element)} stress calculation error: {exc}")
-                    fps = 0.0
-                    stress_warnings = []
-                if stress_warnings:
-                    point_stress_warnings.extend(stress_warnings)
-                    for stress_warning in stress_warnings:
-                        warnings.append(f"{_element_label(element)}: {stress_warning}")
-                if PRESTRESS_FPU_CAP_WARNING in stress_warnings:
-                    point_fpu_cap_count += element.count
-                if PRESTRESS_COMPRESSION_REVERSAL_WARNING in stress_warnings:
-                    point_compression_reversal_count += element.count
-                point_max_prestress_stress = max(point_max_prestress_stress, fps)
-                force = -element.area_mm2 * element.count * fps
+                if _has_active_prestress(element):
+                    if element.fpu_mpa is None:
+                        continue
+                    total_tensile_strain = prestress_total_tensile_strain(prestress_initial_strains[element.id], eps_section)
+                    try:
+                        fps, stress_warnings = prestress_stress_mpa(
+                            total_tensile_strain,
+                            element.ep_mpa,
+                            element.fpu_mpa,
+                            element.fpy_mpa,
+                            prestress_stress_model,
+                        )
+                    except ValueError as exc:
+                        warnings.append(f"Active prestress element {_element_label(element)} stress calculation error: {exc}")
+                        fps = 0.0
+                        stress_warnings = []
+                    if stress_warnings:
+                        point_stress_warnings.extend(stress_warnings)
+                        for stress_warning in stress_warnings:
+                            warnings.append(f"{_element_label(element)}: {stress_warning}")
+                    if PRESTRESS_FPU_CAP_WARNING in stress_warnings:
+                        point_fpu_cap_count += element.count
+                    if PRESTRESS_COMPRESSION_REVERSAL_WARNING in stress_warnings:
+                        point_compression_reversal_count += element.count
+                    point_max_prestress_stress = max(point_max_prestress_stress, fps)
+                    force = -element.area_mm2 * element.count * fps
+                else:
+                    fs_passive = passive_prestress_steel_stress_mpa(element, eps_section)
+                    point_max_prestress_stress = max(point_max_prestress_stress, abs(fs_passive))
+                    force = element.area_mm2 * element.count * fs_passive
+
                 prestress_force += force
                 Pn += force
                 Mnx += force * (element.y_mm - y_ref)
@@ -366,8 +429,10 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
                     prestress_force_N=prestress_force,
                     prestress_count=bonded_prestress_count,
                     bonded_prestress_count=bonded_prestress_count,
+                    active_prestress_count=active_bonded_prestress_count,
+                    passive_prestress_count=passive_bonded_prestress_count,
                     unbonded_prestress_ignored_count=unbonded_prestress_ignored_count,
-                    prestress_stress_model=prestress_stress_model if bonded_prestress_elements else None,
+                    prestress_stress_model=prestress_stress_model if active_bonded_prestress_count else ("passive_high_strength_steel" if passive_bonded_prestress_count else None),
                     prestress_stress_warning_count=len(point_stress_warnings),
                     max_prestress_stress_MPa=point_max_prestress_stress,
                     prestress_reached_fpu_cap_count=point_fpu_cap_count,
@@ -381,7 +446,7 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
     if any(PRESTRESS_LINEAR_CAP_FALLBACK_WARNING in warning for warning in warnings):
         info.append("Prestress linear_cap fallback occurred for at least one PMM point.")
     if any(PRESTRESS_COMPRESSION_REVERSAL_WARNING in warning for warning in warnings):
-        info.append("Prestress compression reversal clamp occurred for at least one PMM point.")
+        info.append("Active prestress compression reversal clamp occurred for at least one PMM point.")
     if any(PRESTRESS_FPU_CAP_WARNING in warning for warning in warnings):
-        info.append("Prestress stress reached fpu cap for at least one PMM point.")
+        info.append("Active prestress stress reached fpu cap for at least one PMM point.")
     return PMMSolverResult(points=points, warnings=deduplicate_warnings(warnings), info=info)

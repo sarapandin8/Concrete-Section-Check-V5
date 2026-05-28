@@ -32,6 +32,8 @@ class PMMPoint(BaseModel):
     prestress_force_N: float = 0.0
     prestress_count: int = 0
     bonded_prestress_count: int = 0
+    active_prestress_count: int = 0
+    passive_prestress_count: int = 0
     unbonded_prestress_ignored_count: int = 0
     prestress_stress_model: str | None = None
     prestress_stress_warning_count: int = 0
@@ -75,6 +77,8 @@ def pmm_result_to_display_dataframe(result: PMMSolverResult) -> pd.DataFrame:
             "prestress_force_kN",
             "prestress_count",
             "bonded_prestress_count",
+            "active_prestress_count",
+            "passive_prestress_count",
             "unbonded_prestress_ignored_count",
             "prestress_stress_model",
             "prestress_stress_warning_count",
@@ -106,6 +110,10 @@ def pmm_result_to_display_dataframe(result: PMMSolverResult) -> pd.DataFrame:
         df["prestress_count"] = 0
     if "bonded_prestress_count" not in df.columns:
         df["bonded_prestress_count"] = 0
+    if "active_prestress_count" not in df.columns:
+        df["active_prestress_count"] = df["bonded_prestress_count"]
+    if "passive_prestress_count" not in df.columns:
+        df["passive_prestress_count"] = 0
     if "unbonded_prestress_ignored_count" not in df.columns:
         df["unbonded_prestress_ignored_count"] = 0
     if "prestress_stress_model" not in df.columns:

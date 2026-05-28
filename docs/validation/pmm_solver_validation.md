@@ -125,6 +125,26 @@ Added files:
 
 VALID.PS2 is the first step toward reducing prestress warnings based on evidence.  It does not remove fpu-cap or compression-reversal warnings; it gives the app a testable basis to decide whether those warnings are governing-related or background PMM-surface events.
 
+## SOLVER.PS.PASSIVE1 — Passive prestressing steel separation
+
+Milestone **SOLVER.PS.PASSIVE1** separates passive prestressing-steel rows from active prestress rows.
+
+A prestress row is treated as **active prestress** only when it has nonzero `Pe_eff`, `initial_stress_mpa`, or `initial_strain`.  Rows with `Pe_eff = 0`, `fpe = 0`, and no initial strain/stress are treated as **passive bonded high-strength steel**.  This distinction matters because passive PT bars/strands should still contribute to PMM strength through strain compatibility, but they should not trigger active-prestress stress warnings such as compression reversal or fpu-cap warnings.
+
+Added files/checks:
+
+- `concrete_pmm_pro/verification/ps_passive_benchmarks.py`
+- `tests/test_valid_ps_passive1.py`
+
+| Check | Purpose | Current acceptance |
+|---|---|---|
+| `SOLVER.PS.PASSIVE1.NO_ACTIVE_WARNINGS` | Confirm passive PS rows do not emit active-prestress compression-reversal, fpu-cap, or active stress-model warnings. | No active-prestress warnings are emitted for Pe_eff = 0 passive rows. |
+| `SOLVER.PS.PASSIVE1.SIGNED_FORCE` | Confirm passive PS rows contribute signed strain-compatible steel force. | PMM sweep includes both tension and compression force states for the passive row. |
+| `SOLVER.PS.PASSIVE1.EPST_PHI` | Confirm passive PS rows can control tensile strain for phi evaluation. | At least one PMM point has `eps_t`, with transition or tension-controlled behavior available. |
+| `SOLVER.PS.PASSIVE1.METADATA` | Confirm passive PS rows retain display/report metadata without active event counts. | Prestress force/stress columns exist and active event counts remain zero. |
+
+This milestone does not validate every commercial prestressing-steel constitutive model.  It fixes the important engineering classification error where passive high-strength steel was being routed through the active prestress warning path.
+
 
 Implemented or partially implemented items include:
 
@@ -146,8 +166,8 @@ Implemented or partially implemented items include:
 | PMM prototype result | Limitation / note | Add published/reference PMM benchmark cases and validation tolerances. |
 | ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
 | Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
-| Prestress reached `fpu` cap | Engineering review | VALID.PS2 now adds point-level metadata and governing-region classification; next add published/reference stress-state cases before downgrading warnings. |
-| Prestress compression reversal clamp | Engineering review | VALID.PS2 now traces compression-reversal events by PMM region; next define/validate compression-side prestress behavior or retain a documented limitation. |
+| Prestress reached `fpu` cap | Engineering review | Active prestress uses VALID.PS2 point-level metadata and governing-region classification. Passive Pe_eff=0 rows are separated by SOLVER.PS.PASSIVE1 and should not emit active fpu-cap warnings. |
+| Prestress compression reversal clamp | Engineering review | Active prestress uses VALID.PS2 region tracing. Passive Pe_eff=0 rows are separated by SOLVER.PS.PASSIVE1 and should not emit active compression-reversal warnings. |
 | NaN `eps_t` | Numerical note | Confirm no capacity-critical fields are invalid and document expected compression-controlled missingness. |
 
 ## Recommended next milestones
@@ -172,9 +192,13 @@ Implemented or partially implemented items include:
 5. **VALID.PS2 — Prestress stress-state governing-region benchmark** — executable pack added.
    - Classifies `fpu` cap and compression reversal events against the governing demand region.
    - Distinguishes background PMM-surface stress events from result-affecting warnings.
-   - Next: add reference stress-state examples and use the evidence to reduce non-governing prestress warning severity.
 
-6. **UI.WARN.POLICY1 — Commercial warning policy**
+6. **SOLVER.PS.PASSIVE1 — Passive prestressing steel separation** — implemented.
+   - Treats Pe_eff=0/fpe=0 PS rows as passive high-strength steel.
+   - Prevents passive PT bars/strands from producing active-prestress fpu-cap or compression-reversal warnings.
+   - Next: retain active prestress stress-state validation for rows with nonzero initial prestress.
+
+7. **UI.WARN.POLICY1 — Commercial warning policy**
    - Move validated method assumptions into report notes/manuals.
    - Show only result-affecting warnings in the main ULS summary.
 

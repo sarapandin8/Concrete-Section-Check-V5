@@ -1319,8 +1319,15 @@ def _render_input_summary() -> None:
         result_hash = st.session_state.get("rc_pmm_result_input_hash")
         if current_analysis_hash is not None and result_hash != current_analysis_hash:
             st.warning("Displayed PMM results are stale because engineering inputs have changed. Run / Recalculate Analysis to update them.")
-        result_has_bonded_prestress = any(point.bonded_prestress_count > 0 for point in result.points)
-        result_label = "RC + Bonded Prestress PMM Prototype" if result_has_bonded_prestress else "RC PMM Prototype"
+        result_has_active_prestress = any(getattr(point, "active_prestress_count", point.bonded_prestress_count) > 0 for point in result.points)
+        result_has_passive_prestress = any(getattr(point, "passive_prestress_count", 0) > 0 for point in result.points)
+        result_has_bonded_prestress = result_has_active_prestress or result_has_passive_prestress
+        if result_has_active_prestress:
+            result_label = "RC + Active Bonded Prestress PMM Prototype"
+        elif result_has_passive_prestress:
+            result_label = "RC + Passive PS Steel PMM"
+        else:
+            result_label = "RC PMM Prototype"
         st.subheader(f"{result_label} Result")
         st.caption("Solver diagnostics are kept in QA panels; the governing ULS result workspace follows below.")
         df = pmm_result_to_display_dataframe(result)
@@ -1436,7 +1443,7 @@ def _render_input_summary() -> None:
                 dc_summary,
                 result_label,
                 settings.include_prestress,
-                result_has_bonded_prestress,
+                result_has_active_prestress,
                 unbonded_ignored_count,
                 result_hash,
             )

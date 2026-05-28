@@ -29,3 +29,5 @@ __all__ = [
     "run_valid_ps2_stress_region_benchmark_pack",
     "validation_matrix_to_dataframe",
 ]
+
+from concrete_pmm_pro.verification.ps_passive_benchmarks import PSPassiveBenchmarkSummary, run_valid_ps_passive_benchmark_pack

@@ -25,6 +25,10 @@ from concrete_pmm_pro.verification.ps_stress_region_benchmarks import (
     PSStressRegionSummary,
     run_valid_ps2_stress_region_benchmark_pack,
 )
+from concrete_pmm_pro.verification.ps_passive_benchmarks import (
+    PSPassiveBenchmarkSummary,
+    run_valid_ps_passive_benchmark_pack,
+)
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -68,6 +72,7 @@ class PMMSolverValidationReport:
     rc_phi_transition: RCBenchmarkSummary
     ps_benchmarks: PSBenchmarkSummary
     ps_stress_regions: PSStressRegionSummary
+    ps_passive: PSPassiveBenchmarkSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -92,6 +97,7 @@ class PMMSolverValidationReport:
             self.rc_phi_transition.overall_status,
             self.ps_benchmarks.overall_status,
             self.ps_stress_regions.overall_status,
+            self.ps_passive.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -219,6 +225,18 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             warnings_addressed=("fpu cap", "compression reversal", "governing impact", "prestress stress metadata"),
         ),
         ValidationCaseSpec(
+            case_id="SOLVER.PS.PASSIVE1",
+            title="Passive prestressing steel separated from active prestress",
+            category="Prestress PMM",
+            status="implemented",
+            purpose="Treat Pe_eff=0/fpe=0 prestressing rows as bonded high-strength passive steel rather than active-prestress elements. This prevents passive PT bars/strands from emitting active-prestress fpu-cap or compression-reversal warnings.",
+            acceptance="Passive bonded PS rows contribute signed strain-compatible force, can control eps_t/phi, retain reportable prestress-force metadata, and do not emit active-prestress stress-state warnings.",
+            source="Passive prestressing steel benchmark pack and PMM solver regression tests.",
+            current_location="concrete_pmm_pro/verification/ps_passive_benchmarks.py; tests/test_valid_ps_passive1.py; tests/test_prestress_pmm_solver.py",
+            next_action="Use this separation in warning display policy so passive PS rows are documented as high-strength steel, not active prestress model limitations.",
+            warnings_addressed=("passive prestress", "fpu cap", "compression reversal", "prestress warning classification"),
+        ),
+        ValidationCaseSpec(
             case_id="VALID.PS.STRESS1",
             title="Prestress fpu cap and compression reversal classification",
             category="Prestress PMM",
@@ -302,4 +320,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         rc_phi_transition=run_valid_rc2_phi_transition_benchmark_pack(),
         ps_benchmarks=run_valid_ps1_bonded_prestress_benchmark_pack(),
         ps_stress_regions=run_valid_ps2_stress_region_benchmark_pack(),
+        ps_passive=run_valid_ps_passive_benchmark_pack(),
     )

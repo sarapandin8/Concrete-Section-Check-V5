@@ -224,7 +224,7 @@ def check_uls_demands_against_rc_pmm(
         "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed.",
         RC_AXIAL_CAP_LIMITATION_WARNING,
     ]
-    if any(point.bonded_prestress_count > 0 for point in pmm_result.points):
+    if any(getattr(point, "active_prestress_count", point.bonded_prestress_count) > 0 for point in pmm_result.points):
         warnings.append(BONDED_PRESTRESS_PROTOTYPE_WARNING)
     if any(point.unbonded_prestress_ignored_count > 0 for point in pmm_result.points):
         warnings.append(UNBONDED_PRESTRESS_IGNORED_WARNING)

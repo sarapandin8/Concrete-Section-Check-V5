@@ -225,7 +225,36 @@ def test_passive_high_strength_prestressing_bar_does_not_crash() -> None:
     )
 
     assert result.points
-    assert any("passive high-strength bonded steel" in warning for warning in result.warnings)
+    assert any("Passive bonded prestressing steel is included" in item for item in result.info)
+    assert not any("compression reversal" in warning.lower() for warning in result.warnings)
+    assert not any("reached fpu cap" in warning.lower() for warning in result.warnings)
+
+
+def test_passive_bonded_prestress_uses_signed_passive_steel_without_active_warnings() -> None:
+    result = run_rc_pmm_solver(
+        _prestress_only_analysis_input(
+            _bonded_strand(
+                y_mm=-250.0,
+                area_mm2=804.2,
+                steel_type="prestressing_bar",
+                initial_strain=None,
+                initial_stress_mpa=None,
+                pe_eff_n=0.0,
+                fpy_mpa=1080.0,
+                fpu_mpa=1230.0,
+                ep_mpa=200000.0,
+                count=1,
+                label="PS Bar Passive",
+            )
+        )
+    )
+
+    assert result.points
+    assert any(point.prestress_force_N < 0.0 for point in result.points)
+    assert any(point.prestress_force_N > 0.0 for point in result.points)
+    assert any(point.eps_t is not None for point in result.points)
+    assert not any("compression reversal" in warning.lower() for warning in result.warnings)
+    assert not any("reached fpu cap" in warning.lower() for warning in result.warnings)
 
 
 def test_pt_bar_prestressing_bar_type_is_included_when_bonded() -> None:

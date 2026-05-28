@@ -15,8 +15,18 @@ Latest validation milestones add a traceable path from prototype PMM results tow
 - `VALID.RC2` adds ACI-style phi transition and tension-control benchmark checks.
 - `VALID.PS1` adds bonded-prestress PS-only and RC+PS benchmark checks for `eps_t`, `Pe_eff/fpe`, `Po + Aps`, stress-warning metadata, and RC+PS numeric schema.
 - `VALID.PS2` adds prestress stress-state governing-region checks so fpu-cap and compression-reversal warnings can be classified as governing-related or background PMM-surface events.
+- `SOLVER.PS.PASSIVE1` separates Pe_eff=0/fpe=0 passive PT bars/strands from active prestress, so passive high-strength steel contributes to PMM strength without active-prestress fpu-cap or compression-reversal warnings.
 
 These validation packs do not hide solver warnings.  They provide the evidence needed to later downgrade prototype wording into documented method notes or keep true governing-impact warnings visible.
+
+## Milestone SOLVER.PS.PASSIVE1 Scope
+
+- Separates passive prestressing-steel rows from active prestress rows.
+- Treats rows with Pe_eff/fpe/initial strain equal to zero as bonded high-strength passive steel.
+- Keeps passive PS bars/strands in strain compatibility and phi eps_t tracking.
+- Prevents passive rows from emitting active-prestress compression-reversal or fpu-cap warnings.
+- Adds passive-PS benchmark checks and regression tests.
+- Does not remove active-prestress warnings for rows with nonzero Pe_eff/fpe/initial strain.
 
 ## Milestone VALID.PS2 Scope
 

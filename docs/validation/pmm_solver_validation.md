@@ -1,0 +1,88 @@
+# Concrete PMM Pro — PMM Solver Validation Framework
+
+Milestone: **QA.VALIDATION1 — PMM Solver Validation Framework**
+
+This document defines the validation direction for the RC / bonded-prestress PMM solver.  It is not a final certification report.  It is the project-level framework used to move Concrete PMM Pro from a prototype engineering-review solver toward a commercial-grade, benchmark-supported solver.
+
+## Why this milestone exists
+
+The app currently reports several engineering review warnings, including prototype PMM wording, prestress stress reaching `fpu`, compression-reversal clamp notes, directional D/C fallback notes, and `eps_t` numerical notes.  Those warnings should not be hidden merely to make the UI look clean.  They should be removed, downgraded, or retained only after validation evidence supports that decision.
+
+Commercial software usually appears quieter because its internal numerical warnings are filtered by governing impact, documented in method notes/manuals, or backed by validation benchmarks.  Concrete PMM Pro must follow the same direction.
+
+## Validation principles
+
+1. **Do not hide solver warnings without engineering evidence.**
+2. **Separate UI warning policy from solver correctness.**
+3. **Validate RC-only behavior before relying on RC + prestress behavior.**
+4. **Validate prestress steel stress and strain behavior before removing prestress model warnings.**
+5. **Tie every future warning reduction to a benchmark, test, or documented assumption.**
+6. **Preserve sign convention and unit consistency: mm, MPa, N, N-mm internally.**
+
+## Current validation layers
+
+The validation framework combines existing checks with a formal validation matrix:
+
+- Independent hand-calculation spot checks: `concrete_pmm_pro/verification/hand_checks.py`
+- PMM benchmark-style checks: `concrete_pmm_pro/verification/pmm_benchmarks.py`
+- Validation matrix and report runner: `concrete_pmm_pro/verification/validation_framework.py`
+- Tests: `tests/test_validation_framework.py`
+
+## Validation matrix categories
+
+| Category | Purpose |
+|---|---|
+| RC-only PMM | Establish baseline strain compatibility, axial cap, bending, and symmetry behavior. |
+| Prestress PMM | Validate bonded prestress strain, `eps_t`, `Po + Aps`, and stress model behavior. |
+| Demand/Capacity | Validate directional PMM capacity extraction at demand `Pu` and moment direction. |
+| Numerical robustness | Distinguish expected numerical notes from invalid capacity results. |
+| Warning policy | Ensure warnings are actionable and tied to governing-impact classification. |
+
+## Implemented coverage in QA.VALIDATION1
+
+The milestone introduces a formal validation matrix with implemented, partial, and planned coverage status.  It does not change PMM solver equations.  It gives the project a stable engineering QA structure.
+
+Implemented or partially implemented items include:
+
+- RC concentric axial compression / `phiPn` cap checks.
+- Rectangular RC uniaxial hand spot check.
+- Symmetry sanity checks for positive/negative `Mnx` and `Mny`.
+- Prestress strain convention spot checks.
+- Prestress-aware `Po` helper tests.
+- Directional D/C and slice-envelope regression coverage.
+- Actionable warning guidance and governing-impact classification coverage.
+
+## Warnings and how they should be retired
+
+| Warning family | Current status | Required path before retiring or downgrading |
+|---|---|---|
+| PMM prototype result | Limitation / note | Add published/reference PMM benchmark cases and validation tolerances. |
+| ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
+| Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
+| Prestress reached `fpu` cap | Engineering review | Add solver-level stress-state metadata and governing-region classification. |
+| Prestress compression reversal clamp | Engineering review | Define/validate compression-side prestress behavior or retain a documented limitation. |
+| NaN `eps_t` | Numerical note | Confirm no capacity-critical fields are invalid and document expected compression-controlled missingness. |
+
+## Recommended next milestones
+
+1. **VALID.RC1 — Rectangular RC PMM benchmark pack**
+   - Add published or independently verified RC examples.
+   - Cover axial compression, uniaxial bending, biaxial sanity, and phi transitions.
+
+2. **SOLVER.PMM.DC1 — Robust directional PMM capacity check**
+   - Strengthen capacity extraction at governing `Pu` and moment direction.
+   - Reduce fallback usage and document fallback only when needed.
+
+3. **VALID.PS1 — Bonded prestress PMM benchmark pack**
+   - Validate PS-only and RC+PS behavior.
+   - Validate `fpe`, `Pe_eff`, `eps_t`, `fpu` cap, and compression reversal treatment.
+
+4. **UI.WARN.POLICY1 — Commercial warning policy**
+   - Move validated method assumptions into report notes/manuals.
+   - Show only result-affecting warnings in the main ULS summary.
+
+## Current limitation statement
+
+Until validation benchmarks are expanded, PMM output should be described as:
+
+> ULS PMM results are engineering-review results based on the current strain compatibility solver and documented assumptions.  Governing D/C may be used for internal review, but final design should be independently checked until the relevant validation cases are completed.

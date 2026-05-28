@@ -1,8 +1,17 @@
-﻿# Concrete PMM Pro
+# Concrete PMM Pro
 
 Professional Streamlit engineering application foundation for reinforced concrete and prestressed concrete PMM analysis.
 
 This repository is at Milestone PS.DB1.2 plus P.1.1, V.PS1.1 visualization cleanup, and R.FIG.1.1 figure-export deployment hotfix. The PMM solver and ULS demand/capacity workflow are still prototypes. The app navigation is grouped into engineering workspaces, and the Analysis workspace has real subtabs for ULS / PMM, SLS / Stress & Cracking, and Report / QA. Analysis now includes runtime controls, stable engineering-input hashes, cache status indicators, and lightweight timing diagnostics around expensive UI-triggered operations. Existing Project, Materials, Section Builder, Rebar, Prestress, Loads, PMM, SLS, cracking, report export, and report QA tools remain reachable without changing calculation logic. Bonded prestress contribution is included in the PMM prototype with refined prestressing steel stress-strain models, ordinary rebar displaced-concrete refinement, independent hand-calculation spot checks, engineering verification safeguards, benchmark-style solver checks, refined PMM slice interpolation, slice envelope robustness checks, clearer warning/reporting text, numerical cleanup, elastic SLS stress checks using either gross or uncracked transformed section properties, optional effective bonded prestress contribution, no-tension/decompression serviceability judgement, SLS stress sign benchmark checks, cracking/tension-zone classification from existing SLS stress results, custom SLS stress check points with geometry validation, SLS stress visualization on the section, context-aware engineering limitation filtering, report manifest JSON, draft Word report export, and Word report QA; unbonded prestress, full cracked-section stress redistribution, crack-width checks, Beam/Girder flexure/shear/torsion checks, PDF export, and production-grade design certification are intentionally not implemented yet.
+
+
+## Milestone QA.VALIDATION1 Scope
+
+- Added a formal PMM solver validation framework instead of relying on UI warning cleanup.
+- Added `concrete_pmm_pro/verification/validation_framework.py` with a validation matrix covering RC-only PMM, prestress PMM, demand/capacity interpolation, numerical robustness, and warning policy.
+- Added validation tests that confirm solver warning families are tied to root-cause validation items rather than being hidden from the user.
+- Added `docs/validation/pmm_solver_validation.md` to document the path from prototype warnings toward benchmark-supported commercial-grade behavior.
+- Existing PMM solver equations, D/C logic, prestress stress model, load import, report export, and UI result values are unchanged.
 
 ## Internal Units
 

@@ -33,6 +33,10 @@ from concrete_pmm_pro.verification.dc_directional_benchmarks import (
     DCDirectionalBenchmarkSummary,
     run_valid_dc1_directional_benchmark_pack,
 )
+from concrete_pmm_pro.verification.po_axial_cap_benchmarks import (
+    POAxialCapSummary,
+    run_valid_po1_axial_cap_benchmark_pack,
+)
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -78,6 +82,7 @@ class PMMSolverValidationReport:
     ps_stress_regions: PSStressRegionSummary
     ps_passive: PSPassiveBenchmarkSummary
     dc_directional: DCDirectionalBenchmarkSummary
+    po_axial_cap: POAxialCapSummary
 
     @property
     def implemented_case_count(self) -> int:
@@ -104,6 +109,7 @@ class PMMSolverValidationReport:
             self.ps_stress_regions.overall_status,
             self.ps_passive.overall_status,
             self.dc_directional.overall_status,
+            self.po_axial_cap.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -203,8 +209,20 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             acceptance="RC-only, PS-only, and RC+PS Po tests pass and unbonded prestress remains excluded from strain-compatible axial strength.",
             source="Unit tests for ACI axial cap helper.",
             current_location="tests/test_aci_axial_cap.py",
-            next_action="Add independent hand examples and code-reference notes before lowering axial-cap prototype note.",
+            next_action="Use QA.PO1 benchmark evidence to downgrade axial-cap prototype wording from engineering warning to documented method note.",
             warnings_addressed=("ACI axial cap", "bonded prestress Aps"),
+        ),
+        ValidationCaseSpec(
+            case_id="QA.PO1",
+            title="Prestress-aware axial cap validation pack",
+            category="Prestress PMM",
+            status="implemented",
+            purpose="Validate ACI-style nominal Po and capped phiPn,max area bookkeeping for RC-only, PS-only, RC+PS, fpu-fallback, count, and unbonded-exclusion cases.",
+            acceptance="Independent formula checks match nominal_po_rc_prestressed and aci_max_phiPn; Pe_eff and product breaking-load metadata are not used in nominal axial strength.",
+            source="Independent axial-cap benchmark runner and ACI helper unit tests.",
+            current_location="concrete_pmm_pro/verification/po_axial_cap_benchmarks.py; tests/test_valid_po1_axial_cap.py; tests/test_aci_axial_cap.py",
+            next_action="After user review, reclassify the axial-cap prototype warning as a method note that references QA.PO1 validation coverage.",
+            warnings_addressed=("ACI axial cap", "Po + Aps", "phiPn max", "Pe_eff not Po", "unbonded prestress exclusion"),
         ),
         ValidationCaseSpec(
             case_id="VALID.PS1",
@@ -340,4 +358,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         ps_stress_regions=run_valid_ps2_stress_region_benchmark_pack(),
         ps_passive=run_valid_ps_passive_benchmark_pack(),
         dc_directional=run_valid_dc1_directional_benchmark_pack(),
+        po_axial_cap=run_valid_po1_axial_cap_benchmark_pack(),
     )

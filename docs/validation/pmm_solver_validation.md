@@ -219,3 +219,19 @@ Until validation benchmarks are expanded, PMM output should be described as:
 ### SOLVER.PS.COMP1 compression-reversal warning policy
 
 Active prestress compression reversal is still modeled conservatively by clamping negative total tensile strain to zero.  The event is no longer emitted as a standalone global engineering warning for every PMM surface point.  Instead, `prestress_compression_reversal_count` is retained per PMM point and the Analysis diagnostics escalate it only when the event is detected near the governing Pu region.  This keeps the ULS summary focused on governing-impact items while preserving the QA trail for future prestress stress-model validation.
+
+### QA.PO1 prestress-aware axial cap validation
+
+`QA.PO1` adds an executable benchmark pack for the ACI-style nominal axial compression helper used by the PMM axial cap.  The checks are intentionally independent of the Streamlit UI and verify area bookkeeping before the axial-cap prototype wording can be reduced.
+
+Covered cases:
+
+- RC-only `Po = 0.85 fc(Ag - Ast) + fy Ast`.
+- PS-only `Po = 0.85 fc(Ag - Aps) + fpy Aps`.
+- RC + bonded prestress `Po = 0.85 fc(Ag - Ast - Aps) + fy Ast + fps_ref Aps`.
+- Missing `fpy` uses `0.90 fpu` and does not use `Pe_eff`.
+- `count` multiplies `area_mm2` exactly once.
+- Tied-column maximum axial cap uses `0.80 * phi * Po`.
+- Unbonded prestress is excluded upstream before the Po helper receives the bonded strain-compatible element list.
+
+This milestone does not change the axial-cap equations.  It provides benchmark evidence so the ACI axial-cap limitation can later be reworded as a documented method note rather than a broad prototype warning.

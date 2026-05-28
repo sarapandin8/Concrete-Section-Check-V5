@@ -1,3 +1,14 @@
+
+## Milestone QA.PO1 Scope
+
+- Adds an executable prestress-aware axial cap validation pack.
+- Checks RC-only, PS-only, and RC + bonded prestress nominal `Po` against independent formulas.
+- Confirms `Po` subtracts `Ast` and `Aps` once from concrete compression and adds `fy*Ast` plus `fpy*Aps` or `0.90fpu*Aps`.
+- Confirms `Pe_eff` and product breaking-load metadata are not used in nominal axial strength.
+- Confirms prestress `count` multiplies element area once and unbonded prestress is excluded upstream before the axial-cap helper is called.
+- Confirms tied-column `phiPn,max` cap uses `0.80 * phi * Po`.
+- Existing PMM solver, D/C extraction, prestress stress model, warning display, load import, and report export behavior are unchanged.
+
 # Concrete PMM Pro
 
 Professional Streamlit engineering application foundation for reinforced concrete and prestressed concrete PMM analysis.

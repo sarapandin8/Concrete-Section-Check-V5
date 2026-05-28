@@ -15,6 +15,7 @@ def test_validation_matrix_contains_core_solver_risk_areas() -> None:
     assert "VALID.RC.MX1" in case_ids
     assert "VALID.PS.EPST1" in case_ids
     assert "VALID.PS.PO1" in case_ids
+    assert "QA.PO1" in case_ids
     assert "SOLVER.PS.COMP1" in case_ids
     assert "VALID.PMM.DC1" in case_ids
     assert "VALID.NUM1" in case_ids
@@ -66,4 +67,5 @@ def test_pmm_solver_validation_report_runs_current_suites() -> None:
     assert report.partial_case_count >= 3
     assert report.hand_checks.checks
     assert report.pmm_checks.checks
+    assert report.po_axial_cap.checks
     assert report.overall_execution_status in {"PASS", "WARNING"}

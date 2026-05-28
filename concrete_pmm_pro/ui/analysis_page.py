@@ -1327,6 +1327,11 @@ def _render_input_summary() -> None:
         if not df.empty:
             summary = summarize_pmm_result(result)
             numeric_summary = check_pmm_dataframe_numerics(df)
+            dc_summary = _get_or_compute_demand_capacity_summary(
+                result,
+                st.session_state.get("load_cases", []),
+                result_hash,
+            )
             with st.expander("PMM solver diagnostics / QA summary", expanded=False):
                 _render_solver_diagnostic_messages(
                     result_has_bonded_prestress=result_has_bonded_prestress,
@@ -1399,11 +1404,6 @@ def _render_input_summary() -> None:
                 )
                 st.dataframe(demand_df, use_container_width=True, hide_index=True)
 
-            dc_summary = _get_or_compute_demand_capacity_summary(
-                result,
-                st.session_state.get("load_cases", []),
-                result_hash,
-            )
             engineering_warnings = _collect_engineering_warnings(
                 result.warnings,
                 prestress_check_summary.errors,

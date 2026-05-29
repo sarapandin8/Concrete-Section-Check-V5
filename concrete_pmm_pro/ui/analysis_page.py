@@ -1410,42 +1410,90 @@ def _render_prestress_verification_summary(
     contribution_summary: dict,
     comparison_summary: dict | None,
 ) -> None:
-    st.subheader("Prestress Verification Summary")
+    """Render prestress contribution as designer-facing summary plus QA expanders.
+
+    Earlier Analysis builds rendered every prestress/PMM diagnostic metric at
+    the same visual level.  That was useful while debugging the solver, but it
+    made the commercial result workspace feel like an internal diagnostic
+    console.  This renderer keeps the same engineering information available,
+    but separates first-screen design insight from deep QA metadata.
+    """
+
+    st.subheader("Prestress Contribution Summary")
+    st.caption(
+        "First-screen summary of bonded prestress contribution. Detailed stress-state "
+        "and RC-only comparison data are retained below for QA review."
+    )
+
+    delta_phi_pn = None
+    delta_phi_mnx = None
+    delta_phi_mny = None
+    if comparison_summary is not None:
+        delta_phi_pn = comparison_summary.get("delta_max_phiPn_kN")
+        delta_phi_mnx = comparison_summary.get("delta_max_abs_phiMnx_kNm")
+        delta_phi_mny = comparison_summary.get("delta_max_abs_phiMny_kNm")
+
     cols = st.columns(4)
-    cols[0].metric("Bonded PS included", f"{contribution_summary['bonded_prestress_count']:,}")
-    cols[1].metric("Unbonded PS ignored", f"{contribution_summary['unbonded_prestress_ignored_count']:,}")
-    cols[2].metric("Total bonded Aps", f"{check_summary.total_area_mm2:,.1f} mm^2")
-    cols[3].metric("Total bonded Pe_eff", f"{N_to_kN(check_summary.total_pe_eff_N):,.1f} kN")
+    cols[0].metric("Bonded PS elements", f"{contribution_summary['bonded_prestress_count']:,}")
+    cols[1].metric("Total bonded Aps", f"{check_summary.total_area_mm2:,.1f} mm^2")
+    cols[2].metric("Total Pe_eff", f"{N_to_kN(check_summary.total_pe_eff_N):,.1f} kN")
+    cols[3].metric(
+        "Δ max |phiMnx|",
+        "—" if delta_phi_mnx is None else f"{delta_phi_mnx:,.1f} kN-m",
+        help="Change in maximum absolute phiMnx between RC-only and RC+PS PMM envelopes.",
+    )
 
-    cols2 = st.columns(3)
-    cols2[0].metric("Max |PS force|", f"{contribution_summary['max_abs_prestress_force_kN']:,.1f} kN")
-    cols2[1].metric("Mean |PS force|", f"{N_to_kN(contribution_summary['mean_abs_prestress_force_N']):,.1f} kN")
-    cols2[2].metric("PMM points with PS force", f"{contribution_summary['point_count_with_prestress']:,}")
+    delta_cols = st.columns(3)
+    delta_cols[0].metric("Δ max phiPn", "—" if delta_phi_pn is None else f"{delta_phi_pn:,.1f} kN")
+    delta_cols[1].metric("Δ max |phiMnx|", "—" if delta_phi_mnx is None else f"{delta_phi_mnx:,.1f} kN-m")
+    delta_cols[2].metric("Δ max |phiMny|", "—" if delta_phi_mny is None else f"{delta_phi_mny:,.1f} kN-m")
 
-    for warning in contribution_summary.get("warnings", []):
+    unbonded_ignored = int(contribution_summary.get("unbonded_prestress_ignored_count", 0))
+    if unbonded_ignored:
+        st.info(f"{unbonded_ignored:,} unbonded prestress element(s) are ignored by the current PMM solver policy.")
+
+    contribution_warnings = list(contribution_summary.get("warnings", []))
+    comparison_warnings = list(comparison_summary.get("warnings", [])) if comparison_summary is not None else []
+    for warning in contribution_warnings + comparison_warnings:
         st.warning(f"WARNING: {warning}")
 
-    if comparison_summary is None:
-        st.info("RC-only comparison is available after running with bonded prestress included.")
-        return
+    with st.expander("Prestress stress-state diagnostics", expanded=False):
+        st.caption("Detailed stress-state values retained for QA and solver validation; not needed for first-screen D/C review.")
+        stress_cols = st.columns(4)
+        stress_cols[0].metric("Max |PS force|", f"{contribution_summary['max_abs_prestress_force_kN']:,.1f} kN")
+        stress_cols[1].metric("Mean |PS force|", f"{N_to_kN(contribution_summary['mean_abs_prestress_force_N']):,.1f} kN")
+        stress_cols[2].metric("PMM points with PS force", f"{contribution_summary['point_count_with_prestress']:,}")
+        stress_cols[3].metric("Unbonded PS ignored", f"{unbonded_ignored:,}")
 
-    cols3 = st.columns(3)
-    cols3[0].metric("RC-only max phiPn", f"{comparison_summary['rc_max_phiPn_kN']:,.1f} kN")
-    cols3[1].metric("RC+PS max phiPn", f"{comparison_summary['ps_max_phiPn_kN']:,.1f} kN")
-    cols3[2].metric("Delta max phiPn", f"{comparison_summary['delta_max_phiPn_kN']:,.1f} kN")
+    with st.expander("RC-only vs RC+PS capacity comparison", expanded=False):
+        if comparison_summary is None:
+            st.info("RC-only comparison is available after running with bonded prestress included.")
+            return
 
-    cols4 = st.columns(3)
-    cols4[0].metric("RC-only max |phiMnx|", f"{comparison_summary['rc_max_abs_phiMnx_kNm']:,.1f} kN-m")
-    cols4[1].metric("RC+PS max |phiMnx|", f"{comparison_summary['ps_max_abs_phiMnx_kNm']:,.1f} kN-m")
-    cols4[2].metric("Delta max |phiMnx|", f"{comparison_summary['delta_max_abs_phiMnx_kNm']:,.1f} kN-m")
-
-    cols5 = st.columns(3)
-    cols5[0].metric("RC-only max |phiMny|", f"{comparison_summary['rc_max_abs_phiMny_kNm']:,.1f} kN-m")
-    cols5[1].metric("RC+PS max |phiMny|", f"{comparison_summary['ps_max_abs_phiMny_kNm']:,.1f} kN-m")
-    cols5[2].metric("Delta max |phiMny|", f"{comparison_summary['delta_max_abs_phiMny_kNm']:,.1f} kN-m")
-
-    for warning in comparison_summary.get("warnings", []):
-        st.warning(f"WARNING: {warning}")
+        st.caption("Envelope-level comparison used to understand prestress contribution. Governing D/C remains controlled by the selected load case trace.")
+        comp_df = pd.DataFrame(
+            [
+                {
+                    "Capacity metric": "Max phiPn",
+                    "RC-only": f"{comparison_summary['rc_max_phiPn_kN']:,.1f} kN",
+                    "RC+PS": f"{comparison_summary['ps_max_phiPn_kN']:,.1f} kN",
+                    "Delta": f"{comparison_summary['delta_max_phiPn_kN']:,.1f} kN",
+                },
+                {
+                    "Capacity metric": "Max |phiMnx|",
+                    "RC-only": f"{comparison_summary['rc_max_abs_phiMnx_kNm']:,.1f} kN-m",
+                    "RC+PS": f"{comparison_summary['ps_max_abs_phiMnx_kNm']:,.1f} kN-m",
+                    "Delta": f"{comparison_summary['delta_max_abs_phiMnx_kNm']:,.1f} kN-m",
+                },
+                {
+                    "Capacity metric": "Max |phiMny|",
+                    "RC-only": f"{comparison_summary['rc_max_abs_phiMny_kNm']:,.1f} kN-m",
+                    "RC+PS": f"{comparison_summary['ps_max_abs_phiMny_kNm']:,.1f} kN-m",
+                    "Delta": f"{comparison_summary['delta_max_abs_phiMny_kNm']:,.1f} kN-m",
+                },
+            ]
+        )
+        st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
 
 def _run_pmm_analysis_with_runtime_control(
@@ -1741,47 +1789,62 @@ def _render_input_summary() -> None:
                     df=df,
                     dc_summary=dc_summary,
                 )
-                cols = st.columns(4)
-                cols[0].metric("PMM points", f"{summary['point_count']:,}")
-                cols[1].metric("Max phiPn", f"{df['phiPn_kN'].max():,.1f} kN")
-                cols[2].metric("Max capped phiPn", f"{df['phiPn_capped_kN'].max():,.1f} kN")
-                cols[3].metric("Min phiPn", f"{df['phiPn_kN'].min():,.1f} kN")
-                cols2 = st.columns(4)
-                cols2[0].metric("Max |phiMnx|", f"{df['phiMnx_kNm'].abs().max():,.1f} kN-m")
-                cols2[1].metric("Max |phiMny|", f"{df['phiMny_kNm'].abs().max():,.1f} kN-m")
-                cols2[2].metric("Max nominal Pn", f"{df['Pn_kN'].max():,.1f} kN")
-                cols2[3].metric("Max nominal |Mnx|", f"{df['Mnx_kNm'].abs().max():,.1f} kN-m")
-                cols3 = st.columns(1)
-                cols3[0].metric("Max nominal |Mny|", f"{df['Mny_kNm'].abs().max():,.1f} kN-m")
-                cols4 = st.columns(4)
-                cols4[0].metric("Bonded PS included", f"{int(df['bonded_prestress_count'].max()):,}")
-                cols4[1].metric("Unbonded PS ignored", f"{int(df['unbonded_prestress_ignored_count'].max()):,}")
-                cols4[2].metric("Max |PS force|", f"{df['prestress_force_kN'].abs().max():,.1f} kN")
+                # Keep the first view of diagnostics compact.  Detailed PMM
+                # capacity and stress-state metadata remain available in nested
+                # expanders instead of being rendered as a full debug dashboard.
+                st.markdown("**Solver QA essentials**")
+                essential_cols = st.columns(4)
+                essential_cols[0].metric("PMM points", f"{summary['point_count']:,}")
+                essential_cols[1].metric("Max capped phiPn", f"{df['phiPn_capped_kN'].max():,.1f} kN")
+                essential_cols[2].metric("Max |phiMnx|", f"{df['phiMnx_kNm'].abs().max():,.1f} kN-m")
+                essential_cols[3].metric("Max |phiMny|", f"{df['phiMny_kNm'].abs().max():,.1f} kN-m")
+
                 included_aps = sum(element.total_area_mm2 for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
                 included_pe = sum(element.pe_eff_n * element.count for element in bonded_prestress_elements) if result_has_bonded_prestress else 0.0
-                cols4[3].metric("Included Aps / Pe", f"{included_aps:,.1f} mm^2 / {included_pe:,.0f} N")
-                cols_disp = st.columns(3)
-                cols_disp[0].metric(
-                    "Rebar displacement subtraction",
-                    "Enabled" if settings.subtract_rebar_displaced_concrete else "Disabled",
-                )
-                cols_disp[1].metric(
-                    "Max concrete subtraction",
-                    f"{df['rebar_displaced_concrete_subtracted_kN'].max():,.1f} kN",
-                )
-                cols_disp[2].metric(
-                    "Max bars in block",
-                    f"{int(df['rebar_inside_compression_count'].max()):,}",
-                )
+                with st.expander("PMM capacity envelope metadata", expanded=False):
+                    st.caption("Envelope extrema retained for QA. Governing D/C should be read from the ULS workspace and trace tables.")
+                    cap_df = pd.DataFrame(
+                        [
+                            {"Metric": "Max phiPn", "Value": f"{df['phiPn_kN'].max():,.1f} kN"},
+                            {"Metric": "Max capped phiPn", "Value": f"{df['phiPn_capped_kN'].max():,.1f} kN"},
+                            {"Metric": "Min phiPn", "Value": f"{df['phiPn_kN'].min():,.1f} kN"},
+                            {"Metric": "Max |phiMnx|", "Value": f"{df['phiMnx_kNm'].abs().max():,.1f} kN-m"},
+                            {"Metric": "Max |phiMny|", "Value": f"{df['phiMny_kNm'].abs().max():,.1f} kN-m"},
+                            {"Metric": "Max nominal Pn", "Value": f"{df['Pn_kN'].max():,.1f} kN"},
+                            {"Metric": "Max nominal |Mnx|", "Value": f"{df['Mnx_kNm'].abs().max():,.1f} kN-m"},
+                            {"Metric": "Max nominal |Mny|", "Value": f"{df['Mny_kNm'].abs().max():,.1f} kN-m"},
+                        ]
+                    )
+                    st.dataframe(cap_df, use_container_width=True, hide_index=True)
+
+                with st.expander("Reinforcement / prestress solver metadata", expanded=False):
+                    meta_df = pd.DataFrame(
+                        [
+                            {"Metric": "Bonded PS included", "Value": f"{int(df['bonded_prestress_count'].max()):,}"},
+                            {"Metric": "Unbonded PS ignored", "Value": f"{int(df['unbonded_prestress_ignored_count'].max()):,}"},
+                            {"Metric": "Included Aps / Pe", "Value": f"{included_aps:,.1f} mm^2 / {included_pe:,.0f} N"},
+                            {"Metric": "Max |PS force|", "Value": f"{df['prestress_force_kN'].abs().max():,.1f} kN"},
+                            {"Metric": "Rebar displacement subtraction", "Value": "Enabled" if settings.subtract_rebar_displaced_concrete else "Disabled"},
+                            {"Metric": "Max concrete subtraction", "Value": f"{df['rebar_displaced_concrete_subtracted_kN'].max():,.1f} kN"},
+                            {"Metric": "Max bars in compression block", "Value": f"{int(df['rebar_inside_compression_count'].max()):,}"},
+                        ]
+                    )
+                    st.dataframe(meta_df, use_container_width=True, hide_index=True)
+
                 if result_has_bonded_prestress and "max_prestress_stress_MPa" in df:
-                    model_values = df["prestress_stress_model"].dropna()
-                    model_label = str(model_values.iloc[0]) if not model_values.empty else settings.prestress_stress_model
-                    cols5 = st.columns(4)
-                    cols5[0].metric("Prestress stress model", model_label)
-                    cols5[1].metric("Max fps", f"{df['max_prestress_stress_MPa'].max():,.1f} MPa")
-                    cols5[2].metric("Stress warning count", f"{int(df['prestress_stress_warning_count'].sum()):,}")
-                    cols5[3].metric("Reached fpu cap count", f"{int(df['prestress_reached_fpu_cap_count'].sum()):,}")
-    
+                    with st.expander("Prestress stress-state metadata", expanded=False):
+                        model_values = df["prestress_stress_model"].dropna()
+                        model_label = str(model_values.iloc[0]) if not model_values.empty else settings.prestress_stress_model
+                        stress_df = pd.DataFrame(
+                            [
+                                {"Metric": "Prestress stress model", "Value": model_label},
+                                {"Metric": "Max fps", "Value": f"{df['max_prestress_stress_MPa'].max():,.1f} MPa"},
+                                {"Metric": "Stress warning count", "Value": f"{int(df['prestress_stress_warning_count'].sum()):,}"},
+                                {"Metric": "Reached fpu cap count", "Value": f"{int(df['prestress_reached_fpu_cap_count'].sum()):,}"},
+                            ]
+                        )
+                        st.dataframe(stress_df, use_container_width=True, hide_index=True)
+
                 contribution_summary = summarize_prestress_contribution(result)
                 comparison_summary = st.session_state.get("prestress_comparison_summary")
                 if settings.include_prestress and result_has_bonded_prestress:

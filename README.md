@@ -568,3 +568,7 @@ The Analysis workspace now includes a commercial-facing validation status panel.
 ### UI.VALIDATION.STATUS1.1 — Validation Evidence Detail Polish
 
 The Analysis validation panel now separates the first-screen validation overview from the detailed evidence table.  The compact overview shows method area, validation status, design-use guidance, and case ID.  A nested detailed evidence expander keeps benchmark evidence and remaining engineering limitations available for QA without crowding the main Analysis result page.  This milestone does not change solver equations; it improves how validation evidence is communicated to users.
+
+### UI.ANALYSIS3.9 — Result Hierarchy and Solver Info Cleanup
+
+The Analysis diagnostics now use a cleaner commercial-style hierarchy. First-screen solver diagnostics show only compact QA essentials, while detailed PMM envelope metadata, reinforcement/prestress solver metadata, prestress stress-state diagnostics, and RC-only vs RC+PS capacity comparisons are retained in collapsed QA expanders. This is a UI hierarchy and traceability refinement only; it does not change solver equations or D/C results.

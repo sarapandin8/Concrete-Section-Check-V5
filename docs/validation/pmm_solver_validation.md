@@ -254,3 +254,9 @@ The commercial validation-status panel now includes a compact overview table and
 - validation case ID
 
 The detailed table keeps benchmark evidence and remaining engineering limitations available in an expander for QA review.  This is a communication and traceability improvement only; it does not change PMM equations, prestress stress-strain assumptions, axial-cap equations, or demand/capacity extraction.
+
+## UI.ANALYSIS3.9 — Result Hierarchy and Solver Info Cleanup
+
+The Analysis diagnostics now separate designer-facing result information from solver-internal QA metadata. The PMM diagnostics panel shows only a compact set of first-screen solver QA essentials, while detailed capacity envelope extrema, reinforcement/prestress metadata, prestress stress-state details, and RC-only vs RC+PS comparisons are kept in collapsed expanders.
+
+This milestone does not change PMM equations, D/C extraction, prestress stress-strain assumptions, axial-cap equations, or validation status. It only improves result hierarchy so the ULS workspace reads like an engineering result page rather than a debug dashboard.

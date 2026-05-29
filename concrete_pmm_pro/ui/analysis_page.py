@@ -2502,7 +2502,38 @@ def _render_pmm_slice_dashboard(
                 "The demand vector is checked against the cleaned Mux-Muy capacity envelope at the selected Pu. "
                 "The capacity marker is the ray/envelope intersection used to compute available φMn and D/C."
             )
-            slice_figure_hash = f"{result_hash or 'unhashed'}:{selected_load_case.name}:mux_muy_slice"
+            plot_cols = st.columns([1.35, 0.85])
+            with plot_cols[0]:
+                demand_display_label = st.selectbox(
+                    "Demand points display",
+                    ["Governing case only", "Selected case only", "Selected + governing", "All active ULS points"],
+                    index=0,
+                    key="pmm_slice_demand_display_mode_v42",
+                    help=(
+                        "Commercial default: show only the governing load point so the PMM slice stays clean. "
+                        "Use all points only for overview; detailed values remain available on hover and in the table."
+                    ),
+                )
+            with plot_cols[1]:
+                show_slice_annotations = st.checkbox(
+                    "Show annotation callouts",
+                    value=False,
+                    key="pmm_slice_show_annotation_callouts_v42",
+                    help="Presentation-only callouts. Off by default because text boxes can hide demand/capacity markers.",
+                )
+            display_mode_map = {
+                "Governing case only": "governing_only",
+                "Selected case only": "selected_only",
+                "Selected + governing": "selected_governing",
+                "All active ULS points": "all_active",
+            }
+            demand_display_mode = display_mode_map.get(demand_display_label, "governing_only")
+            governing_load_case = get_selected_load_case(active_uls, dc_summary.governing_combo) if dc_summary.governing_combo else None
+            plot_load_case = governing_load_case if demand_display_mode == "governing_only" and governing_load_case is not None else selected_load_case
+            slice_figure_hash = (
+                f"{result_hash or 'unhashed'}:{plot_load_case.name}:mux_muy_slice:"
+                f"{demand_display_mode}:{show_slice_annotations}"
+            )
             if (
                 st.session_state.get("pmm_mux_muy_slice_figure_hash") == slice_figure_hash
                 and isinstance(st.session_state.get("pmm_mux_muy_slice_figure"), go.Figure)
@@ -2513,8 +2544,11 @@ def _render_pmm_slice_dashboard(
                     "PMM Mux-Muy slice figure generation",
                     make_mux_muy_slice_figure,
                     pmm_df,
-                    selected_load_case,
+                    plot_load_case,
                     dc_summary,
+                    demand_df,
+                    demand_display_mode=demand_display_mode,
+                    show_annotations=show_slice_annotations,
                 )
                 _record_runtime_timing(slice_timing)
                 st.session_state["pmm_mux_muy_slice_figure"] = slice_fig
@@ -2526,8 +2560,22 @@ def _render_pmm_slice_dashboard(
                 key="analysis_mux_muy_slice_dashboard",
             )
         with right:
-            st.markdown("**Selected Case Details**")
-            _render_selected_case_detail_panel(selected_summary, unbonded_ignored_count)
+            displayed_summary = selected_summary
+            try:
+                if "plot_load_case" in locals() and plot_load_case.name != selected_load_case.name:
+                    displayed_summary = build_selected_load_case_summary(
+                        plot_load_case,
+                        dc_summary,
+                        mode_label,
+                        include_prestress and bonded_prestress_included,
+                        selected_envelope,
+                    )
+                    st.markdown("**Governing Case Details**")
+                else:
+                    st.markdown("**Selected Case Details**")
+            except Exception:
+                st.markdown("**Selected Case Details**")
+            _render_selected_case_detail_panel(displayed_summary, unbonded_ignored_count)
 
     with three_d_tab:
         st.subheader("3D PMM Interaction")

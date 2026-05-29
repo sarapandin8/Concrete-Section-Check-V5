@@ -641,6 +641,10 @@ def make_mux_muy_slice_figure(
     pmm_df: pd.DataFrame,
     selected_load_case: LoadCase,
     dc_summary: DemandCapacitySummary | None = None,
+    demand_df: pd.DataFrame | None = None,
+    *,
+    demand_display_mode: str = "selected_only",
+    show_annotations: bool = False,
 ) -> go.Figure:
     Pu_kN = N_to_kN(selected_load_case.Pu_N)
     demand_x = Nmm_to_kNm(selected_load_case.Mux_Nmm)
@@ -653,6 +657,15 @@ def make_mux_muy_slice_figure(
     status = _status_for(selected_load_case.name, dc_summary)
     dcr = _dcr_for(selected_load_case.name, dc_summary)
     color = STATUS_COLORS.get(status, STATUS_COLORS["NOT_CHECKED"])
+
+    normalized_display_mode = (demand_display_mode or "selected_only").strip().lower()
+    if normalized_display_mode not in {"governing_only", "selected_only", "selected_governing", "all_active"}:
+        normalized_display_mode = "selected_only"
+    # ``governing_only`` is resolved by the UI by passing the governing load case
+    # as ``selected_load_case``.  Inside the plotting function it behaves like a
+    # clean selected-only plot: no extra demand points and no label callouts.
+    if normalized_display_mode == "governing_only":
+        normalized_display_mode = "selected_only"
 
     fig = go.Figure()
     if not slice_df.empty:
@@ -720,9 +733,9 @@ def make_mux_muy_slice_figure(
             go.Scatter(
                 x=[capacity_x],
                 y=[capacity_y],
-                mode="markers+text",
+                mode="markers+text" if show_annotations else "markers",
                 marker=dict(size=13, color="#0f766e", symbol="circle-open", line=dict(width=3, color="#0f766e")),
-                text=["Capacity"],
+                text=["Capacity"] if show_annotations else None,
                 textposition="bottom center",
                 name="Capacity intersection",
                 hovertemplate=(
@@ -731,13 +744,38 @@ def make_mux_muy_slice_figure(
                 ),
             )
         )
+    if demand_df is not None and not demand_df.empty and normalized_display_mode in {"selected_governing", "all_active"}:
+        other_points = demand_df.copy()
+        if "Combo Name" in other_points.columns:
+            other_points = other_points[other_points["Combo Name"] != selected_load_case.name]
+        if normalized_display_mode == "selected_governing" and dc_summary is not None and dc_summary.governing_combo:
+            other_points = other_points[other_points.get("Combo Name", pd.Series(dtype=str)) == dc_summary.governing_combo]
+        if not other_points.empty and {"Mux_kNm", "Muy_kNm"}.issubset(other_points.columns):
+            other_colors = [
+                STATUS_COLORS.get(_status_for(str(row.get("Combo Name", "")), dc_summary), STATUS_COLORS["NOT_CHECKED"])
+                for _, row in other_points.iterrows()
+            ]
+            hover = [_demand_hover_text(row, dc_summary) for _, row in other_points.iterrows()]
+            fig.add_trace(
+                go.Scatter(
+                    x=other_points["Mux_kNm"],
+                    y=other_points["Muy_kNm"],
+                    mode="markers",
+                    marker=dict(size=7, color=other_colors, symbol="circle", opacity=0.42, line=dict(width=0.8, color="#344054")),
+                    text=hover,
+                    hoverinfo="text",
+                    name="Other active ULS points" if normalized_display_mode == "all_active" else "Governing demand reference",
+                )
+            )
+
+    selected_mode = "markers+text" if show_annotations else "markers"
     fig.add_trace(
         go.Scatter(
             x=[demand_x],
             y=[demand_y],
-            mode="markers+text",
+            mode=selected_mode,
             marker=dict(size=14, color=color, symbol="diamond", line=dict(width=2, color="#111827")),
-            text=[selected_load_case.name],
+            text=[selected_load_case.name] if show_annotations else None,
             textposition="top center",
             name="Selected demand",
             hovertemplate=(
@@ -748,32 +786,33 @@ def make_mux_muy_slice_figure(
     )
     fig.add_hline(y=0.0, line=dict(color="#6b7280", width=1, dash="dot"))
     fig.add_vline(x=0.0, line=dict(color="#6b7280", width=1, dash="dot"))
-    fig.add_annotation(
-        x=demand_x,
-        y=demand_y,
-        text=f"{selected_load_case.name}<br>D/C {dcr_label}<br>{status}",
-        showarrow=True,
-        arrowhead=2,
-        ax=30,
-        ay=-35,
-        bgcolor="rgba(255,255,255,0.85)",
-        bordercolor=color,
-    )
-    if capacity_x is not None and capacity_y is not None and capacity_radius is not None:
-        margin_text = ""
-        if dcr is not None:
-            margin_text = f"<br>Margin {(1.0 - dcr) * 100.0:.1f}%"
+    if show_annotations:
         fig.add_annotation(
-            x=capacity_x,
-            y=capacity_y,
-            text=f"Capacity boundary<br>φMn {capacity_radius:,.1f} kN-m{margin_text}",
+            x=demand_x,
+            y=demand_y,
+            text=f"{selected_load_case.name}<br>D/C {dcr_label}<br>{status}",
             showarrow=True,
             arrowhead=2,
-            ax=-55,
-            ay=45,
-            bgcolor="rgba(255,255,255,0.88)",
-            bordercolor="#0f766e",
+            ax=30,
+            ay=-35,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor=color,
         )
+        if capacity_x is not None and capacity_y is not None and capacity_radius is not None:
+            margin_text = ""
+            if dcr is not None:
+                margin_text = f"<br>Margin {(1.0 - dcr) * 100.0:.1f}%"
+            fig.add_annotation(
+                x=capacity_x,
+                y=capacity_y,
+                text=f"Capacity boundary<br>φMn {capacity_radius:,.1f} kN-m{margin_text}",
+                showarrow=True,
+                arrowhead=2,
+                ax=-55,
+                ay=45,
+                bgcolor="rgba(255,255,255,0.88)",
+                bordercolor="#0f766e",
+            )
     subtitle = "Demand ray intersects the cleaned slice envelope to obtain available φMn."
     if capacity_radius is None:
         subtitle = "Capacity intersection unavailable; review Diagnostics / QA."

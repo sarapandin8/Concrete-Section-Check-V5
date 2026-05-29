@@ -303,6 +303,50 @@ def test_make_mux_muy_slice_figure_shows_capacity_ray_and_intersection() -> None
     assert capacity_trace.x[0] == pytest.approx(100.0)
     assert capacity_trace.y[0] == pytest.approx(0.0)
 
+
+
+def test_make_mux_muy_slice_figure_defaults_to_clean_no_annotations() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+
+    fig = make_mux_muy_slice_figure(_synthetic_pmm_df(), load_case, _dc_summary())
+
+    assert not fig.layout.annotations
+    selected_trace = next(trace for trace in fig.data if trace.name == "Selected demand")
+    assert selected_trace.mode == "markers"
+
+
+def test_make_mux_muy_slice_figure_can_show_all_active_points_without_labels() -> None:
+    selected = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+    all_loads = [
+        LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0),
+        LoadCase(name="ULS-FAIL", Pu_N=1_000_000.0, Mux_Nmm=130_000_000.0, Muy_Nmm=0.0),
+    ]
+    demand_df = demand_load_cases_to_display_dataframe(all_loads)
+
+    fig = make_mux_muy_slice_figure(
+        _synthetic_pmm_df(),
+        selected,
+        _dc_summary(),
+        demand_df,
+        demand_display_mode="all_active",
+    )
+    trace_names = [trace.name for trace in fig.data]
+
+    assert "Other active ULS points" in trace_names
+    other_trace = next(trace for trace in fig.data if trace.name == "Other active ULS points")
+    assert other_trace.mode == "markers"
+    assert len(other_trace.x) == 1
+
+
+def test_make_mux_muy_slice_figure_annotations_are_optional() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+
+    fig = make_mux_muy_slice_figure(_synthetic_pmm_df(), load_case, _dc_summary(), show_annotations=True)
+
+    assert len(fig.layout.annotations) >= 1
+    selected_trace = next(trace for trace in fig.data if trace.name == "Selected demand")
+    assert selected_trace.mode == "markers+text"
+
 def test_make_pmm_3d_dashboard_figure_returns_plotly_figure() -> None:
     load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
     demand_df = demand_load_cases_to_display_dataframe([load_case])

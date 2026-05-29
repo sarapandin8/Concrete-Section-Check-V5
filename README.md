@@ -577,3 +577,9 @@ The Analysis diagnostics now use a cleaner commercial-style hierarchy. First-scr
 
 The PMM Check tab now emphasizes the governing Mux-Muy slice at the selected Pu.  The figure shows the cleaned PMM slice envelope, the demand vector, the capacity ray, and the ray/envelope intersection used to compute available phiMn and D/C.  Selected-case cards also show capacity margin and reserve ratio.  This milestone does not change PMM equations or D/C extraction; it makes the existing SOLVER.PMM.DC1 ray-intersection result traceable to the user visually.
 
+
+- UI.ANALYSIS4.1: Clean PMM slice plot interaction with selected-only default, optional chart annotations, and controlled all-ULS demand point overlay.
+
+### UI.ANALYSIS4.2 — Governing Slice Plot Minimal Mode
+
+The PMM Check slice plot now uses a governing-case-only display by default and resets the annotation control key so old session-state callouts do not persist after upgrade.  Annotation callouts remain available for presentation screenshots, but they are off by default because text boxes can hide demand and capacity markers.  The plot can still show selected cases, selected + governing, or all active ULS points when the user explicitly chooses those modes.

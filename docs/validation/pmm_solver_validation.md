@@ -243,3 +243,14 @@ The Analysis workspace now summarizes method validation status separately from s
 Current commercial-facing status areas include RC PMM strain compatibility, ACI phi transition, directional PMM demand/capacity extraction, prestress-aware axial cap, passive PS/high-strength steel behavior, active bonded prestress model behavior, prestress stress-state policies, and SLS future work.
 
 This is a UI/method-status milestone only.  It does not certify unvalidated solver behavior or remove QA diagnostics.  Remaining limitation notes continue to be retained in Diagnostics / QA and reports until the related validation milestones are completed.
+
+## UI.VALIDATION.STATUS1.1 — Validation Evidence Detail Polish
+
+The commercial validation-status panel now includes a compact overview table and a separate detailed evidence table.  The compact table is intended for first-screen review and includes:
+
+- method / validation area
+- validation status
+- design-use guidance
+- validation case ID
+
+The detailed table keeps benchmark evidence and remaining engineering limitations available in an expander for QA review.  This is a communication and traceability improvement only; it does not change PMM equations, prestress stress-strain assumptions, axial-cap equations, or demand/capacity extraction.

@@ -564,3 +564,7 @@ These validation assets are not a final certification. They are the project cont
 ### UI.VALIDATION.STATUS1 — Validation status panel
 
 The Analysis workspace now includes a commercial-facing validation status panel.  It summarizes which PMM method areas have implemented benchmark coverage, which are still validation-in-progress, and which are planned future checks.  This replaces broad `Prototype Result` heading wording while retaining Diagnostics / QA notes for final engineering review.
+
+### UI.VALIDATION.STATUS1.1 — Validation Evidence Detail Polish
+
+The Analysis validation panel now separates the first-screen validation overview from the detailed evidence table.  The compact overview shows method area, validation status, design-use guidance, and case ID.  A nested detailed evidence expander keeps benchmark evidence and remaining engineering limitations available for QA without crowding the main Analysis result page.  This milestone does not change solver equations; it improves how validation evidence is communicated to users.

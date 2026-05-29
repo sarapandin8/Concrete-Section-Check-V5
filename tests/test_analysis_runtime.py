@@ -26,6 +26,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _diagnostics_to_dataframe,
     _method_validation_status_cards,
     _method_validation_status_rows,
+    _validation_status_compact_dataframe,
+    _validation_status_detail_dataframe,
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
 )
@@ -699,6 +701,31 @@ def test_method_validation_status_cards_count_status_groups() -> None:
     assert int(card_map["Planned Checks"]["value"]) >= 1
     assert card_map["Method Basis"]["value"] == "ACI strain compatibility"
 
+
+
+def test_validation_status_rows_include_design_use_guidance() -> None:
+    rows = _method_validation_status_rows(result_has_active_prestress=True, result_has_passive_prestress=False)
+
+    assert rows
+    assert all(row.get("Design Use Guidance") for row in rows)
+    active_row = next(row for row in rows if row["Area"] == "Active bonded prestress model")
+    assert "engineering review" in active_row["Design Use Guidance"]
+
+
+def test_validation_status_compact_and_detail_tables_use_different_depths() -> None:
+    rows = _method_validation_status_rows(result_has_active_prestress=True, result_has_passive_prestress=True)
+    compact_df = _validation_status_compact_dataframe(rows)
+    detail_df = _validation_status_detail_dataframe(rows)
+
+    assert list(compact_df.columns) == [
+        "Area",
+        "Validation Status",
+        "Design Use Guidance",
+        "Case ID",
+    ]
+    assert "Evidence / Benchmark" not in compact_df.columns
+    assert "Evidence / Benchmark" in detail_df.columns
+    assert "Remaining Engineering Limitation" in detail_df.columns
 
 def test_diagnostic_summary_distinguishes_background_review_from_governing_warning() -> None:
     message, level = _diagnostic_summary_message(["PMM numeric warning: NaN values detected in PMM dataframe columns: eps_t."])

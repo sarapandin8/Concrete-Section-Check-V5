@@ -1058,12 +1058,19 @@ def _method_validation_status_rows(
 
     cases = _validation_case_status_map()
 
-    def row(area: str, case_id: str | None, evidence: str, remaining: str) -> dict[str, str]:
+    def row(
+        area: str,
+        case_id: str | None,
+        evidence: str,
+        remaining: str,
+        design_use: str,
+    ) -> dict[str, str]:
         case = cases.get(case_id) if case_id else None
         status = case.status if case is not None else "planned"
         return {
             "Area": area,
             "Validation Status": _validation_status_badge(status),
+            "Design Use Guidance": design_use,
             "Evidence / Benchmark": evidence if evidence else (case_id or "Not yet assigned"),
             "Remaining Engineering Limitation": remaining,
             "Case ID": case_id or "—",
@@ -1075,24 +1082,28 @@ def _method_validation_status_rows(
             "VALID.RC1",
             "VALID.RC1 rectangular RC benchmark pack plus VALID.RC2 phi transition checks.",
             "Add published/reference biaxial PMM examples before removing all general PMM method notes.",
+            "Use for current ULS PMM review with QA notes retained.",
         ),
         row(
             "ACI phi transition",
             "VALID.RC2",
             "Compression-controlled, transition, and tension-controlled phi checks are covered.",
             "Document published-code examples for final validation notes.",
+            "Use for ACI phi classification review in current PMM results.",
         ),
         row(
             "Directional PMM D/C extraction",
             "VALID.PMM.DC1",
             "Cleaned Pu slice envelope with ray-intersection capacity benchmark.",
             "Add reference biaxial demand/capacity examples before retiring all D/C limitation notes.",
+            "Use when capacity method is slice_envelope and D/C warnings are zero.",
         ),
         row(
             "Prestress-aware axial cap",
             "QA.PO1",
             "QA.PO1 validates Po, Aps, count handling, fpu fallback, and capped phiPn,max.",
             "Review project/code-specific axial-compression limits before final design.",
+            "Use for axial-cap screening with final code-specific review retained.",
         ),
     ]
 
@@ -1103,6 +1114,7 @@ def _method_validation_status_rows(
                 "SOLVER.PS.PASSIVE1",
                 "Passive Pe_eff=0/fpe=0 rows are separated from active-prestress warnings.",
                 "Review detailing/minimum reinforcement requirements separately.",
+                "Use as passive bonded high-strength steel contribution, not external prestress force.",
             )
         )
     if result_has_active_prestress:
@@ -1113,24 +1125,28 @@ def _method_validation_status_rows(
                     "VALID.PS1",
                     "PS-only and RC+PS benchmark behavior is covered for current strain-compatibility assumptions.",
                     "Published prestressed section reference examples are still required before fully retiring prestress method notes.",
+                    "Use for engineering review; retain independent check for final prestressed design.",
                 ),
                 row(
                     "Prestress stress-state region policy",
                     "VALID.PS2",
                     "fpu-cap and compression-reversal metadata are traceable by PMM region.",
                     "Stress-strain reference cases for compression-side behavior remain future validation work.",
+                    "Use governing-impact classification to separate background surface events from result warnings.",
                 ),
                 row(
                     "Prestress fpu-cap warning policy",
                     "SOLVER.PS.STRESS1",
                     "fpu-cap events are retained as PMM metadata unless governing-region evidence requires escalation.",
                     "Keep reviewing governing-region diagnostics for final design cases.",
+                    "Do not treat background fpu-cap events as failure by themselves.",
                 ),
                 row(
                     "Prestress compression-reversal policy",
                     "SOLVER.PS.COMP1",
                     "Compression-reversal events are escalated only when detected near the governing PMM region.",
                     "A refined compression-side prestress material model is still a future solver milestone.",
+                    "Use if governing-impact count is zero; review if Diagnostics flags governing-region impact.",
                 ),
             ]
         )
@@ -1139,6 +1155,7 @@ def _method_validation_status_rows(
             {
                 "Area": "SLS / Stress & Cracking",
                 "Validation Status": "Planned / not implemented",
+                "Design Use Guidance": "Not part of the current ULS PMM result; SLS loads are retained for future checks.",
                 "Evidence / Benchmark": "SLS load cases are stored and traced, but serviceability calculations are outside the active ULS PMM workflow.",
                 "Remaining Engineering Limitation": "Concrete/steel/prestress service stresses, decompression, and cracking checks are future milestones.",
                 "Case ID": "SLS.C1 planned",
@@ -1181,6 +1198,32 @@ def _method_validation_status_cards(rows: list[dict[str, str]]) -> list[dict[str
     ]
 
 
+def _validation_status_compact_dataframe(rows: list[dict[str, str]]) -> pd.DataFrame:
+    """Return a compact validation status table for the first QA view."""
+
+    columns = [
+        "Area",
+        "Validation Status",
+        "Design Use Guidance",
+        "Case ID",
+    ]
+    return pd.DataFrame(rows)[columns]
+
+
+def _validation_status_detail_dataframe(rows: list[dict[str, str]]) -> pd.DataFrame:
+    """Return the full evidence table for detailed engineering review."""
+
+    columns = [
+        "Area",
+        "Validation Status",
+        "Case ID",
+        "Evidence / Benchmark",
+        "Remaining Engineering Limitation",
+        "Design Use Guidance",
+    ]
+    return pd.DataFrame(rows)[columns]
+
+
 def _render_method_validation_status_panel(
     *,
     result_has_active_prestress: bool,
@@ -1195,10 +1238,13 @@ def _render_method_validation_status_panel(
     _render_analysis_summary_strip(_method_validation_status_cards(rows), columns=4)
     with st.expander("Validation status / method notes", expanded=False):
         st.caption(
-            "This panel separates validated/implemented method areas from validation-in-progress items. "
-            "It does not hide QA diagnostics; it explains why remaining notes are retained before final design use."
+            "This panel separates validation evidence from final-design limitations. "
+            "Use the compact table for first-screen confidence and the detailed table for engineering QA traceability."
         )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.markdown("**Validation status overview**")
+        st.dataframe(_validation_status_compact_dataframe(rows), use_container_width=True, hide_index=True)
+        with st.expander("Detailed validation evidence / remaining limitations", expanded=False):
+            st.dataframe(_validation_status_detail_dataframe(rows), use_container_width=True, hide_index=True)
 
 def _render_prestress_check_panel(summary: PrestressCheckSummary, include_prestress: bool) -> None:
     """Render prestress QA as diagnostics instead of main-page content."""

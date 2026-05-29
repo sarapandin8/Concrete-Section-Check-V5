@@ -560,3 +560,7 @@ Concrete PMM Pro now includes a PMM solver validation framework and the first ex
 - `VALID.RC1` — rectangular RC PMM benchmark pack with axial-cap, uniaxial bending, symmetry, and numeric-schema checks
 
 These validation assets are not a final certification. They are the project control system for reducing prototype warnings only when benchmark evidence supports the change.
+
+### UI.VALIDATION.STATUS1 — Validation status panel
+
+The Analysis workspace now includes a commercial-facing validation status panel.  It summarizes which PMM method areas have implemented benchmark coverage, which are still validation-in-progress, and which are planned future checks.  This replaces broad `Prototype Result` heading wording while retaining Diagnostics / QA notes for final engineering review.

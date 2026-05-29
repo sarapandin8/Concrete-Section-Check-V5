@@ -122,6 +122,7 @@ from concrete_pmm_pro.visualization.sls_stress import (
     service_stress_results_to_plot_dataframe,
 )
 from concrete_pmm_pro.verification.pmm_benchmarks import PMMVerificationSummary, run_pmm_verification_suite
+from concrete_pmm_pro.verification.validation_framework import build_pmm_solver_validation_matrix
 from concrete_pmm_pro.verification.hand_checks import (
     HandCheckSummary,
     hand_check_summary_to_dataframe,
@@ -1007,6 +1008,189 @@ def _render_solver_diagnostic_messages(
         else:
             st.info("No solver info items were reported.")
 
+
+def _validation_status_badge(status: str) -> str:
+    """Map validation-matrix status to a commercial-facing label."""
+
+    mapping = {
+        "implemented": "Validated / implemented",
+        "partial": "Validation in progress",
+        "planned": "Planned / not implemented",
+    }
+    return mapping.get(str(status), "Unknown")
+
+
+def _validation_status_style(status: str) -> str:
+    if status == "implemented":
+        return "ready"
+    if status == "partial":
+        return "warning"
+    if status == "planned":
+        return "neutral"
+    return "info"
+
+
+def _validation_case_status_map() -> dict[str, object]:
+    """Return validation case specs keyed by case id for UI status panels."""
+
+    return {case.case_id: case for case in build_pmm_solver_validation_matrix()}
+
+
+def _method_validation_status_rows(
+    *,
+    result_has_active_prestress: bool,
+    result_has_passive_prestress: bool,
+    include_sls: bool = True,
+) -> list[dict[str, str]]:
+    """Build the commercial-facing validation status rows for Analysis.
+
+    This is intentionally a UI/status layer.  It does not certify the solver;
+    it summarizes which validation milestones support the currently visible
+    method and which areas remain under validation.
+    """
+
+    cases = _validation_case_status_map()
+
+    def row(area: str, case_id: str | None, evidence: str, remaining: str) -> dict[str, str]:
+        case = cases.get(case_id) if case_id else None
+        status = case.status if case is not None else "planned"
+        return {
+            "Area": area,
+            "Validation Status": _validation_status_badge(status),
+            "Evidence / Benchmark": evidence if evidence else (case_id or "Not yet assigned"),
+            "Remaining Engineering Limitation": remaining,
+            "Case ID": case_id or "—",
+        }
+
+    rows = [
+        row(
+            "RC PMM strain compatibility",
+            "VALID.RC1",
+            "VALID.RC1 rectangular RC benchmark pack plus VALID.RC2 phi transition checks.",
+            "Add published/reference biaxial PMM examples before removing all general PMM method notes.",
+        ),
+        row(
+            "ACI phi transition",
+            "VALID.RC2",
+            "Compression-controlled, transition, and tension-controlled phi checks are covered.",
+            "Document published-code examples for final validation notes.",
+        ),
+        row(
+            "Directional PMM D/C extraction",
+            "VALID.PMM.DC1",
+            "Cleaned Pu slice envelope with ray-intersection capacity benchmark.",
+            "Add reference biaxial demand/capacity examples before retiring all D/C limitation notes.",
+        ),
+        row(
+            "Prestress-aware axial cap",
+            "QA.PO1",
+            "QA.PO1 validates Po, Aps, count handling, fpu fallback, and capped phiPn,max.",
+            "Review project/code-specific axial-compression limits before final design.",
+        ),
+    ]
+
+    if result_has_passive_prestress:
+        rows.append(
+            row(
+                "Passive PS / high-strength steel",
+                "SOLVER.PS.PASSIVE1",
+                "Passive Pe_eff=0/fpe=0 rows are separated from active-prestress warnings.",
+                "Review detailing/minimum reinforcement requirements separately.",
+            )
+        )
+    if result_has_active_prestress:
+        rows.extend(
+            [
+                row(
+                    "Active bonded prestress model",
+                    "VALID.PS1",
+                    "PS-only and RC+PS benchmark behavior is covered for current strain-compatibility assumptions.",
+                    "Published prestressed section reference examples are still required before fully retiring prestress method notes.",
+                ),
+                row(
+                    "Prestress stress-state region policy",
+                    "VALID.PS2",
+                    "fpu-cap and compression-reversal metadata are traceable by PMM region.",
+                    "Stress-strain reference cases for compression-side behavior remain future validation work.",
+                ),
+                row(
+                    "Prestress fpu-cap warning policy",
+                    "SOLVER.PS.STRESS1",
+                    "fpu-cap events are retained as PMM metadata unless governing-region evidence requires escalation.",
+                    "Keep reviewing governing-region diagnostics for final design cases.",
+                ),
+                row(
+                    "Prestress compression-reversal policy",
+                    "SOLVER.PS.COMP1",
+                    "Compression-reversal events are escalated only when detected near the governing PMM region.",
+                    "A refined compression-side prestress material model is still a future solver milestone.",
+                ),
+            ]
+        )
+    if include_sls:
+        rows.append(
+            {
+                "Area": "SLS / Stress & Cracking",
+                "Validation Status": "Planned / not implemented",
+                "Evidence / Benchmark": "SLS load cases are stored and traced, but serviceability calculations are outside the active ULS PMM workflow.",
+                "Remaining Engineering Limitation": "Concrete/steel/prestress service stresses, decompression, and cracking checks are future milestones.",
+                "Case ID": "SLS.C1 planned",
+            }
+        )
+    return rows
+
+
+def _method_validation_status_cards(rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    validated = sum("Validated" in row["Validation Status"] for row in rows)
+    in_progress = sum("progress" in row["Validation Status"] for row in rows)
+    planned = sum("Planned" in row["Validation Status"] for row in rows)
+    return [
+        {
+            "title": "Validated / Implemented",
+            "value": str(validated),
+            "detail": "Milestones with current benchmark evidence",
+            "status": "ready",
+        },
+        {
+            "title": "Validation In Progress",
+            "value": str(in_progress),
+            "detail": "Use engineering review and diagnostics",
+            "status": "warning" if in_progress else "ready",
+        },
+        {
+            "title": "Planned Checks",
+            "value": str(planned),
+            "detail": "Not part of current ULS PMM result",
+            "status": "neutral",
+        },
+        {
+            "title": "Method Basis",
+            "value": "ACI strain compatibility",
+            "detail": "See validation table and QA notes",
+            "status": "info",
+        },
+    ]
+
+
+def _render_method_validation_status_panel(
+    *,
+    result_has_active_prestress: bool,
+    result_has_passive_prestress: bool,
+) -> None:
+    """Render commercial validation status instead of relying on prototype wording."""
+
+    rows = _method_validation_status_rows(
+        result_has_active_prestress=result_has_active_prestress,
+        result_has_passive_prestress=result_has_passive_prestress,
+    )
+    _render_analysis_summary_strip(_method_validation_status_cards(rows), columns=4)
+    with st.expander("Validation status / method notes", expanded=False):
+        st.caption(
+            "This panel separates validated/implemented method areas from validation-in-progress items. "
+            "It does not hide QA diagnostics; it explains why remaining notes are retained before final design use."
+        )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
 def _render_prestress_check_panel(summary: PrestressCheckSummary, include_prestress: bool) -> None:
     """Render prestress QA as diagnostics instead of main-page content."""
 
@@ -1373,13 +1557,17 @@ def _render_input_summary() -> None:
         result_has_passive_prestress = any(getattr(point, "passive_prestress_count", 0) > 0 for point in result.points)
         result_has_bonded_prestress = result_has_active_prestress or result_has_passive_prestress
         if result_has_active_prestress:
-            result_label = "RC + Active Bonded Prestress PMM Prototype"
+            result_label = "RC + Active Bonded Prestress PMM"
         elif result_has_passive_prestress:
             result_label = "RC + Passive PS Steel PMM"
         else:
-            result_label = "RC PMM Prototype"
+            result_label = "RC PMM"
         st.subheader(f"{result_label} Result")
-        st.caption("Solver diagnostics are kept in QA panels; the governing ULS result workspace follows below.")
+        st.caption("Method: ACI strain compatibility. Validation status is summarized below; QA diagnostics remain available for final engineering review.")
+        _render_method_validation_status_panel(
+            result_has_active_prestress=result_has_active_prestress,
+            result_has_passive_prestress=result_has_passive_prestress,
+        )
         df = pmm_result_to_display_dataframe(result)
         if not df.empty:
             summary = summarize_pmm_result(result)
@@ -2315,7 +2503,7 @@ def _render_pmm_charts(
             )
         )
     _add_demand_trace(pmx, demand_df, "Mux_kNm", "ULS demand", dc_summary)
-    pmx.update_layout(title="RC PMM Prototype: P-Mnx", xaxis_title="phiMnx (kN-m)", yaxis_title="phiPn (kN)")
+    pmx.update_layout(title="RC PMM: P-Mnx", xaxis_title="phiMnx (kN-m)", yaxis_title="phiPn (kN)")
     st.plotly_chart(pmx, use_container_width=True, key=f"{key_prefix}_p_mnx_chart")
 
     pmy = go.Figure()
@@ -2332,7 +2520,7 @@ def _render_pmm_charts(
             )
         )
     _add_demand_trace(pmy, demand_df, "Muy_kNm", "ULS demand", dc_summary)
-    pmy.update_layout(title="RC PMM Prototype: P-Mny", xaxis_title="phiMny (kN-m)", yaxis_title="phiPn (kN)")
+    pmy.update_layout(title="RC PMM: P-Mny", xaxis_title="phiMny (kN-m)", yaxis_title="phiPn (kN)")
     st.plotly_chart(pmy, use_container_width=True, key=f"{key_prefix}_p_mny_chart")
 
     mm = go.Figure(
@@ -2372,7 +2560,7 @@ def _render_pmm_charts(
                 name="ULS demand",
             )
         )
-    mm.update_layout(title="RC PMM Prototype: Mnx-Mny Point Cloud", xaxis_title="phiMnx (kN-m)", yaxis_title="phiMny (kN-m)")
+    mm.update_layout(title="RC PMM: Mnx-Mny Point Cloud", xaxis_title="phiMnx (kN-m)", yaxis_title="phiMny (kN-m)")
     st.plotly_chart(mm, use_container_width=True, key=f"{key_prefix}_mnx_mny_chart")
 
     fig3d = go.Figure(
@@ -2386,7 +2574,7 @@ def _render_pmm_charts(
         )
     )
     fig3d.update_layout(
-        title="RC PMM Prototype: 3D Point Cloud",
+        title="RC PMM: 3D Point Cloud",
         scene=dict(xaxis_title="phiMnx (kN-m)", yaxis_title="phiMny (kN-m)", zaxis_title="phiPn (kN)"),
     )
     st.plotly_chart(fig3d, use_container_width=True, key=f"{key_prefix}_3d_pmm_chart")

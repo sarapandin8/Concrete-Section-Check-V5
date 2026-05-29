@@ -235,3 +235,11 @@ Covered cases:
 - Unbonded prestress is excluded upstream before the Po helper receives the bonded strain-compatible element list.
 
 This milestone does not change the axial-cap equations.  It provides benchmark evidence so the ACI axial-cap diagnostic can be treated as a documented method note rather than a broad prototype warning.
+
+## UI.VALIDATION.STATUS1 — Commercial Validation Status Panel
+
+The Analysis workspace now summarizes method validation status separately from solver diagnostics.  The result heading no longer relies on broad `Prototype Result` wording.  Instead, the UI displays a validation-status table that separates implemented benchmark evidence from validation-in-progress and planned checks.
+
+Current commercial-facing status areas include RC PMM strain compatibility, ACI phi transition, directional PMM demand/capacity extraction, prestress-aware axial cap, passive PS/high-strength steel behavior, active bonded prestress model behavior, prestress stress-state policies, and SLS future work.
+
+This is a UI/method-status milestone only.  It does not certify unvalidated solver behavior or remove QA diagnostics.  Remaining limitation notes continue to be retained in Diagnostics / QA and reports until the related validation milestones are completed.

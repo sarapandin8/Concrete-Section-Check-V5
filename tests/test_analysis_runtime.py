@@ -653,3 +653,44 @@ def test_compression_reversal_is_escalated_only_when_near_governing_region() -> 
         warnings=[],
     )
     assert analysis_page_module._compression_reversal_near_governing(df, near_summary)
+
+
+def test_method_validation_status_rows_include_core_commercial_status_items() -> None:
+    rows = analysis_page_module._method_validation_status_rows(
+        result_has_active_prestress=True,
+        result_has_passive_prestress=False,
+    )
+    areas = {row["Area"] for row in rows}
+    case_ids = {row["Case ID"] for row in rows}
+
+    assert "RC PMM strain compatibility" in areas
+    assert "Directional PMM D/C extraction" in areas
+    assert "Prestress-aware axial cap" in areas
+    assert "Active bonded prestress model" in areas
+    assert "SLS / Stress & Cracking" in areas
+    assert "VALID.PMM.DC1" in case_ids
+    assert "QA.PO1" in case_ids
+    assert "VALID.PS1" in case_ids
+
+
+def test_method_validation_status_rows_add_passive_ps_when_present() -> None:
+    rows = analysis_page_module._method_validation_status_rows(
+        result_has_active_prestress=False,
+        result_has_passive_prestress=True,
+    )
+
+    assert any(row["Case ID"] == "SOLVER.PS.PASSIVE1" for row in rows)
+    assert not any(row["Case ID"] == "VALID.PS1" for row in rows)
+
+
+def test_method_validation_status_cards_count_status_groups() -> None:
+    rows = analysis_page_module._method_validation_status_rows(
+        result_has_active_prestress=True,
+        result_has_passive_prestress=True,
+    )
+    cards = analysis_page_module._method_validation_status_cards(rows)
+    card_map = {card["title"]: card for card in cards}
+
+    assert int(card_map["Validated / Implemented"]["value"]) >= 4
+    assert int(card_map["Planned Checks"]["value"]) >= 1
+    assert card_map["Method Basis"]["value"] == "ACI strain compatibility"

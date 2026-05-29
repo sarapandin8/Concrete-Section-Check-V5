@@ -583,3 +583,7 @@ The PMM Check tab now emphasizes the governing Mux-Muy slice at the selected Pu.
 ### UI.ANALYSIS4.2 — Governing Slice Plot Minimal Mode
 
 The PMM Check slice plot now uses a governing-case-only display by default and resets the annotation control key so old session-state callouts do not persist after upgrade.  Annotation callouts remain available for presentation screenshots, but they are off by default because text boxes can hide demand and capacity markers.  The plot can still show selected cases, selected + governing, or all active ULS points when the user explicitly chooses those modes.
+
+### UI.ANALYSIS4.3 — Result Confidence / Design Decision Banner
+
+Adds a first-screen design decision banner to the Analysis workspace. The banner separates the governing ULS PMM strength decision from QA diagnostics so users can distinguish direct governing-result warnings from background method notes. It summarizes PASS/FAIL, confidence, final review scope, D/C, fallback count, D/C warnings, governing QA count, and capacity margin without changing PMM solver equations or D/C extraction.

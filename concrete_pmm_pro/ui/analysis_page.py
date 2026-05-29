@@ -255,6 +255,55 @@ _ANALYSIS_DASHBOARD_CSS = """
   font-size: 0.84rem;
   line-height: 1.35;
 }
+
+.cpmm-decision-banner {
+  border: 1px solid #d0d7e2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 0.95rem 1.05rem;
+  margin: 0.3rem 0 0.85rem 0;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.045);
+}
+.cpmm-decision-banner.ready { border-left: 5px solid #2e7d32; background: #fbfffb; }
+.cpmm-decision-banner.warning { border-left: 5px solid #b76e00; background: #fffdf7; }
+.cpmm-decision-banner.danger { border-left: 5px solid #c0392b; background: #fffafa; }
+.cpmm-decision-banner.neutral { border-left: 5px solid #667085; background: #fbfcfe; }
+.cpmm-decision-eyebrow {
+  color: #667085;
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+.cpmm-decision-title {
+  color: #101828;
+  font-size: 1.08rem;
+  font-weight: 780;
+  line-height: 1.25;
+  margin-bottom: 0.25rem;
+}
+.cpmm-decision-detail {
+  color: #475467;
+  font-size: 0.83rem;
+  line-height: 1.42;
+}
+.cpmm-decision-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+.cpmm-decision-pill {
+  border: 1px solid #d9dee7;
+  border-radius: 999px;
+  padding: 0.16rem 0.55rem;
+  color: #344054;
+  background: #f9fafb;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
 .cpmm-governing-card {
   border: 1px solid #d0d7e2;
   border-radius: 12px;
@@ -1886,6 +1935,7 @@ def _render_input_summary() -> None:
                 result_has_active_prestress,
                 unbonded_ignored_count,
                 result_hash,
+                engineering_warnings,
             )
 
             with st.expander("Detailed PMM plots", expanded=False):
@@ -2109,6 +2159,122 @@ def _render_analysis_result_transparency_panel(
         )
     return transparency_df
 
+
+
+def _finite_dcr_text(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(numeric):
+        return "N/A"
+    return f"{numeric:.3f}"
+
+
+def _render_design_decision_banner(
+    dc_summary: DemandCapacitySummary,
+    load_cases: list,
+    warnings: list[str],
+    *,
+    include_prestress: bool,
+    bonded_prestress_included: bool,
+    unbonded_ignored_count: int,
+) -> None:
+    """Render a first-screen engineering decision statement for the ULS PMM result.
+
+    This banner is intentionally decision-oriented rather than diagnostic-heavy:
+    it separates the governing demand/capacity result from QA notes so users do
+    not mistake background method notes for a failed ULS strength check.
+    """
+
+    usage = _active_load_case_usage_summary(load_cases)
+    governing = _governing_result(dc_summary)
+    guidance_df = _diagnostics_to_dataframe(warnings, dc_summary=dc_summary) if warnings else pd.DataFrame()
+    priority_counts = _guidance_priority_counts(guidance_df)
+    governing_warning_count = _governing_warning_count(priority_counts)
+    review_count = _review_before_final_count(priority_counts)
+    qa_count = _qa_note_count(priority_counts)
+    counts = _diagnostic_counts(warnings)
+    limitation_count = int(counts.get("Solver limitation note", 0))
+    numerical_count = int(counts.get("Numerical note", 0))
+    fallback_count = sum(1 for item in dc_summary.results if item.used_fallback)
+    dc_warning_count = sum(int(item.warning_count) for item in dc_summary.results)
+    dcr_text = _finite_dcr_text(dc_summary.max_dcr)
+    governing_label = dc_summary.governing_combo or "N/A"
+
+    if dc_summary.overall_status == PASS and governing_warning_count == 0 and fallback_count == 0 and dc_warning_count == 0:
+        banner_class = "ready"
+        decision = "PASS for ULS PMM strength check"
+        confidence = "High for the current validated ULS PMM workflow."
+        final_review = (
+            f"No direct governing-result warning was detected. {review_count:,} engineering QA review item(s), "
+            f"{limitation_count:,} method note(s), and {numerical_count:,} numerical note(s) remain available for final review."
+        )
+    elif dc_summary.overall_status == PASS and governing_warning_count > 0:
+        banner_class = "warning"
+        decision = "PASS with governing-impact review required"
+        confidence = "Numerical D/C is below 1.0, but at least one diagnostic may affect reliance on the governing result."
+        final_review = (
+            f"Review {governing_warning_count:,} governing-impact item(s) before final design use. "
+            f"Additional QA notes remain in Diagnostics / QA."
+        )
+    elif dc_summary.overall_status == PASS:
+        banner_class = "warning"
+        decision = "PASS with method review required"
+        confidence = "D/C is below 1.0, but method diagnostics should be reviewed before final design use."
+        final_review = (
+            f"Fallback cases: {fallback_count:,}; D/C warnings: {dc_warning_count:,}; "
+            f"engineering review items: {review_count:,}."
+        )
+    elif dc_summary.overall_status == FAIL:
+        banner_class = "danger"
+        decision = "FAIL for ULS PMM strength check"
+        confidence = "The governing demand/capacity ratio is not acceptable under the current method."
+        final_review = "Revise section, reinforcement/prestress, or load input before final design use."
+    else:
+        banner_class = "neutral"
+        decision = "ULS PMM result not fully checked"
+        confidence = "The analysis did not produce a complete governing demand/capacity decision."
+        final_review = "Review readiness, load cases, and PMM diagnostics."
+
+    if usage.get("active_sls", 0):
+        sls_note = f"SLS cases stored: {usage['active_sls']:,}; not included in ULS PMM decision."
+    else:
+        sls_note = "SLS / Stress & Cracking is a planned separate check."
+
+    prestress_note = ""
+    if include_prestress and bonded_prestress_included:
+        prestress_note = "Bonded prestress is included in the ULS PMM section action."
+    elif include_prestress and unbonded_ignored_count > 0:
+        prestress_note = "Only unbonded prestress was found; it is ignored by the current ULS PMM solver."
+    elif include_prestress:
+        prestress_note = "No active bonded prestress contribution is included in this ULS PMM result."
+    else:
+        prestress_note = "Prestress contribution is disabled by analysis settings."
+
+    pills = [
+        f"Governing: {governing_label}",
+        f"D/C: {dcr_text}",
+        f"Fallback: {fallback_count:,}",
+        f"D/C warnings: {dc_warning_count:,}",
+        f"Governing QA: {governing_warning_count:,}",
+    ]
+    if governing is not None and governing.dcr is not None and math.isfinite(float(governing.dcr)):
+        pills.append(f"Margin: {_capacity_margin_text(governing.dcr)}")
+    pill_html = "".join(f'<span class="cpmm-decision-pill">{escape(str(item))}</span>' for item in pills)
+    html = (
+        f'<div class="cpmm-decision-banner {banner_class}">'
+        '<div class="cpmm-decision-eyebrow">Design decision</div>'
+        f'<div class="cpmm-decision-title">{escape(decision)}</div>'
+        f'<div class="cpmm-decision-detail"><strong>Confidence:</strong> {escape(confidence)}<br/>'
+        f'<strong>Final review:</strong> {escape(final_review)}<br/>'
+        f'<strong>Scope:</strong> {escape(prestress_note)} {escape(sls_note)}</div>'
+        f'<div class="cpmm-decision-pills">{pill_html}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 def _render_executive_result_header(dc_summary: DemandCapacitySummary, load_cases: list) -> None:
     usage = _active_load_case_usage_summary(load_cases)
@@ -2395,6 +2561,7 @@ def _render_pmm_slice_dashboard(
     bonded_prestress_included: bool,
     unbonded_ignored_count: int,
     result_hash: str | None,
+    engineering_warnings: list[str] | None = None,
 ) -> None:
     """Render a commercial-grade ULS/PMM workspace shell.
 
@@ -2410,6 +2577,14 @@ def _render_pmm_slice_dashboard(
         return
 
     _render_executive_result_header(dc_summary, load_cases)
+    _render_design_decision_banner(
+        dc_summary,
+        load_cases,
+        engineering_warnings or [],
+        include_prestress=include_prestress,
+        bonded_prestress_included=bonded_prestress_included,
+        unbonded_ignored_count=unbonded_ignored_count,
+    )
     if bonded_prestress_included:
         st.warning("Bonded prestress contribution is included using the current prototype strain compatibility model.")
     if unbonded_ignored_count > 0:

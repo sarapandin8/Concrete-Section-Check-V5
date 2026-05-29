@@ -273,3 +273,7 @@ The governing PMM slice plot now defaults to a selected-case-only view, keeps D/
 ### UI.ANALYSIS4.2 — Governing Slice Plot Minimal Mode
 
 The governing PMM slice visualization defaults to the governing ULS load point only with annotation callouts off.  This is a display-policy refinement only; it does not change the PMM surface, SOLVER.PMM.DC1 ray-intersection D/C extraction, load cases, or validation status.  Detailed numerical values remain in the Selected/Governing Case Details panel and plot hover text.
+
+## UI.ANALYSIS4.3 — Result Confidence / Design Decision Banner
+
+This UI milestone adds a decision-oriented banner above the ULS/PMM result workspace. It does not change solver equations. The intent is commercial-style communication: show whether the current ULS PMM strength check passes, whether any diagnostic directly affects the governing result, and which QA notes remain for final engineering review. SLS remains outside the ULS PMM decision and is reported as a separate planned/check workflow.

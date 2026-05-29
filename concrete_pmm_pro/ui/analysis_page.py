@@ -2203,8 +2203,9 @@ def _render_design_decision_banner(
     dc_warning_count = sum(int(item.warning_count) for item in dc_summary.results)
     dcr_text = _finite_dcr_text(dc_summary.max_dcr)
     governing_label = dc_summary.governing_combo or "N/A"
+    overall_status = str(dc_summary.overall_status).strip().upper()
 
-    if dc_summary.overall_status == PASS and governing_warning_count == 0 and fallback_count == 0 and dc_warning_count == 0:
+    if overall_status == "PASS" and governing_warning_count == 0 and fallback_count == 0 and dc_warning_count == 0:
         banner_class = "ready"
         decision = "PASS for ULS PMM strength check"
         confidence = "High for the current validated ULS PMM workflow."
@@ -2212,7 +2213,7 @@ def _render_design_decision_banner(
             f"No direct governing-result warning was detected. {review_count:,} engineering QA review item(s), "
             f"{limitation_count:,} method note(s), and {numerical_count:,} numerical note(s) remain available for final review."
         )
-    elif dc_summary.overall_status == PASS and governing_warning_count > 0:
+    elif overall_status == "PASS" and governing_warning_count > 0:
         banner_class = "warning"
         decision = "PASS with governing-impact review required"
         confidence = "Numerical D/C is below 1.0, but at least one diagnostic may affect reliance on the governing result."
@@ -2220,7 +2221,7 @@ def _render_design_decision_banner(
             f"Review {governing_warning_count:,} governing-impact item(s) before final design use. "
             f"Additional QA notes remain in Diagnostics / QA."
         )
-    elif dc_summary.overall_status == PASS:
+    elif overall_status == "PASS":
         banner_class = "warning"
         decision = "PASS with method review required"
         confidence = "D/C is below 1.0, but method diagnostics should be reviewed before final design use."
@@ -2228,7 +2229,7 @@ def _render_design_decision_banner(
             f"Fallback cases: {fallback_count:,}; D/C warnings: {dc_warning_count:,}; "
             f"engineering review items: {review_count:,}."
         )
-    elif dc_summary.overall_status == FAIL:
+    elif overall_status == "FAIL":
         banner_class = "danger"
         decision = "FAIL for ULS PMM strength check"
         confidence = "The governing demand/capacity ratio is not acceptable under the current method."

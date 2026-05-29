@@ -277,3 +277,12 @@ The governing PMM slice visualization defaults to the governing ULS load point o
 ## UI.ANALYSIS4.3 — Result Confidence / Design Decision Banner
 
 This UI milestone adds a decision-oriented banner above the ULS/PMM result workspace. It does not change solver equations. The intent is commercial-style communication: show whether the current ULS PMM strength check passes, whether any diagnostic directly affects the governing result, and which QA notes remain for final engineering review. SLS remains outside the ULS PMM decision and is reported as a separate planned/check workflow.
+
+### UI.ANALYSIS4.4 — Final Analysis Workspace Polish
+
+The ULS / PMM Analysis workspace now separates result communication into two levels:
+
+- a compact workspace header showing governing case, D/C, active ULS/SLS counts, fallback count, and D/C warning count; and
+- a Design Decision banner that presents Decision, Confidence, and Scope / Exclusions as separate blocks.
+
+This reduces duplicate PASS / governing / D/C messaging and clarifies that the current decision applies to ULS PMM strength only.  SLS / Stress & Cracking remains outside this ULS decision and is reported as a separate planned workflow.  No solver equation, PMM generation, prestress model, axial-cap logic, or D/C extraction behavior is changed by this milestone.

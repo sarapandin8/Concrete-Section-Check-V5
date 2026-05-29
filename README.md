@@ -587,3 +587,7 @@ The PMM Check slice plot now uses a governing-case-only display by default and r
 ### UI.ANALYSIS4.3 — Result Confidence / Design Decision Banner
 
 Adds a first-screen design decision banner to the Analysis workspace. The banner separates the governing ULS PMM strength decision from QA diagnostics so users can distinguish direct governing-result warnings from background method notes. It summarizes PASS/FAIL, confidence, final review scope, D/C, fallback count, D/C warnings, governing QA count, and capacity margin without changing PMM solver equations or D/C extraction.
+
+### UI.ANALYSIS4.4 — Final Analysis Workspace Polish
+
+The Analysis workspace decision area now avoids duplicate status storytelling between the top workspace header and the Design Decision banner.  The header acts as a compact workspace status strip, while the decision banner carries the engineering conclusion.  The banner also separates Decision, Confidence, and Scope / Exclusions into dedicated blocks so ULS PMM strength status, validation confidence, prestress inclusion, and SLS exclusion are easier to read.  This milestone is UI communication polish only and does not change solver equations, PMM surface generation, demand/capacity extraction, prestress behavior, load import, report export, or cache behavior.

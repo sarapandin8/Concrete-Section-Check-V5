@@ -288,6 +288,34 @@ _ANALYSIS_DASHBOARD_CSS = """
   font-size: 0.83rem;
   line-height: 1.42;
 }
+.cpmm-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.55rem;
+}
+.cpmm-decision-block {
+  border: 1px solid #e4e8ef;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.55rem 0.65rem;
+}
+.cpmm-decision-block-label {
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 760;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.18rem;
+}
+.cpmm-decision-block-text {
+  color: #344054;
+  font-size: 0.80rem;
+  line-height: 1.36;
+}
+@media (max-width: 900px) {
+  .cpmm-decision-grid { grid-template-columns: 1fr; }
+}
 .cpmm-decision-pills {
   display: flex;
   flex-wrap: wrap;
@@ -2208,7 +2236,7 @@ def _render_design_decision_banner(
     if overall_status == "PASS" and governing_warning_count == 0 and fallback_count == 0 and dc_warning_count == 0:
         banner_class = "ready"
         decision = "PASS for ULS PMM strength check"
-        confidence = "High for the current validated ULS PMM workflow."
+        confidence = "High for ULS PMM demand/capacity extraction under the current validated workflow."
         final_review = (
             f"No direct governing-result warning was detected. {review_count:,} engineering QA review item(s), "
             f"{limitation_count:,} method note(s), and {numerical_count:,} numerical note(s) remain available for final review."
@@ -2216,7 +2244,7 @@ def _render_design_decision_banner(
     elif overall_status == "PASS" and governing_warning_count > 0:
         banner_class = "warning"
         decision = "PASS with governing-impact review required"
-        confidence = "Numerical D/C is below 1.0, but at least one diagnostic may affect reliance on the governing result."
+        confidence = "D/C is below 1.0, but at least one diagnostic may affect reliance on the governing result."
         final_review = (
             f"Review {governing_warning_count:,} governing-impact item(s) before final design use. "
             f"Additional QA notes remain in Diagnostics / QA."
@@ -2241,9 +2269,9 @@ def _render_design_decision_banner(
         final_review = "Review readiness, load cases, and PMM diagnostics."
 
     if usage.get("active_sls", 0):
-        sls_note = f"SLS cases stored: {usage['active_sls']:,}; not included in ULS PMM decision."
+        sls_note = f"ULS PMM only; {usage['active_sls']:,} SLS case(s) are stored but excluded from this decision."
     else:
-        sls_note = "SLS / Stress & Cracking is a planned separate check."
+        sls_note = "ULS PMM only; SLS / Stress & Cracking is planned separately."
 
     prestress_note = ""
     if include_prestress and bonded_prestress_included:
@@ -2254,6 +2282,7 @@ def _render_design_decision_banner(
         prestress_note = "No active bonded prestress contribution is included in this ULS PMM result."
     else:
         prestress_note = "Prestress contribution is disabled by analysis settings."
+    scope = f"{prestress_note} {sls_note}"
 
     pills = [
         f"Governing: {governing_label}",
@@ -2265,13 +2294,28 @@ def _render_design_decision_banner(
     if governing is not None and governing.dcr is not None and math.isfinite(float(governing.dcr)):
         pills.append(f"Margin: {_capacity_margin_text(governing.dcr)}")
     pill_html = "".join(f'<span class="cpmm-decision-pill">{escape(str(item))}</span>' for item in pills)
+    decision_grid = (
+        '<div class="cpmm-decision-grid">'
+        '<div class="cpmm-decision-block">'
+        '<div class="cpmm-decision-block-label">Decision</div>'
+        f'<div class="cpmm-decision-block-text">{escape(decision)}</div>'
+        '</div>'
+        '<div class="cpmm-decision-block">'
+        '<div class="cpmm-decision-block-label">Confidence</div>'
+        f'<div class="cpmm-decision-block-text">{escape(confidence)}</div>'
+        '</div>'
+        '<div class="cpmm-decision-block">'
+        '<div class="cpmm-decision-block-label">Scope / exclusions</div>'
+        f'<div class="cpmm-decision-block-text">{escape(scope)}</div>'
+        '</div>'
+        '</div>'
+    )
     html = (
         f'<div class="cpmm-decision-banner {banner_class}">'
         '<div class="cpmm-decision-eyebrow">Design decision</div>'
         f'<div class="cpmm-decision-title">{escape(decision)}</div>'
-        f'<div class="cpmm-decision-detail"><strong>Confidence:</strong> {escape(confidence)}<br/>'
-        f'<strong>Final review:</strong> {escape(final_review)}<br/>'
-        f'<strong>Scope:</strong> {escape(prestress_note)} {escape(sls_note)}</div>'
+        f'<div class="cpmm-decision-detail"><strong>Final review:</strong> {escape(final_review)}</div>'
+        f'{decision_grid}'
         f'<div class="cpmm-decision-pills">{pill_html}</div>'
         '</div>'
     )
@@ -2286,8 +2330,10 @@ def _render_executive_result_header(dc_summary: DemandCapacitySummary, load_case
     html = (
         '<div class="cpmm-executive-header">'
         '<div class="cpmm-executive-eyebrow">ULS / PMM Analysis Workspace</div>'
-        f'<div class="cpmm-executive-title">{escape(status)} · Governing: {escape(governing)} · D/C {escape(max_dcr)}</div>'
+        '<div class="cpmm-executive-title">Strength result workspace</div>'
         '<div class="cpmm-executive-subtitle">'
+        f'Governing: <strong>{escape(governing)}</strong> · '
+        f'D/C: <strong>{escape(max_dcr)}</strong> · '
         f'Active ULS used: <strong>{usage["active_uls"]:,}</strong> · '
         f'Active SLS held for SLS workspace: <strong>{usage["active_sls"]:,}</strong> · '
         f'Fallback cases: <strong>{sum(1 for item in dc_summary.results if item.used_fallback):,}</strong> · '

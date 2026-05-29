@@ -643,3 +643,35 @@ def test_prestress_elements_from_dataframe_empty_active_rows_does_not_emit_prese
 
     assert result.elements == []
     assert not any("No active" in warning for warning in result.warnings)
+
+def test_prestress_summary_labels_active_and_passive_analysis_roles() -> None:
+    elements = [
+        PrestressElement(
+            x_mm=0,
+            y_mm=-100,
+            area_mm2=100,
+            steel_type="strand",
+            pe_eff_n=50_000,
+            initial_stress_mpa=500,
+            initial_strain=500 / 195000,
+            bonded=True,
+            label="PS-active",
+        ),
+        PrestressElement(
+            x_mm=0,
+            y_mm=100,
+            area_mm2=100,
+            steel_type="prestressing_bar",
+            pe_eff_n=0,
+            initial_stress_mpa=0,
+            initial_strain=0,
+            bonded=True,
+            label="PS-passive",
+        ),
+    ]
+
+    summary = prestress_summary_dataframe(elements)
+
+    assert "Analysis role" in summary.columns
+    assert summary.loc[summary["Label"] == "PS-active", "Analysis role"].iloc[0] == "Active bonded prestress"
+    assert summary.loc[summary["Label"] == "PS-passive", "Analysis role"].iloc[0] == "Passive bonded high-strength steel"

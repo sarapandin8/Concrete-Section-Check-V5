@@ -994,8 +994,15 @@ def _render_solver_diagnostic_messages(
     cols[3].metric("Solver info", f"{len(info_items):,}")
 
     if warnings:
-        st.caption("Deduplicated solver messages are grouped by severity, action priority, meaning, likely cause, recommended action, governing impact, and where to check.")
-        st.dataframe(_diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary), use_container_width=True, hide_index=True)
+        st.caption("Deduplicated solver messages are grouped by severity and action priority. Detailed meaning and recommended action are available below.")
+        diagnostic_df = _diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary)
+        compact_columns = ["Source", "Severity", "Message", "Governing Impact", "Action Priority", "Where to Check"]
+        available_compact_columns = [column for column in compact_columns if column in diagnostic_df.columns]
+        st.dataframe(diagnostic_df[available_compact_columns], use_container_width=True, hide_index=True)
+        with st.expander("Detailed diagnostic meaning / cause / recommended action", expanded=False):
+            detail_columns = ["Source", "Message", "Meaning", "Possible Cause", "Recommended Action", "Governing Impact", "Action Priority", "Where to Check"]
+            available_detail_columns = [column for column in detail_columns if column in diagnostic_df.columns]
+            st.dataframe(diagnostic_df[available_detail_columns], use_container_width=True, hide_index=True)
     else:
         st.success("No solver warnings were reported.")
 
@@ -1144,6 +1151,8 @@ def _method_validation_status_cards(rows: list[dict[str, str]]) -> list[dict[str
     validated = sum("Validated" in row["Validation Status"] for row in rows)
     in_progress = sum("progress" in row["Validation Status"] for row in rows)
     planned = sum("Planned" in row["Validation Status"] for row in rows)
+    planned_areas = [row.get("Area", "") for row in rows if "Planned" in row.get("Validation Status", "")]
+    planned_detail = "; ".join(area for area in planned_areas if area) or "Not part of current ULS PMM result"
     return [
         {
             "title": "Validated / Implemented",
@@ -1160,7 +1169,7 @@ def _method_validation_status_cards(rows: list[dict[str, str]]) -> list[dict[str
         {
             "title": "Planned Checks",
             "value": str(planned),
-            "detail": "Not part of current ULS PMM result",
+            "detail": planned_detail,
             "status": "neutral",
         },
         {
@@ -1228,6 +1237,81 @@ def _collect_engineering_warnings(*warning_groups: list[str]) -> list[str]:
     return _deduplicate_diagnostic_messages(collected)
 
 
+def _guidance_priority_counts(guidance_df: pd.DataFrame) -> dict[str, int]:
+    """Return action-priority counts from an actionable diagnostics table."""
+
+    if guidance_df.empty or "Action Priority" not in guidance_df.columns:
+        return {}
+    return {str(key): int(value) for key, value in guidance_df["Action Priority"].value_counts().to_dict().items()}
+
+
+def _governing_warning_count(priority_counts: dict[str, int]) -> int:
+    return int(priority_counts.get("Check before relying on governing result", 0))
+
+
+def _review_before_final_count(priority_counts: dict[str, int]) -> int:
+    return int(priority_counts.get("Review before final design", 0) + priority_counts.get("Review for final design", 0))
+
+
+def _qa_note_count(priority_counts: dict[str, int]) -> int:
+    return int(priority_counts.get("QA note", 0) + priority_counts.get("Usually no action", 0))
+
+
+def _diagnostic_summary_message(warnings: list[str], *, df: pd.DataFrame | None = None, dc_summary: DemandCapacitySummary | None = None) -> tuple[str, str]:
+    """Return a commercial-facing one-line diagnostic summary and display level.
+
+    The main Analysis page should not read as if the governing ULS result failed
+    when all diagnostics are background QA items.  This helper keeps diagnostics
+    visible while separating governing-impact warnings from final-review notes.
+    """
+
+    if not warnings:
+        return "No solver diagnostics are currently reported for this analysis result.", "success"
+
+    counts = _diagnostic_counts(warnings)
+    guidance_df = _diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary)
+    priority_counts = _guidance_priority_counts(guidance_df)
+    governing_count = _governing_warning_count(priority_counts)
+    review_count = _review_before_final_count(priority_counts)
+    qa_count = _qa_note_count(priority_counts)
+    limitation_count = int(counts.get("Solver limitation note", 0))
+    numerical_count = int(counts.get("Numerical note", 0))
+
+    if governing_count > 0:
+        return (
+            f"{governing_count:,} governing-impact review item(s) should be checked before relying on the result. "
+            f"{review_count:,} additional final-review item(s), {limitation_count:,} method note(s), "
+            f"and {numerical_count:,} numerical note(s) are retained in Diagnostics / QA."
+        ), "warning"
+
+    if review_count > 0:
+        return (
+            f"No direct governing-result warning detected. {review_count:,} engineering QA review item(s) "
+            f"are retained for final review; {limitation_count:,} method note(s) and "
+            f"{numerical_count:,} numerical note(s) remain available in Diagnostics / QA."
+        ), "info"
+
+    return (
+        f"No direct governing-result warning detected. {qa_count:,} background QA/numerical item(s) "
+        f"and {limitation_count:,} method note(s) are retained for traceability."
+    ), "info"
+
+
+def _render_diagnostic_summary_banner(
+    warnings: list[str],
+    *,
+    df: pd.DataFrame | None = None,
+    dc_summary: DemandCapacitySummary | None = None,
+) -> None:
+    message, level = _diagnostic_summary_message(warnings, df=df, dc_summary=dc_summary)
+    if level == "warning":
+        st.warning(message)
+    elif level == "success":
+        st.success(message)
+    else:
+        st.info(message)
+
+
 def _render_engineering_warnings(
     warnings: list[str],
     *,
@@ -1235,23 +1319,44 @@ def _render_engineering_warnings(
     dc_summary: DemandCapacitySummary | None = None,
 ) -> None:
     st.subheader("Actionable Engineering Review Guidance")
-    st.info("Each diagnostic is translated into meaning, possible cause, recommended action, governing impact, action priority, and where to check. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures.")
+    st.info(
+        "Each diagnostic is translated into meaning, possible cause, recommended action, governing impact, action priority, "
+        "and where to check. Limitation and numerical notes are retained for QA but are not treated as ULS readiness failures."
+    )
     if not warnings:
         st.success("No engineering review messages are currently reported.")
         return
 
     counts = _diagnostic_counts(warnings)
+    guidance_df = _diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary)
+    priority_counts = _guidance_priority_counts(guidance_df)
+
     cols = st.columns(3)
     cols[0].metric("Review warnings", f"{counts.get('Engineering review warning', 0):,}")
-    cols[1].metric("Limitation notes", f"{counts.get('Solver limitation note', 0):,}")
+    cols[1].metric("Method / limitation notes", f"{counts.get('Solver limitation note', 0):,}")
     cols[2].metric("Numerical notes", f"{counts.get('Numerical note', 0):,}")
-    guidance_df = _diagnostics_to_dataframe(warnings, df=df, dc_summary=dc_summary)
-    priority_counts = guidance_df["Action Priority"].value_counts().to_dict() if not guidance_df.empty and "Action Priority" in guidance_df else {}
     priority_cols = st.columns(3)
-    priority_cols[0].metric("Governing-related", f"{priority_counts.get('Check before relying on governing result', 0):,}")
-    priority_cols[1].metric("Review before final", f"{priority_counts.get('Review before final design', 0) + priority_counts.get('Review for final design', 0):,}")
-    priority_cols[2].metric("QA / usually no action", f"{priority_counts.get('QA note', 0) + priority_counts.get('Usually no action', 0):,}")
-    st.dataframe(guidance_df, use_container_width=True, hide_index=True)
+    priority_cols[0].metric("Governing-impact", f"{_governing_warning_count(priority_counts):,}")
+    priority_cols[1].metric("Review before final", f"{_review_before_final_count(priority_counts):,}")
+    priority_cols[2].metric("QA / usually no action", f"{_qa_note_count(priority_counts):,}")
+
+    compact_columns = ["Source", "Severity", "Message", "Governing Impact", "Action Priority", "Where to Check"]
+    available_compact_columns = [column for column in compact_columns if column in guidance_df.columns]
+    st.dataframe(guidance_df[available_compact_columns], use_container_width=True, hide_index=True)
+
+    with st.expander("Detailed diagnostic meaning / cause / recommended action", expanded=False):
+        detail_columns = [
+            "Source",
+            "Message",
+            "Meaning",
+            "Possible Cause",
+            "Recommended Action",
+            "Governing Impact",
+            "Action Priority",
+            "Where to Check",
+        ]
+        available_detail_columns = [column for column in detail_columns if column in guidance_df.columns]
+        st.dataframe(guidance_df[available_detail_columns], use_container_width=True, hide_index=True)
 
 
 def _render_prestress_verification_summary(
@@ -1657,20 +1762,7 @@ def _render_input_summary() -> None:
                 numeric_summary["warnings"],
             )
             if engineering_warnings:
-                warning_counts = _diagnostic_counts(engineering_warnings)
-                review_warning_count = warning_counts.get("Engineering review warning", 0)
-                limitation_count = warning_counts.get("Solver limitation note", 0)
-                numerical_note_count = warning_counts.get("Numerical note", 0)
-                if review_warning_count:
-                    st.warning(
-                        f"{review_warning_count:,} engineering review warning(s) need review in Diagnostics / QA with recommended actions. "
-                        f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
-                    )
-                else:
-                    st.info(
-                        f"No engineering review warnings are active. "
-                        f"{limitation_count:,} solver limitation note(s) and {numerical_note_count:,} numerical note(s) are retained for QA."
-                    )
+                _render_diagnostic_summary_banner(engineering_warnings, df=df, dc_summary=dc_summary)
             with st.expander("Engineering warnings / limitations", expanded=False):
                 _render_engineering_warnings(engineering_warnings, df=df, dc_summary=dc_summary)
 

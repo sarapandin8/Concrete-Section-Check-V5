@@ -22,6 +22,10 @@ import concrete_pmm_pro.ui.analysis_page as analysis_page_module
 from concrete_pmm_pro.ui.analysis_page import (
     PMM_3D_LAYER_DEFAULTS,
     PMM_3D_MASTER_TOGGLE_KEY,
+    _diagnostic_summary_message,
+    _diagnostics_to_dataframe,
+    _method_validation_status_cards,
+    _method_validation_status_rows,
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
 )
@@ -694,3 +698,28 @@ def test_method_validation_status_cards_count_status_groups() -> None:
     assert int(card_map["Validated / Implemented"]["value"]) >= 4
     assert int(card_map["Planned Checks"]["value"]) >= 1
     assert card_map["Method Basis"]["value"] == "ACI strain compatibility"
+
+
+def test_diagnostic_summary_distinguishes_background_review_from_governing_warning() -> None:
+    message, level = _diagnostic_summary_message(["PMM numeric warning: NaN values detected in PMM dataframe columns: eps_t."])
+
+    assert level == "info"
+    assert "No direct governing-result warning detected" in message
+
+
+def test_diagnostics_compact_table_keeps_core_columns_available() -> None:
+    df = _diagnostics_to_dataframe(["Demand/capacity check uses prototype PMM interpolation. Independent engineering verification is required."])
+
+    for column in ["Source", "Severity", "Message", "Governing Impact", "Action Priority", "Where to Check"]:
+        assert column in df.columns
+    for detail_column in ["Meaning", "Possible Cause", "Recommended Action"]:
+        assert detail_column in df.columns
+
+
+def test_validation_status_planned_card_names_sls_check() -> None:
+    rows = _method_validation_status_rows(result_has_active_prestress=True, result_has_passive_prestress=False, include_sls=True)
+    cards = _method_validation_status_cards(rows)
+    planned_card = next(card for card in cards if card["title"] == "Planned Checks")
+
+    assert planned_card["value"] == "1"
+    assert "SLS" in str(planned_card["detail"])

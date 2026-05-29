@@ -1055,11 +1055,23 @@ def prestress_valid_for_analysis(parse_result: PrestressParseResult, geometry_er
     return not parse_result.errors and not geometry_errors
 
 
+def _prestress_analysis_role(element: PrestressElement) -> str:
+    """Return a user-facing role for a prestress row in the analysis model."""
+
+    pe_eff = float(element.pe_eff_n or 0.0)
+    initial_stress = float(element.initial_stress_mpa or 0.0)
+    initial_strain = float(element.initial_strain or 0.0)
+    if pe_eff > 0.0 or initial_stress > 0.0 or initial_strain > 0.0:
+        return "Active bonded prestress" if element.bonded else "Active unbonded prestress (ignored)"
+    return "Passive bonded high-strength steel" if element.bonded else "Passive unbonded steel (ignored)"
+
+
 def prestress_summary_dataframe(elements: list[PrestressElement]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
                 "Label": element.label,
+                "Analysis role": _prestress_analysis_role(element),
                 "material_name": element.material_name,
                 "steel_type": element.steel_type,
                 "x_mm": element.x_mm,

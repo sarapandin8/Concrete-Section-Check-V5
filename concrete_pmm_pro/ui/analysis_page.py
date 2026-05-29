@@ -854,11 +854,11 @@ def _diagnostic_guidance(
     elif "axial cap" in text or "nominal po" in text:
         guidance.update(
             {
-                "Meaning": "The ACI maximum axial strength cap uses the current prestress-aware Po helper. Unbonded prestress is excluded.",
+                "Meaning": "The ACI maximum axial strength cap uses the QA.PO1-validated prestress-aware Po helper. Bonded Aps is included with fpy or 0.90fpu; unbonded prestress is excluded upstream.",
                 "Possible Cause": "The section includes ordinary rebar and/or bonded prestress; axial compression display/checks are capped by ACI-style limits.",
-                "Recommended Action": "Verify Ag, As, Aps, f'c, fy/fpy, and whether prestress is bonded. Do not enter Pe_eff as external Pu. Independently verify compression-controlled governing cases.",
-                "Governing Impact": "Potential for high axial compression cases",
-                "Where to Check": "Section/Rebar/Prestress tabs + Analysis > Diagnostics / QA",
+                "Recommended Action": "Verify Ag, As, Aps, f'c, fy/fpy, bonded state, and code-specific axial-compression limits. Do not enter Pe_eff as external Pu.",
+                "Governing Impact": "Validated axial-cap helper; review only for high axial compression governing cases",
+                "Where to Check": "Section/Rebar/Prestress tabs + Analysis > Diagnostics / QA + docs/validation",
             }
         )
     elif "bonded prestress" in text or "prestress" in text:
@@ -1910,9 +1910,9 @@ def _render_pmm_3d_surface_diagnostics(diagnostics: dict[str, object], show_surf
 def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
     st.subheader("ULS Demand/Capacity Prototype")
     st.warning(
-        "This is a prototype PMM demand/capacity check. Bonded prestress contribution is prototype when included; "
-        "the axial cap uses a prototype Po helper with bonded prestress steel. Unbonded prestress, refined "
-        "interpolation, and final validation are future work. Axial cap is applied only to axial compression summary/checks."
+        "This PMM demand/capacity workflow remains under staged validation. Bonded prestress contribution is still being validated; "
+        "the axial cap now uses the QA.PO1-validated prestress-aware Po helper with bonded prestress steel. "
+        "Unbonded prestress, refined long-term effects, and full production validation remain future work."
     )
     cols = st.columns(3)
     cols[0].metric("Overall Status", summary.overall_status)

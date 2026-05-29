@@ -165,7 +165,7 @@ Implemented or partially implemented items include:
 | Warning family | Current status | Required path before retiring or downgrading |
 |---|---|---|
 | PMM prototype result | Limitation / note | Add published/reference PMM benchmark cases and validation tolerances. |
-| ACI axial cap prototype | Limitation / note | Add independent RC-only, PS-only, and RC+PS axial cap benchmark cases. |
+| ACI axial cap method note | Documented method note | `QA.PO1` now provides independent RC-only, PS-only, and RC+PS axial-cap benchmark cases; retain code-specific axial-limit review notes. |
 | Demand/capacity prototype interpolation | Engineering review | Add robust directional capacity benchmark cases and fallback governance tests. |
 | Prestress reached `fpu` cap | Numerical / QA metadata unless governing-related | Active prestress keeps fpu-cap events as PMM point metadata. Background cap events are not standalone engineering warnings; they are escalated only when governing-region checks indicate possible impact. |
 | Prestress compression reversal clamp | Governing-region review only | Active prestress compression-reversal events are retained as PMM point metadata by SOLVER.PS.COMP1. They are escalated to engineering review only when detected near the governing demand region; background PMM-surface events remain QA metadata. |
@@ -222,7 +222,7 @@ Active prestress compression reversal is still modeled conservatively by clampin
 
 ### QA.PO1 prestress-aware axial cap validation
 
-`QA.PO1` adds an executable benchmark pack for the ACI-style nominal axial compression helper used by the PMM axial cap.  The checks are intentionally independent of the Streamlit UI and verify area bookkeeping before the axial-cap prototype wording can be reduced.
+`QA.PO1` adds an executable benchmark pack for the ACI-style nominal axial compression helper used by the PMM axial cap.  The checks are intentionally independent of the Streamlit UI and verify area bookkeeping supporting reduced axial-cap prototype wording.
 
 Covered cases:
 
@@ -234,4 +234,4 @@ Covered cases:
 - Tied-column maximum axial cap uses `0.80 * phi * Po`.
 - Unbonded prestress is excluded upstream before the Po helper receives the bonded strain-compatible element list.
 
-This milestone does not change the axial-cap equations.  It provides benchmark evidence so the ACI axial-cap limitation can later be reworded as a documented method note rather than a broad prototype warning.
+This milestone does not change the axial-cap equations.  It provides benchmark evidence so the ACI axial-cap diagnostic can be treated as a documented method note rather than a broad prototype warning.

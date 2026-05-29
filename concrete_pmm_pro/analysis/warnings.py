@@ -18,8 +18,9 @@ CONVEX_HULL_FALLBACK_WARNING = (
     "Convex hull fallback was used. This may overestimate capacity for non-convex interaction shapes."
 )
 RC_AXIAL_CAP_LIMITATION_WARNING = (
-    "ACI axial cap uses a prototype Po helper including ordinary rebar and bonded prestress steel. "
-    "Unbonded prestress is ignored; independent engineering verification is required."
+    "ACI axial cap uses the QA.PO1-validated prestress-aware Po helper including ordinary rebar "
+    "and bonded prestress steel. Unbonded prestress is excluded from the axial-cap helper by solver policy; "
+    "review code-specific axial-compression limits before final design."
 )
 
 

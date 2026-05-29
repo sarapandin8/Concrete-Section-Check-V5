@@ -80,9 +80,9 @@ def get_engineering_limitations() -> list[EngineeringLimitation]:
             "SIMPLIFIED",
             "HIGH",
             "Prestress",
-            "ACI axial cap uses a prototype Po helper including ordinary rebar and bonded prestress steel.",
-            "Bonded prestress uses fpy or 0.90 fpu as the nominal strength reference; unbonded prestress is ignored.",
-            "Independently review prestressed column axial capacity and code-specific limits.",
+            "ACI axial cap uses the QA.PO1-validated prestress-aware Po helper including ordinary rebar and bonded prestress steel.",
+            "Bonded prestress uses fpy or 0.90 fpu as the nominal strength reference; unbonded prestress is excluded from the axial-cap helper by solver policy.",
+            "Review code-specific axial-compression limits and project-specific detailing before final design.",
         ),
         EngineeringLimitation(
             "prestress_compression_reversal",

@@ -274,7 +274,7 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
             "ACI maximum axial strength cap is applied to axial compression display/checks. "
             "Moment capacity interpolation remains prototype."
         )
-        info.append(f"Prototype nominal Po including bonded prestress steel = {Po_N:,.1f} N; capped max phiPn = {phiPn_max:,.1f} N.")
+        info.append(f"QA.PO1-validated nominal Po including bonded prestress steel = {Po_N:,.1f} N; capped max phiPn = {phiPn_max:,.1f} N.")
     except ValueError as exc:
         warnings.append(f"ACI axial cap could not be calculated: {exc}")
 

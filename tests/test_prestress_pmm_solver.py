@@ -328,7 +328,7 @@ def test_solver_reports_prestress_aware_axial_cap_when_bonded_prestress_exists()
     result = run_rc_pmm_solver(_analysis_input(_bonded_strand(fpy_mpa=1580.0, fpu_mpa=1860.0)))
 
     assert any("bonded prestress steel" in item for item in result.info)
-    assert any("prototype Po helper including ordinary rebar and bonded prestress steel" in warning for warning in result.warnings)
+    assert any("QA.PO1-validated prestress-aware Po helper" in warning for warning in result.warnings)
     assert not any("Prestress contribution to axial cap is future work" in warning for warning in result.warnings)
 
 

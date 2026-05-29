@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from concrete_pmm_pro.analysis.capacity_check import DemandCapacitySummary
-from concrete_pmm_pro.analysis.slice_envelope import SliceEnvelopeResult, build_slice_envelope
+from concrete_pmm_pro.analysis.slice_envelope import SliceEnvelopeResult, build_slice_envelope, estimate_directional_capacity_from_envelope
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
 
@@ -666,6 +666,12 @@ def make_mux_muy_slice_figure(
                 hovertemplate="phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m<extra></extra>",
             )
         )
+    envelope_estimate: dict[str, object] = {}
+    capacity_x: float | None = None
+    capacity_y: float | None = None
+    capacity_radius: float | None = None
+    demand_mu = math.hypot(demand_x, demand_y)
+    demand_alpha = math.atan2(demand_y, demand_x) if demand_mu > 1.0e-12 else 0.0
     if not envelope.envelope_df.empty:
         envelope_df = envelope.envelope_df
         closed = pd.concat([envelope_df, envelope_df.iloc[[0]]], ignore_index=True) if len(envelope_df) > 2 else envelope_df
@@ -680,6 +686,23 @@ def make_mux_muy_slice_figure(
                 hovertemplate="phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m<extra></extra>",
             )
         )
+        envelope_estimate = estimate_directional_capacity_from_envelope(envelope, demand_x, demand_y)
+        capacity_radius_obj = envelope_estimate.get("capacity_phiMn_kNm")
+        if isinstance(capacity_radius_obj, Real) and float(capacity_radius_obj) > 0.0:
+            capacity_radius = float(capacity_radius_obj)
+            capacity_x = capacity_radius * math.cos(demand_alpha)
+            capacity_y = capacity_radius * math.sin(demand_alpha)
+    if capacity_x is not None and capacity_y is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0, capacity_x],
+                y=[0.0, capacity_y],
+                mode="lines",
+                line=dict(color="#0f766e", width=2, dash="dash"),
+                name="Capacity ray",
+                hoverinfo="skip",
+            )
+        )
     fig.add_trace(
         go.Scatter(
             x=[0.0, demand_x],
@@ -691,6 +714,23 @@ def make_mux_muy_slice_figure(
         )
     )
     dcr_label = "N/A" if dcr is None else f"{dcr:.3f}"
+    if capacity_x is not None and capacity_y is not None and capacity_radius is not None:
+        capacity_label = f"Available φMn {capacity_radius:,.1f} kN-m"
+        fig.add_trace(
+            go.Scatter(
+                x=[capacity_x],
+                y=[capacity_y],
+                mode="markers+text",
+                marker=dict(size=13, color="#0f766e", symbol="circle-open", line=dict(width=3, color="#0f766e")),
+                text=["Capacity"],
+                textposition="bottom center",
+                name="Capacity intersection",
+                hovertemplate=(
+                    "Capacity intersection<br>phiMnx=%{x:.2f} kN-m<br>phiMny=%{y:.2f} kN-m"
+                    f"<br>{capacity_label}<br>Method={envelope_estimate.get('method', 'slice_envelope')}<extra></extra>"
+                ),
+            )
+        )
     fig.add_trace(
         go.Scatter(
             x=[demand_x],
@@ -719,11 +759,30 @@ def make_mux_muy_slice_figure(
         bgcolor="rgba(255,255,255,0.85)",
         bordercolor=color,
     )
+    if capacity_x is not None and capacity_y is not None and capacity_radius is not None:
+        margin_text = ""
+        if dcr is not None:
+            margin_text = f"<br>Margin {(1.0 - dcr) * 100.0:.1f}%"
+        fig.add_annotation(
+            x=capacity_x,
+            y=capacity_y,
+            text=f"Capacity boundary<br>φMn {capacity_radius:,.1f} kN-m{margin_text}",
+            showarrow=True,
+            arrowhead=2,
+            ax=-55,
+            ay=45,
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor="#0f766e",
+        )
+    subtitle = "Demand ray intersects the cleaned slice envelope to obtain available φMn."
+    if capacity_radius is None:
+        subtitle = "Capacity intersection unavailable; review Diagnostics / QA."
     fig.update_layout(
-        title=f"PMM Mux-Muy Slice at Pu = {Pu_kN:,.1f} kN ({method_label})",
+        title=f"PMM Mux-Muy Slice at Pu = {Pu_kN:,.1f} kN ({method_label})<br><sup>{subtitle}</sup>",
         xaxis_title="phiMnx capacity / Mux demand (kN-m)",
         yaxis_title="phiMny capacity / Muy demand (kN-m)",
         legend=dict(orientation="h"),
+        margin=dict(l=20, r=20, t=86, b=20),
     )
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig

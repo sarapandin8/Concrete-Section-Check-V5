@@ -260,3 +260,8 @@ The detailed table keeps benchmark evidence and remaining engineering limitation
 The Analysis diagnostics now separate designer-facing result information from solver-internal QA metadata. The PMM diagnostics panel shows only a compact set of first-screen solver QA essentials, while detailed capacity envelope extrema, reinforcement/prestress metadata, prestress stress-state details, and RC-only vs RC+PS comparisons are kept in collapsed expanders.
 
 This milestone does not change PMM equations, D/C extraction, prestress stress-strain assumptions, axial-cap equations, or validation status. It only improves result hierarchy so the ULS workspace reads like an engineering result page rather than a debug dashboard.
+
+### UI.ANALYSIS4 — Governing PMM Slice Visualization
+
+The PMM Check tab now emphasizes the governing Mux-Muy slice at the selected Pu.  The figure shows the cleaned PMM slice envelope, the demand vector, the capacity ray, and the ray/envelope intersection used to compute available phiMn and D/C.  Selected-case cards also show capacity margin and reserve ratio.  This milestone does not change PMM equations or D/C extraction; it makes the existing SOLVER.PMM.DC1 ray-intersection result traceable to the user visually.
+

@@ -572,3 +572,8 @@ The Analysis validation panel now separates the first-screen validation overview
 ### UI.ANALYSIS3.9 — Result Hierarchy and Solver Info Cleanup
 
 The Analysis diagnostics now use a cleaner commercial-style hierarchy. First-screen solver diagnostics show only compact QA essentials, while detailed PMM envelope metadata, reinforcement/prestress solver metadata, prestress stress-state diagnostics, and RC-only vs RC+PS capacity comparisons are retained in collapsed QA expanders. This is a UI hierarchy and traceability refinement only; it does not change solver equations or D/C results.
+
+### UI.ANALYSIS4 — Governing PMM Slice Visualization
+
+The PMM Check tab now emphasizes the governing Mux-Muy slice at the selected Pu.  The figure shows the cleaned PMM slice envelope, the demand vector, the capacity ray, and the ray/envelope intersection used to compute available phiMn and D/C.  Selected-case cards also show capacity margin and reserve ratio.  This milestone does not change PMM equations or D/C extraction; it makes the existing SOLVER.PMM.DC1 ray-intersection result traceable to the user visually.
+

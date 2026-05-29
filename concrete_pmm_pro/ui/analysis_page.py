@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from datetime import datetime
 from html import escape
@@ -2212,6 +2213,26 @@ def _analysis_kv_panel_html(rows: list[tuple[str, str]]) -> str:
     return '<div class="cpmm-analysis-card">' + "".join(rendered_rows) + "</div>"
 
 
+def _capacity_margin_text(dcr: object) -> str:
+    try:
+        value = float(dcr)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(value):
+        return "N/A"
+    return f"{(1.0 - value) * 100.0:.1f}%"
+
+
+def _reserve_ratio_text(dcr: object) -> str:
+    try:
+        value = float(dcr)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(value) or value <= 0.0:
+        return "N/A"
+    return f"{1.0 / value:.2f}"
+
+
 def _selected_case_summary_cards(summary: dict, dc_summary: DemandCapacitySummary) -> list[dict[str, object]]:
     selected_detail = "Governing case" if summary["selected_combo"] == dc_summary.governing_combo else "Selected case"
     return [
@@ -2231,6 +2252,12 @@ def _selected_case_summary_cards(summary: dict, dc_summary: DemandCapacitySummar
             "title": "D/C Ratio",
             "value": _format_optional_number(summary["dcr"], precision=3),
             "detail": f"Max D/C {_format_optional_number(dc_summary.max_dcr, precision=3)}",
+            "status": _analysis_status_style(summary["status"]),
+        },
+        {
+            "title": "Capacity Margin",
+            "value": _capacity_margin_text(summary.get("dcr")),
+            "detail": f"Reserve ratio {_reserve_ratio_text(summary.get('dcr'))}",
             "status": _analysis_status_style(summary["status"]),
         },
         {"title": "Pu", "value": _format_optional_number(summary["Pu_kN"], " kN"), "status": "neutral"},
@@ -2253,6 +2280,8 @@ def _render_selected_case_detail_panel(summary: dict, unbonded_ignored_count: in
         ("Pu", _format_optional_number(summary["Pu_kN"], " kN")),
         ("Mux / Muy", f"{_format_optional_number(summary['Mux_kNm'], ' kN-m')} / {_format_optional_number(summary['Muy_kNm'], ' kN-m')}"),
         ("Available phiMn", _format_optional_number(summary["capacity_phiMn_kNm"], " kN-m")),
+        ("Capacity margin", _capacity_margin_text(summary.get("dcr"))),
+        ("Reserve ratio", _reserve_ratio_text(summary.get("dcr"))),
         ("Analysis mode", str(summary["analysis_mode"])),
         ("Prestress included", "Yes" if summary["prestress_included"] else "No"),
         ("Unbonded ignored", f"{unbonded_ignored_count:,}"),
@@ -2468,6 +2497,11 @@ def _render_pmm_slice_dashboard(
         _render_result_traceability_path(selected_summary)
         left, right = st.columns([2.1, 1.0])
         with left:
+            st.markdown("**Governing PMM Slice Visualization**")
+            st.caption(
+                "The demand vector is checked against the cleaned Mux-Muy capacity envelope at the selected Pu. "
+                "The capacity marker is the ray/envelope intersection used to compute available φMn and D/C."
+            )
             slice_figure_hash = f"{result_hash or 'unhashed'}:{selected_load_case.name}:mux_muy_slice"
             if (
                 st.session_state.get("pmm_mux_muy_slice_figure_hash") == slice_figure_hash

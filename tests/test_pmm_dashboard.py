@@ -288,6 +288,21 @@ def test_make_mux_muy_slice_figure_returns_plotly_figure() -> None:
     assert isinstance(fig, go.Figure)
 
 
+
+
+def test_make_mux_muy_slice_figure_shows_capacity_ray_and_intersection() -> None:
+    load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
+
+    fig = make_mux_muy_slice_figure(_synthetic_pmm_df(), load_case, _dc_summary())
+    trace_names = [trace.name for trace in fig.data]
+
+    assert "Demand vector" in trace_names
+    assert "Capacity ray" in trace_names
+    assert "Capacity intersection" in trace_names
+    capacity_trace = next(trace for trace in fig.data if trace.name == "Capacity intersection")
+    assert capacity_trace.x[0] == pytest.approx(100.0)
+    assert capacity_trace.y[0] == pytest.approx(0.0)
+
 def test_make_pmm_3d_dashboard_figure_returns_plotly_figure() -> None:
     load_case = LoadCase(name="ULS-PASS", Pu_N=1_000_000.0, Mux_Nmm=70_000_000.0, Muy_Nmm=0.0)
     demand_df = demand_load_cases_to_display_dataframe([load_case])

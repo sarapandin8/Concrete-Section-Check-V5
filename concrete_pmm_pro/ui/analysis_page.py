@@ -96,9 +96,13 @@ from concrete_pmm_pro.serviceability import (
     crack_classification_to_dataframe,
     custom_stress_check_points_from_dataframe,
     dataframe_to_stress_check_points,
+    GirderServiceStageCase,
+    default_girder_service_stage_templates,
     girder_prestress_stress_result_rows,
+    girder_service_stage_result_rows,
     girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
+    run_girder_service_stage_stress,
     run_basic_girder_service_stress,
     run_girder_prestress_stress_effect,
     summarize_girder_prestress_elements,
@@ -3296,6 +3300,18 @@ def _girder_combined_service_prestress_rows(service_result, prestress_result) ->
     return rows
 
 
+def _girder_stage_template_label(template) -> str:
+    """Return compact labels for manual GIRDER.SLS2B stage-template selection."""
+
+    return f"{template.title}  ·  {template.recommended_basis_name.replace('_', ' ')}"
+
+
+def _girder_stage_dataframe(result) -> pd.DataFrame:
+    """Return rounded top/bottom stage rows for Analysis preview display."""
+
+    return pd.DataFrame(girder_service_stage_result_rows(result))
+
+
 def _render_beam_girder_service_stress_preview() -> None:
     """Display GIRDER.SLS1B/PS1B manual stress preview for Beam/Girder mode.
 
@@ -3385,6 +3401,14 @@ def _render_beam_girder_service_stress_preview() -> None:
     stress_cols[1].metric("Service max tension", f"{result.max_tension_MPa:,.3f} MPa")
 
     st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+    prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
+    section_bottom_y_mm = 0.0
+    if section_geometry is not None:
+        try:
+            section_bottom_y_mm = float(summarize_geometry(section_geometry).y_min_mm or 0.0)
+        except (TypeError, ValueError) as exc:
+            st.warning(f"Unable to convert prestress coordinates to girder bottom-fiber coordinates: {exc}")
 
     st.markdown("#### Effective Prestress Stress Effect")
     include_prestress = st.checkbox(
@@ -3500,6 +3524,166 @@ def _render_beam_girder_service_stress_preview() -> None:
             combined_cols[0].metric("Combined max compression", f"{combined_df['Combined total (MPa)'].min():,.3f} MPa")
             combined_cols[1].metric("Combined max tension", f"{combined_df['Combined total (MPa)'].max():,.3f} MPa")
             st.dataframe(combined_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Manual Service Stage Stress Preview")
+    st.info(
+        "GIRDER.SLS2B uses manual stage actions with the same explicit section basis and optional Pe_eff stress component. "
+        "Stage templates are guidance only; the app does not auto-generate self-weight, deck weight, live load, losses, or code limits in this milestone."
+    )
+    enable_stage_preview = st.checkbox(
+        "Enable manual service-stage stress preview",
+        value=bool(st.session_state.get("girder_stage_preview_enabled", False)),
+        key="girder_stage_preview_enabled",
+        help="Preview one manual stage case. This does not change load tables, PMM, prestress, report, or solver state.",
+    )
+
+    if enable_stage_preview:
+        stage_templates = default_girder_service_stage_templates()
+        template_ids = [template.stage_id for template in stage_templates]
+        template_by_id = {template.stage_id: template for template in stage_templates}
+        if st.session_state.get("girder_stage_template_id") not in template_ids:
+            st.session_state["girder_stage_template_id"] = template_ids[0]
+        selected_stage_id = st.selectbox(
+            "Stage template",
+            template_ids,
+            format_func=lambda stage_id: _girder_stage_template_label(template_by_id[stage_id]),
+            key="girder_stage_template_id",
+            help="Templates only provide naming and basis guidance. Enter stage actions explicitly.",
+        )
+        stage_template = template_by_id[selected_stage_id]
+        st.caption(stage_template.engineering_note)
+
+        stage_basis_default = stage_template.recommended_basis_name if stage_template.recommended_basis_name in basis_names else basis_name
+        if st.session_state.get("girder_stage_basis_name") not in basis_names:
+            st.session_state["girder_stage_basis_name"] = stage_basis_default
+        if "girder_stage_include_prestress" not in st.session_state:
+            st.session_state["girder_stage_include_prestress"] = bool(stage_template.include_prestress)
+
+        stage_cols = st.columns(4)
+        with stage_cols[0]:
+            stage_basis_name = st.selectbox(
+                "Stage section basis",
+                basis_names,
+                format_func=lambda name: basis_options.labels.get(name, name),
+                key="girder_stage_basis_name",
+                help="Transfer/deck-casting stages usually use precast gross properties; final/live stages may use composite transformed properties when active.",
+            )
+        with stage_cols[1]:
+            stage_n = st.number_input(
+                "Stage N (kN, compression +)",
+                value=float(st.session_state.get("girder_stage_N_kN", 0.0)),
+                step=100.0,
+                format="%.3f",
+                key="girder_stage_N_kN",
+            )
+        with stage_cols[2]:
+            stage_m = st.number_input(
+                "Stage M (kN-m, sagging +)",
+                value=float(st.session_state.get("girder_stage_M_kNm", 0.0)),
+                step=100.0,
+                format="%.3f",
+                key="girder_stage_M_kNm",
+            )
+        with stage_cols[3]:
+            stage_include_prestress = st.checkbox(
+                "Include Pe_eff in this stage",
+                key="girder_stage_include_prestress",
+                help="Uses Pe_eff as an already-effective prestress force. This does not calculate losses or use breaking load.",
+            )
+
+        stage_basis = basis_options.bases[stage_basis_name]
+        stage_pe_eff_kN = 0.0
+        stage_yps_mm = None
+        stage_ps_ready = not stage_include_prestress
+
+        if stage_include_prestress:
+            st.caption("Pe_eff is positive for compression after losses. Breaking Load, duct diameter, and strand-count metadata are not used.")
+            stage_source_options = ["From Prestress table", "Manual Pe_eff and yps"]
+            if st.session_state.get("girder_stage_prestress_source") not in stage_source_options:
+                st.session_state["girder_stage_prestress_source"] = "From Prestress table" if prestress_elements else "Manual Pe_eff and yps"
+            stage_source = st.radio(
+                "Stage prestress source",
+                stage_source_options,
+                horizontal=True,
+                key="girder_stage_prestress_source",
+            )
+
+            if stage_source == "From Prestress table":
+                summary = summarize_girder_prestress_elements(
+                    prestress_elements,
+                    section_bottom_y_mm=section_bottom_y_mm,
+                    include_unbonded=True,
+                )
+                ps_cols = st.columns(3)
+                ps_cols[0].metric("Stage Σ Pe_eff", f"{summary.total_pe_eff_kN:,.3f} kN")
+                ps_cols[1].metric(
+                    "Stage yps",
+                    "—" if summary.tendon_y_from_bottom_mm is None else f"{summary.tendon_y_from_bottom_mm:,.2f} mm",
+                )
+                ps_cols[2].metric("Included PS rows", f"{summary.included_element_count:,}")
+                for warning in summary.warnings:
+                    st.warning(warning)
+                if summary.total_pe_eff_kN > 0.0 and summary.tendon_y_from_bottom_mm is not None:
+                    stage_pe_eff_kN = float(summary.total_pe_eff_kN)
+                    stage_yps_mm = float(summary.tendon_y_from_bottom_mm)
+                    stage_ps_ready = True
+                else:
+                    st.info("No positive Pe_eff was found in the Prestress table for this stage. Use manual mode or define Pe_eff in the Prestress page.")
+            else:
+                manual_stage_cols = st.columns(2)
+                with manual_stage_cols[0]:
+                    stage_pe_eff_kN = float(
+                        st.number_input(
+                            "Stage Pe_eff (kN, compression +)",
+                            min_value=0.0,
+                            value=float(st.session_state.get("girder_stage_manual_pe_eff_kN", 0.0)),
+                            step=100.0,
+                            format="%.3f",
+                            key="girder_stage_manual_pe_eff_kN",
+                        )
+                    )
+                with manual_stage_cols[1]:
+                    stage_yps_mm = float(
+                        st.number_input(
+                            "Stage yps (mm from bottom)",
+                            value=float(st.session_state.get("girder_stage_manual_yps_mm", stage_basis.centroid_y_from_bottom_mm)),
+                            step=10.0,
+                            format="%.3f",
+                            key="girder_stage_manual_yps_mm",
+                        )
+                    )
+                stage_ps_ready = stage_pe_eff_kN > 0.0
+                if not stage_ps_ready:
+                    st.info("Enter a positive Stage Pe_eff or uncheck prestress for this stage.")
+
+        if stage_ps_ready:
+            stage_result = run_girder_service_stage_stress(
+                stage_basis,
+                GirderServiceStageCase(
+                    stage_id=stage_template.stage_id,
+                    title=stage_template.title,
+                    basis_name=stage_basis.basis_name,
+                    N_kN=float(stage_n),
+                    M_kNm=float(stage_m),
+                    include_prestress=bool(stage_include_prestress),
+                    Pe_eff_kN=float(stage_pe_eff_kN),
+                    tendon_y_from_bottom_mm=stage_yps_mm,
+                    note=stage_template.engineering_note,
+                ),
+            )
+            stage_metrics = st.columns(4)
+            stage_metrics[0].metric("Stage basis", basis_options.labels.get(stage_basis_name, stage_basis_name))
+            stage_metrics[1].metric("Stage max compression", f"{stage_result.max_compression_MPa:,.3f} MPa")
+            stage_metrics[2].metric("Stage max tension", f"{stage_result.max_tension_MPa:,.3f} MPa")
+            stage_metrics[3].metric("Pe_eff included", "Yes" if stage_result.prestress_result is not None else "No")
+            for warning in stage_result.warnings:
+                st.warning(f"Service stage preview warning: {warning}")
+            st.dataframe(_girder_stage_dataframe(stage_result), use_container_width=True, hide_index=True)
+
+        with st.expander("Manual stage preview limitations", expanded=False):
+            st.write("- Stage templates are labels and basis guidance only; they do not calculate construction-stage loads.")
+            st.write("- No AASHTO stress limits, transfer/final allowable checks, losses, creep/shrinkage, or report integration are applied yet.")
+            st.write("- Results remain preview-only and are not used by PMM, rebar, prestress, load-table, or report workflows.")
 
     with st.expander("Beam/Girder service-stress sign convention", expanded=False):
         st.write("- Compression stress is negative; tension stress is positive.")

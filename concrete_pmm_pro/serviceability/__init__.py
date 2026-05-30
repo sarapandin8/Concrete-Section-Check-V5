@@ -1,6 +1,16 @@
 """Serviceability / SLS foundation helpers."""
 
 from concrete_pmm_pro.serviceability.loads import get_active_sls_load_cases, sls_load_cases_to_display_dataframe
+from concrete_pmm_pro.serviceability.girder_stress import (
+    GirderFiberStress,
+    GirderSectionBasis,
+    GirderServiceStressResult,
+    girder_service_stress_at_y,
+    girder_service_stress_result_to_dict,
+    make_girder_basis_from_composite,
+    make_girder_basis_from_gross_summary,
+    run_basic_girder_service_stress,
+)
 from concrete_pmm_pro.serviceability.cracking import (
     CrackClassificationPoint,
     CrackClassificationSummary,
@@ -107,4 +117,12 @@ __all__ = [
     "stress_check_points_to_dataframe",
     "transformed_section_properties_to_dataframe",
     "validate_stress_check_points_against_geometry",
+    "GirderFiberStress",
+    "GirderSectionBasis",
+    "GirderServiceStressResult",
+    "girder_service_stress_at_y",
+    "girder_service_stress_result_to_dict",
+    "make_girder_basis_from_composite",
+    "make_girder_basis_from_gross_summary",
+    "run_basic_girder_service_stress",
 ]

@@ -539,32 +539,33 @@ def parametric_plank_girder_interior(
     y1 = bottom_y + h1_mm
     y2 = bottom_y + h2_mm
 
-    # Drawing convention for the user-supplied plank:
-    #   B is the overall reference width.
-    #   The solid top face is inset by b1 from both sides.
-    #   The solid bottom/reference face has width b3, leaving b2 each side.
-    # Earlier versions incorrectly used B as the physical top face, which made
-    # the plank an inverted wide-top trapezoid.  The physical section is built
-    # from the visible precast outline, while B remains the dimension guide.
-    x_ref = B_mm / 2.0
-    x_top = max(0.0, x_ref - b1_mm)
-    x_bottom = b3_mm / 2.0
-    x_lower_ref = max(x_bottom, x_ref - b2_mm)
+    # User-confirmed interior plank convention:
+    #   at y = 0      width = B
+    #   at y = h1     width = B
+    #   at y = h2     width = b3
+    #   at y = H      width = B - 2*b1
+    #   side recesses are symmetric.
+    # Coordinates are centered on the plank reference centerline.
+    x_outer = B_mm / 2.0
+    x_top = (B_mm - 2.0 * b1_mm) / 2.0
+    x_recess = b3_mm / 2.0
 
     if x_top <= 0.0:
         raise ValueError("Invalid geometry: B must be greater than 2*b1 for an interior plank.")
-    if x_bottom <= 0.0:
+    if x_recess <= 0.0:
         raise ValueError("Invalid geometry: b3 must be greater than zero.")
+    if x_recess >= x_outer:
+        raise ValueError("Invalid geometry: b3 must be smaller than B for an interior plank recess.")
 
     points = [
         _point(-x_top, top_y),
         _point(x_top, top_y),
-        _point(x_top, y2),
-        _point(x_lower_ref, y1),
-        _point(x_bottom, bottom_y),
-        _point(-x_bottom, bottom_y),
-        _point(-x_lower_ref, y1),
-        _point(-x_top, y2),
+        _point(x_recess, y2),
+        _point(x_outer, y1),
+        _point(x_outer, bottom_y),
+        _point(-x_outer, bottom_y),
+        _point(-x_outer, y1),
+        _point(-x_recess, y2),
     ]
     _ensure_valid_simple_polygon(points, "Parametric interior plank girder")
     transformed = _plank_transformed_metadata(
@@ -646,29 +647,33 @@ def parametric_plank_girder_exterior(
     y1 = bottom_y + h1_mm
     y2 = bottom_y + h2_mm
 
-    # Exterior plank drawing convention:
-    #   one exterior side is kept vertical/full-depth;
-    #   the interior side is inset by b1 at the top and by b2/b3 at the bottom.
-    # This matches the supplied exterior-girder sketch instead of using the
-    # full reference width as the physical top face.
+    # User-confirmed exterior plank convention:
+    #   exterior side = right side, vertical for full height;
+    #   interior side = left side with the same stepped/recessed profile;
+    #   b1 and b2 are measured from the left reference edge;
+    #   b3 is measured from the right edge, so B should equal b2 + b3.
+    # Left boundary positions from the left reference edge are:
+    #   y = 0  -> x = 0
+    #   y = h1 -> x = 0
+    #   y = h2 -> x = b2
+    #   y = H  -> x = b1
+    x_left = -B_mm / 2.0
     x_right = B_mm / 2.0
-    x_left_ref = -B_mm / 2.0
-    x_top_left = x_left_ref + b1_mm
-    x_bottom_left = x_right - b3_mm
-    x_lower_ref = min(x_bottom_left, x_left_ref + b2_mm)
+    x_top_left = x_left + b1_mm
+    x_recess_left = x_left + b2_mm
 
     if x_top_left >= x_right:
         raise ValueError("Invalid geometry: B must be greater than b1 for an exterior plank.")
-    if x_bottom_left >= x_right:
-        raise ValueError("Invalid geometry: b3 must be smaller than B for an exterior plank.")
+    if x_recess_left >= x_right:
+        raise ValueError("Invalid geometry: b2 must be smaller than B for an exterior plank recess.")
 
     points = [
         _point(x_top_left, top_y),
         _point(x_right, top_y),
         _point(x_right, bottom_y),
-        _point(x_bottom_left, bottom_y),
-        _point(x_lower_ref, y1),
-        _point(x_top_left, y2),
+        _point(x_left, bottom_y),
+        _point(x_left, y1),
+        _point(x_recess_left, y2),
     ]
     _ensure_valid_simple_polygon(points, "Parametric exterior plank girder")
     transformed = _plank_transformed_metadata(

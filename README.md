@@ -614,3 +614,8 @@ Parametric I-Girder now includes an engineering-oriented dimension QA panel in S
 ### SECTION.PRESET1B — Parametric Plank Girder Geometry
 
 Adds bridge-oriented parametric plank girder presets for **Interior** and **Exterior** girders.  The generated concrete polygon is the precast plank only, using B, b1, b2, b3, H, h1, and h2 in mm.  Composite bridge-girder metadata is retained for future AASHTO workflows: Tslab, manual Be, Ebeam, Edeck, auto n = Edeck/Ebeam, auto Btransformed = n × Be, girder length, and exterior overhang where applicable.  Auto AASHTO effective flange width calculation is intentionally marked as planned; current Be is project/manual input with transformed-width values calculated automatically.
+
+### SECTION.PRESET1B.2 — Plank Girder Stepped-Profile Geometry Hotfix
+
+Corrects the parametric plank-girder concrete outline to follow the user-confirmed reference geometry.  Interior plank width is now generated as B at y = 0 and y = h1, b3 at y = h2, and B - 2*b1 at y = H with symmetric side recesses.  Exterior plank keeps the right exterior edge vertical for full depth; the left interior edge is at x = 0 for y = 0 to h1, x = b2 at y = h2, and x = b1 at y = H.  This is a geometry-shape hotfix only; composite metadata, section-property summary, PMM solver, analysis workspace, and report behavior are unchanged.
+

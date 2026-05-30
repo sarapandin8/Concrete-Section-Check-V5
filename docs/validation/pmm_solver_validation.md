@@ -317,3 +317,8 @@ Parametric plank girder presets have been added for Interior and Exterior bridge
 - AASHTO LRFD automatic effective flange width calculation remains a future code-profile milestone.
 
 No PMM solver, D/C extraction, prestress model, or service-stress equation is changed by this section-preset milestone.
+
+### SECTION.PRESET1B.2 — Plank Girder Stepped-Profile Geometry Hotfix
+
+The plank-girder geometry generator now follows the user-confirmed stepped profile.  Interior plank checks enforce the physical widths B at y = 0 and h1, b3 at h2, and B - 2*b1 at H.  Exterior plank checks enforce a full-depth right exterior edge and left-side offsets of 0 at y = 0/h1, b2 at h2, and b1 at H.  This milestone updates geometry generation and regression tests only; it does not alter solver equations or demand/capacity checks.
+

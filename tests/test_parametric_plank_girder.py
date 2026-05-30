@@ -83,3 +83,60 @@ def test_parametric_plank_rejects_invalid_dimensions(generator_name, params, exp
 def test_parametric_plank_dimensions_are_registered():
     symbols = {dim.symbol for dim in default_registry.dimensions("parametric_plank_girder_interior")(**_interior_params())}
     assert {"B", "b1", "b2", "b3", "H", "h1", "h2"}.issubset(symbols)
+
+
+def _width_at_y(points, y, tol=1e-6):
+    xs = []
+    for index, p1 in enumerate(points):
+        p2 = points[(index + 1) % len(points)]
+        if abs(p1.y - p2.y) <= tol:
+            if abs(y - p1.y) <= tol:
+                xs.extend([p1.x, p2.x])
+            continue
+        y_min = min(p1.y, p2.y)
+        y_max = max(p1.y, p2.y)
+        if y_min - tol <= y <= y_max + tol:
+            t = (y - p1.y) / (p2.y - p1.y)
+            if -tol <= t <= 1.0 + tol:
+                xs.append(p1.x + t * (p2.x - p1.x))
+    unique = []
+    for x in sorted(xs):
+        if not unique or abs(x - unique[-1]) > 1e-5:
+            unique.append(x)
+    assert len(unique) >= 2
+    return unique[-1] - unique[0]
+
+
+def test_parametric_plank_interior_user_confirmed_stepped_profile_widths():
+    params = _interior_params()
+    geometry = default_registry.geometry("parametric_plank_girder_interior")(**params)
+    pts = geometry.outer_polygon
+    bottom_y = -params["H_mm"] / 2.0
+    y1 = bottom_y + params["h1_mm"]
+    y2 = bottom_y + params["h2_mm"]
+    top_y = params["H_mm"] / 2.0
+
+    assert _width_at_y(pts, bottom_y) == pytest.approx(params["B_mm"])
+    assert _width_at_y(pts, y1) == pytest.approx(params["B_mm"])
+    assert _width_at_y(pts, y2) == pytest.approx(params["b3_mm"])
+    assert _width_at_y(pts, top_y) == pytest.approx(params["B_mm"] - 2 * params["b1_mm"])
+
+
+def test_parametric_plank_exterior_user_confirmed_right_vertical_profile():
+    params = _exterior_params()
+    geometry = default_registry.geometry("parametric_plank_girder_exterior")(**params)
+    pts = geometry.outer_polygon
+    bottom_y = -params["H_mm"] / 2.0
+    y1 = bottom_y + params["h1_mm"]
+    y2 = bottom_y + params["h2_mm"]
+    top_y = params["H_mm"] / 2.0
+    x_left = -params["B_mm"] / 2.0
+    x_right = params["B_mm"] / 2.0
+
+    assert any(abs(p.x - x_right) < 1e-6 and abs(p.y - bottom_y) < 1e-6 for p in pts)
+    assert any(abs(p.x - x_right) < 1e-6 and abs(p.y - top_y) < 1e-6 for p in pts)
+    assert any(abs(p.x - x_left) < 1e-6 and abs(p.y - bottom_y) < 1e-6 for p in pts)
+    assert any(abs(p.x - x_left) < 1e-6 and abs(p.y - y1) < 1e-6 for p in pts)
+    assert any(abs(p.x - (x_left + params["b2_mm"])) < 1e-6 and abs(p.y - y2) < 1e-6 for p in pts)
+    assert any(abs(p.x - (x_left + params["b1_mm"])) < 1e-6 and abs(p.y - top_y) < 1e-6 for p in pts)
+    assert _width_at_y(pts, y2) == pytest.approx(params["b3_mm"])

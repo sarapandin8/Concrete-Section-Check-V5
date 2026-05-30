@@ -10,7 +10,8 @@ import pandas as pd
 from pydantic import ValidationError
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
-from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar
+from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
+from concrete_pmm_pro.core.models import LoadCase, PrestressElement, Rebar
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
 from concrete_pmm_pro.data.prestress_tendon_products import (
@@ -106,6 +107,15 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     if prestress_table_metadata:
         metadata["prestress_table_metadata"] = prestress_table_metadata
 
+    preserve_existing_primary = "concrete_materials" not in session_state if hasattr(session_state, "__contains__") else True
+    concrete_library = ensure_concrete_material_library(
+        concrete_material=_get_session_value(session_state, "concrete_material", c45_precast_material()),
+        concrete_materials=_coerce_list(_get_session_value(session_state, "concrete_materials", [])),
+        active_concrete_material_name=_get_session_value(session_state, "active_concrete_material_name", None),
+        deck_topping_material_name=_get_session_value(session_state, "deck_topping_material_name", None),
+        preserve_existing_primary=preserve_existing_primary,
+    )
+
     return ProjectModel(
         project_name=_get_session_value(session_state, "project_name", "Untitled Project") or "Untitled Project",
         designer=_get_session_value(session_state, "designer", None),
@@ -115,8 +125,10 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
         section_preset_name=_get_session_value(session_state, "section_preset_name", None),
         section_parameters=dict(_get_session_value(session_state, "section_parameters", {}) or {}),
         section_geometry=_get_session_value(session_state, "section_geometry", None),
-        concrete_material=_get_session_value(session_state, "concrete_material", ConcreteMaterial()),
-        concrete_materials=_coerce_list(_get_session_value(session_state, "concrete_materials", [])),
+        concrete_material=concrete_library.active_material,
+        concrete_materials=concrete_library.materials,
+        active_concrete_material_name=concrete_library.active_concrete_material_name,
+        deck_topping_material_name=concrete_library.deck_topping_material_name,
         rebar_materials=_coerce_list(_get_session_value(session_state, "rebar_materials", [])),
         prestress_materials=_coerce_list(_get_session_value(session_state, "prestress_materials", [])),
         active_rebar_material_name=_get_session_value(session_state, "active_rebar_material_name", None),
@@ -378,6 +390,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
 
     session_state["concrete_material"] = project.concrete_material
     session_state["concrete_materials"] = list(project.concrete_materials)
+    session_state["active_concrete_material_name"] = project.active_concrete_material_name
+    session_state["primary_concrete_material_name"] = project.active_concrete_material_name
+    session_state["deck_topping_material_name"] = project.deck_topping_material_name
     session_state["rebar_materials"] = list(project.rebar_materials)
     session_state["prestress_materials"] = list(project.prestress_materials)
     session_state["active_rebar_material_name"] = project.active_rebar_material_name

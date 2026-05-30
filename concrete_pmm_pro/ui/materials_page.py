@@ -10,6 +10,11 @@ import streamlit as st
 from pydantic import ValidationError
 
 from concrete_pmm_pro.code_checks import aci_beta1
+from concrete_pmm_pro.core.concrete_materials import (
+    CONCRETE_EC_METHOD_OPTIONS,
+    c45_precast_material,
+    ensure_concrete_material_library,
+)
 from concrete_pmm_pro.core.models import ConcreteMaterial, PrestressSteelMaterial, RebarMaterial
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -78,8 +83,18 @@ def _default_prestress_materials() -> list[PrestressSteelMaterial]:
 
 
 def _ensure_material_defaults() -> None:
-    if "concrete_material" not in st.session_state:
-        st.session_state["concrete_material"] = ConcreteMaterial(fc_MPa=35.0, beta1=aci_beta1(35.0))
+    concrete_library = ensure_concrete_material_library(
+        concrete_material=st.session_state.get("concrete_material", c45_precast_material()),
+        concrete_materials=st.session_state.get("concrete_materials", []),
+        active_concrete_material_name=st.session_state.get("active_concrete_material_name"),
+        deck_topping_material_name=st.session_state.get("deck_topping_material_name"),
+        preserve_existing_primary="concrete_materials" not in st.session_state,
+    )
+    st.session_state["concrete_materials"] = concrete_library.materials
+    st.session_state["active_concrete_material_name"] = concrete_library.active_concrete_material_name
+    st.session_state["primary_concrete_material_name"] = concrete_library.active_concrete_material_name
+    st.session_state["deck_topping_material_name"] = concrete_library.deck_topping_material_name
+    st.session_state["concrete_material"] = concrete_library.active_material
     if "rebar_materials" not in st.session_state or not st.session_state["rebar_materials"]:
         st.session_state["rebar_materials"] = default_rebar_materials()
     if "prestress_materials" not in st.session_state or not st.session_state["prestress_materials"]:
@@ -88,31 +103,119 @@ def _ensure_material_defaults() -> None:
     st.session_state.setdefault("active_prestress_material_name", st.session_state["prestress_materials"][0].name)
 
 
+def _concrete_materials_dataframe(materials: list[ConcreteMaterial]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for material in materials:
+        row = material.model_dump()
+        row["Effective Ec_MPa"] = material.effective_Ec_MPa
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _parse_concrete_materials(df: pd.DataFrame) -> tuple[list[ConcreteMaterial], list[str]]:
+    materials: list[ConcreteMaterial] = []
+    errors: list[str] = []
+    seen_names: set[str] = set()
+    for index, row in df.iterrows():
+        row_number = int(index) + 1
+        if all(
+            _is_blank(row.get(column))
+            for column in ["name", "fc_MPa", "ecu", "density_kg_m3", "beta1", "Ec_MPa", "note"]
+        ):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            errors.append(f"Row {row_number}: Material ID / name must not be blank.")
+            continue
+        if name in seen_names:
+            errors.append(f"Row {row_number}: duplicate concrete Material ID '{name}'.")
+            continue
+        seen_names.add(name)
+        ec_method = str(row.get("Ec_method") or "ACI auto").strip()
+        ec_override = _optional_float(row.get("Ec_MPa"))
+        if ec_method == "Manual" and ec_override is None:
+            errors.append(f"Row {row_number}: Manual Ec_MPa must be positive.")
+            continue
+        try:
+            materials.append(
+                ConcreteMaterial(
+                    name=name,
+                    fc_MPa=float(row.get("fc_MPa")),
+                    ecu=float(row.get("ecu")),
+                    density_kg_m3=float(row.get("density_kg_m3")),
+                    beta1=_optional_float(row.get("beta1")),
+                    Ec_method=ec_method if ec_method in CONCRETE_EC_METHOD_OPTIONS else "ACI auto",
+                    Ec_MPa=ec_override,
+                    note=None if _is_blank(row.get("note")) else str(row.get("note")),
+                )
+            )
+        except (TypeError, ValueError, ValidationError) as exc:
+            errors.append(f"Row {row_number}: invalid concrete material ({exc}).")
+    return materials, errors
+
+
 def _render_concrete_section() -> None:
-    st.subheader("Concrete Material")
-    current: ConcreteMaterial = st.session_state["concrete_material"]
-    cols = st.columns(4)
-    with cols[0]:
-        name = st.text_input("Concrete name", value=current.name)
-    with cols[1]:
-        fc_MPa = st.number_input("f'c, MPa", min_value=0.1, value=float(current.fc_MPa), step=1.0)
-    with cols[2]:
-        ecu = st.number_input("ecu", min_value=0.0001, value=float(current.ecu), step=0.0001, format="%.4f")
-    with cols[3]:
-        density = st.number_input("density, kg/m3", min_value=1.0, value=float(current.density_kg_m3), step=10.0)
+    st.subheader("Concrete Material Library")
+    st.info(
+        "Concrete materials are defined here and assigned to sections in the Section Builder. "
+        "The primary section concrete material is used by PMM analysis. Deck/topping material is used only for "
+        "composite metadata and transformed-width calculation in this milestone."
+    )
 
-    beta1_mode = st.radio("beta1 mode", ["Auto by ACI", "Manual"], horizontal=True)
-    beta1_value = aci_beta1(fc_MPa)
-    if beta1_mode == "Manual":
-        beta1_value = st.number_input("beta1 manual", min_value=0.01, max_value=1.0, value=float(current.beta1 or beta1_value), step=0.01)
-    note = st.text_area("Concrete note", value=current.note or "", height=80)
+    edited_df = st.data_editor(
+        _concrete_materials_dataframe(st.session_state["concrete_materials"]),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "name": st.column_config.TextColumn("Material ID"),
+            "fc_MPa": st.column_config.NumberColumn("f'c, MPa", min_value=0.1, step=1.0),
+            "density_kg_m3": st.column_config.NumberColumn("Density, kg/m3", min_value=1.0, step=10.0),
+            "ecu": st.column_config.NumberColumn("ecu", min_value=0.0001, step=0.0001, format="%.4f"),
+            "beta1": st.column_config.NumberColumn("beta1 manual", min_value=0.01, max_value=1.0, step=0.01),
+            "Ec_method": st.column_config.SelectboxColumn("Ec method", options=CONCRETE_EC_METHOD_OPTIONS),
+            "Ec_MPa": st.column_config.NumberColumn("Manual Ec_MPa", min_value=0.1, step=100.0),
+            "Effective Ec_MPa": st.column_config.NumberColumn("Effective Ec_MPa", disabled=True, format="%.0f"),
+            "note": st.column_config.TextColumn("Use / description / note"),
+        },
+        key="concrete_materials_editor",
+    )
+    materials, errors = _parse_concrete_materials(edited_df)
+    if errors:
+        for error in errors:
+            st.error(error)
+        return
+    if not materials:
+        st.error("At least one concrete material is required.")
+        return
 
-    try:
-        material = ConcreteMaterial(name=name, fc_MPa=fc_MPa, ecu=ecu, density_kg_m3=density, beta1=beta1_value, note=note or None)
-        st.session_state["concrete_material"] = material
-        st.success("Concrete material is valid.")
-    except ValidationError as exc:
-        st.error(f"Concrete material error: {exc.errors()[0]['msg']}")
+    st.session_state["concrete_materials"] = materials
+    material_names = [material.name for material in materials]
+
+    active_name = st.session_state.get("active_concrete_material_name")
+    active_index = material_names.index(active_name) if active_name in material_names else 0
+    selected_active = st.selectbox(
+        "Active / primary section concrete material",
+        material_names,
+        index=active_index,
+        help="This material mirrors project.concrete_material and is the concrete material used by PMM analysis.",
+    )
+
+    deck_name = st.session_state.get("deck_topping_material_name")
+    deck_index = material_names.index(deck_name) if deck_name in material_names else min(1, len(material_names) - 1)
+    selected_deck = st.selectbox(
+        "Default deck / topping concrete material",
+        material_names,
+        index=deck_index,
+        help="Used by composite-capable girder presets for Edeck, n, and Btransformed metadata only.",
+    )
+
+    material_map = {material.name: material for material in materials}
+    st.session_state["active_concrete_material_name"] = selected_active
+    st.session_state["primary_concrete_material_name"] = selected_active
+    st.session_state["deck_topping_material_name"] = selected_deck
+    st.session_state["concrete_material"] = material_map[selected_active]
+    st.success("Concrete material library is valid.")
 
 
 def _rebar_materials_dataframe(materials: list[RebarMaterial]) -> pd.DataFrame:

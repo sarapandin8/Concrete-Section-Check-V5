@@ -223,7 +223,14 @@ def check_uls_demands_against_rc_pmm(
         DCR_PROTOTYPE_WARNING,
         RC_AXIAL_CAP_LIMITATION_WARNING,
     ]
-    if any(getattr(point, "active_prestress_count", point.bonded_prestress_count) > 0 for point in pmm_result.points):
+    if any(
+        max(
+            int(getattr(point, "active_prestress_count", 0) or 0),
+            int(getattr(point, "bonded_prestress_count", 0) or 0),
+        )
+        > 0
+        for point in pmm_result.points
+    ):
         warnings.append(BONDED_PRESTRESS_PROTOTYPE_WARNING)
     if any(point.unbonded_prestress_ignored_count > 0 for point in pmm_result.points):
         warnings.append(UNBONDED_PRESTRESS_IGNORED_WARNING)

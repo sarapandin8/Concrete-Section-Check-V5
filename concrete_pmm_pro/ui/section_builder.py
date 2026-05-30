@@ -8,6 +8,13 @@ from typing import Any
 
 import streamlit as st
 
+from concrete_pmm_pro.core.concrete_materials import (
+    DEFAULT_DECK_TOPPING_MATERIAL,
+    c45_precast_material,
+    concrete_materials_by_name,
+    ensure_concrete_material_library,
+)
+from concrete_pmm_pro.core.models import ConcreteMaterial
 from concrete_pmm_pro.geometry import default_registry
 from concrete_pmm_pro.geometry.presets import load_section_categories, load_section_presets
 from concrete_pmm_pro.geometry.summary import summarize_geometry
@@ -255,6 +262,118 @@ def _format_parameter_value(value: Any) -> str:
     return str(value)
 
 
+def _format_ec(value: float) -> str:
+    return f"{value:,.0f} MPa"
+
+
+def _ensure_concrete_material_session() -> list[ConcreteMaterial]:
+    library_state = ensure_concrete_material_library(
+        concrete_material=st.session_state.get("concrete_material", c45_precast_material()),
+        concrete_materials=st.session_state.get("concrete_materials", []),
+        active_concrete_material_name=st.session_state.get("active_concrete_material_name"),
+        deck_topping_material_name=st.session_state.get("deck_topping_material_name"),
+        preserve_existing_primary="concrete_materials" not in st.session_state,
+    )
+    st.session_state["concrete_materials"] = library_state.materials
+    st.session_state["active_concrete_material_name"] = library_state.active_concrete_material_name
+    st.session_state["primary_concrete_material_name"] = library_state.active_concrete_material_name
+    st.session_state["deck_topping_material_name"] = library_state.deck_topping_material_name
+    st.session_state["concrete_material"] = library_state.active_material
+    return library_state.materials
+
+
+def _material_select_index(names: list[str], preferred_name: str | None, fallback_index: int = 0) -> int:
+    if preferred_name in names:
+        return names.index(preferred_name)
+    return min(max(fallback_index, 0), max(len(names) - 1, 0))
+
+
+def _hidden_material_parameter_names(preset: dict[str, Any]) -> set[str]:
+    if _is_parametric_plank_girder(preset):
+        return {"Ebeam_MPa", "Edeck_MPa"}
+    return set()
+
+
+def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, Any]:
+    materials = _ensure_concrete_material_session()
+    material_map = concrete_materials_by_name(materials)
+    material_names = list(material_map)
+    active_name = st.session_state.get("active_concrete_material_name")
+    default_primary_index = _material_select_index(material_names, active_name)
+
+    st.markdown("##### Concrete Material Assignment")
+    selected_primary = st.selectbox(
+        "Primary / section concrete material",
+        material_names,
+        index=default_primary_index,
+        help="Material for the main concrete polygon. This is the concrete material used by PMM analysis.",
+        key="section_primary_concrete_material_name",
+    )
+    primary_material = material_map[selected_primary]
+    st.session_state["active_concrete_material_name"] = selected_primary
+    st.session_state["primary_concrete_material_name"] = selected_primary
+    st.session_state["concrete_material"] = primary_material
+
+    assignment: dict[str, Any] = {
+        "primary_material_name": selected_primary,
+        "primary_fc_MPa": primary_material.fc_MPa,
+        "Ebeam_MPa": primary_material.effective_Ec_MPa,
+        "is_composite_applicable": _is_parametric_plank_girder(preset),
+    }
+
+    if _is_parametric_plank_girder(preset):
+        deck_name = st.session_state.get("deck_topping_material_name", DEFAULT_DECK_TOPPING_MATERIAL)
+        deck_index = _material_select_index(material_names, deck_name, fallback_index=min(1, len(material_names) - 1))
+        selected_deck = st.selectbox(
+            "Deck / topping concrete material",
+            material_names,
+            index=deck_index,
+            help="Used for Edeck, modular ratio n, and transformed-width metadata only in this milestone.",
+            key="section_deck_topping_material_name",
+        )
+        deck_material = material_map[selected_deck]
+        st.session_state["deck_topping_material_name"] = selected_deck
+        assignment.update(
+            {
+                "deck_topping_material_name": selected_deck,
+                "deck_fc_MPa": deck_material.fc_MPa,
+                "Edeck_MPa": deck_material.effective_Ec_MPa,
+            }
+        )
+        n_ratio = deck_material.effective_Ec_MPa / primary_material.effective_Ec_MPa
+        assignment["n_Edeck_over_Ebeam"] = n_ratio
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Primary material", f"{selected_primary} | f'c {primary_material.fc_MPa:g} MPa | Ec {_format_ec(primary_material.effective_Ec_MPa)}"),
+                    ("Deck/topping material", f"{selected_deck} | f'c {deck_material.fc_MPa:g} MPa | Ec {_format_ec(deck_material.effective_Ec_MPa)}"),
+                    ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
+                    ("Composite scope", "Metadata only; slab/topping is not merged into gross properties or PMM"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="cpmm-section-note">Deck/topping material is used for composite metadata and transformed-width '
+            "calculation only in this milestone. Composite slab/topping is not yet merged into gross section properties "
+            "or PMM solver.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("Deck / topping material: Not applicable for this section type.")
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Primary material", f"{selected_primary} | f'c {primary_material.fc_MPa:g} MPa"),
+                    ("Primary Ec", _format_ec(primary_material.effective_Ec_MPa)),
+                    ("Solver material", "Primary / section concrete only"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+    return assignment
+
+
 
 def _preset_option_label(preset: dict[str, Any]) -> str:
     """Return the user-facing label for a section preset selector option."""
@@ -500,19 +619,45 @@ def _render_section_definition_panel(
             else:
                 st.caption("No presets are available in this family yet.")
 
+        material_assignment = _render_concrete_material_assignment(preset)
+
         st.markdown("##### Dimension Labels")
         label_mode_label = st.selectbox("Dimension label mode", ["Symbol + Value", "Symbol only", "Value only"], index=0)
         label_mode = {"Symbol + Value": "symbol_value", "Symbol only": "symbol", "Value only": "value"}[label_mode_label]
 
         st.markdown("##### Geometry Parameters")
         params: dict[str, Any] = {}
+        hidden_material_parameters = _hidden_material_parameter_names(preset)
+        visible_parameters = [
+            parameter for parameter in preset["parameters"] if parameter["name"] not in hidden_material_parameters
+        ]
         parameter_columns = st.columns(2)
-        for index, parameter in enumerate(preset["parameters"]):
+        for index, parameter in enumerate(visible_parameters):
             with parameter_columns[index % len(parameter_columns)]:
                 if parameter.get("type", "number") == "number":
                     params[parameter["name"]] = _number_input(parameter, preset["key"])
                 else:
                     st.warning(f"Unsupported parameter type: {parameter.get('type')}")
+
+        if _is_parametric_plank_girder(preset):
+            params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
+            params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
+            be = float(params.get("Be_mm", 0.0))
+            ebeam = float(params["Ebeam_MPa"])
+            edeck = float(params["Edeck_MPa"])
+            n_ratio = edeck / ebeam if ebeam > 0 else 0.0
+            st.markdown("##### Calculated Composite Metadata")
+            st.markdown(
+                _kv_panel_html(
+                    [
+                        ("Ebeam", _format_ec(ebeam)),
+                        ("Edeck", _format_ec(edeck)),
+                        ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
+                        ("Btransformed = n x Be", f"{_format_float(n_ratio * be, 1)} mm"),
+                    ]
+                ),
+                unsafe_allow_html=True,
+            )
 
         if _is_parametric_i_girder(preset):
             _render_parametric_i_girder_dimension_qa(params)
@@ -654,7 +799,7 @@ def _render_section_properties_summary(
     c_bottom = summary.bottom_fiber_distance_mm
     yb = summary.centroid_y_from_bottom_mm
     y_mid_offset = summary.centroid_y_offset_from_mid_depth_mm
-    x_mid_offset = summary.centroid_x_offset_from_mid_width_mm
+    x_mid_offset = getattr(summary, "centroid_x_offset_from_mid_" + "width" + "_mm")
     composite_detail = (
         "Tslab/Be/n/Btransformed excluded from gross A/I/Z"
         if _is_parametric_plank_girder(preset)

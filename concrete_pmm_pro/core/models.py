@@ -5,6 +5,7 @@ Internal units are mm, MPa, N, and N-mm.
 
 from __future__ import annotations
 
+from math import sqrt
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -31,6 +32,8 @@ class ConcreteMaterial(AppBaseModel):
     ecu: float = Field(default=0.003, gt=0)
     density_kg_m3: float = Field(default=2400.0, gt=0)
     beta1: float | None = Field(default=None, gt=0, le=1.0)
+    Ec_MPa: float | None = Field(default=None, gt=0, description="Manual concrete elastic modulus override")
+    Ec_method: Literal["ACI auto", "Manual"] = "ACI auto"
     note: str | None = None
 
     @model_validator(mode="before")
@@ -43,11 +46,28 @@ class ConcreteMaterial(AppBaseModel):
             "fc_mpa": "fc_MPa",
             "eps_cu": "ecu",
             "lambda_factor": "beta1",
+            "ec_mpa": "Ec_MPa",
+            "ec_method": "Ec_method",
         }
         for old_name, new_name in legacy_map.items():
             if old_name in migrated and new_name not in migrated:
                 migrated[new_name] = migrated.pop(old_name)
+        ec_method = migrated.get("Ec_method")
+        if isinstance(ec_method, str):
+            normalized = ec_method.strip().lower()
+            if normalized in {"aci", "aci_auto", "aci auto", "auto", ""}:
+                migrated["Ec_method"] = "ACI auto"
+            elif normalized in {"manual", "user", "override"}:
+                migrated["Ec_method"] = "Manual"
         return migrated
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Concrete material name must not be blank")
+        return stripped
 
     @property
     def fc_mpa(self) -> float:
@@ -60,6 +80,12 @@ class ConcreteMaterial(AppBaseModel):
     @property
     def lambda_factor(self) -> float | None:
         return self.beta1
+
+    @property
+    def effective_Ec_MPa(self) -> float:
+        if self.Ec_method == "Manual" and self.Ec_MPa is not None and self.Ec_MPa > 0:
+            return self.Ec_MPa
+        return 4700.0 * sqrt(self.fc_MPa)
 
 
 class RebarMaterial(AppBaseModel):

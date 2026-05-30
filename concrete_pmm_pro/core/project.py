@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
+from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
 from concrete_pmm_pro.core.models import (
     ConcreteMaterial,
     LoadCase,
@@ -41,8 +42,10 @@ class ProjectModel(BaseModel):
     section_parameters: dict[str, Any] = Field(default_factory=dict)
     section_geometry: SectionGeometry | None = None
 
-    concrete_material: ConcreteMaterial = Field(default_factory=ConcreteMaterial)
+    concrete_material: ConcreteMaterial = Field(default_factory=c45_precast_material)
     concrete_materials: list[ConcreteMaterial] = Field(default_factory=list)
+    active_concrete_material_name: str | None = None
+    deck_topping_material_name: str | None = None
     rebar_materials: list[RebarMaterial] = Field(default_factory=list)
     prestress_materials: list[PrestressSteelMaterial] = Field(default_factory=list)
     active_rebar_material_name: str | None = None
@@ -69,3 +72,18 @@ class ProjectModel(BaseModel):
         if "concrete_material" not in migrated and isinstance(concrete_materials, list) and concrete_materials:
             migrated["concrete_material"] = concrete_materials[0]
         return migrated
+
+    @model_validator(mode="after")
+    def normalize_concrete_material_library(self) -> "ProjectModel":
+        library_state = ensure_concrete_material_library(
+            concrete_material=self.concrete_material,
+            concrete_materials=self.concrete_materials,
+            active_concrete_material_name=self.active_concrete_material_name,
+            deck_topping_material_name=self.deck_topping_material_name,
+            preserve_existing_primary=bool(self.concrete_materials) is False,
+        )
+        object.__setattr__(self, "concrete_materials", library_state.materials)
+        object.__setattr__(self, "active_concrete_material_name", library_state.active_concrete_material_name)
+        object.__setattr__(self, "deck_topping_material_name", library_state.deck_topping_material_name)
+        object.__setattr__(self, "concrete_material", library_state.active_material)
+        return self

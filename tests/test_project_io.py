@@ -5,6 +5,7 @@ import json
 import pytest
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
+from concrete_pmm_pro.core.concrete_materials import DEFAULT_DECK_TOPPING_MATERIAL, DEFAULT_PRIMARY_CONCRETE_MATERIAL
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, PrestressSteelMaterial, Rebar, RebarMaterial
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.geometry.generators import rectangle
@@ -112,6 +113,9 @@ def test_project_to_json_returns_valid_json() -> None:
     assert parsed["custom_stress_check_points"][1]["active"] is False
     assert parsed["custom_stress_check_points"][1]["include_in_governing"] is False
     assert parsed["concrete_material"]["fc_MPa"] == pytest.approx(35.0)
+    assert parsed["active_concrete_material_name"] == "C35"
+    assert parsed["deck_topping_material_name"] == DEFAULT_DECK_TOPPING_MATERIAL
+    assert any(material["name"] == DEFAULT_PRIMARY_CONCRETE_MATERIAL for material in parsed["concrete_materials"])
     assert parsed["active_rebar_material_name"] == "SD40"
     assert parsed["active_prestress_material_name"] == "PT Bar 32"
     assert parsed["loads"][0]["Mux_Nmm"] == pytest.approx(200_000_000.0)
@@ -178,7 +182,8 @@ def test_project_from_session_state_handles_missing_values_safely() -> None:
     project = project_from_session_state({})
 
     assert project.project_name == "Untitled Project"
-    assert project.concrete_material.fc_MPa > 0
+    assert project.concrete_material.name == DEFAULT_PRIMARY_CONCRETE_MATERIAL
+    assert project.deck_topping_material_name == DEFAULT_DECK_TOPPING_MATERIAL
     assert project.section_geometry is None
     assert project.loads == []
     assert project.rebars == []
@@ -197,6 +202,8 @@ def test_apply_project_to_session_state_restores_core_objects() -> None:
 
     assert session_state["section_geometry"] == project.section_geometry
     assert session_state["concrete_material"] == project.concrete_material
+    assert session_state["active_concrete_material_name"] == project.active_concrete_material_name
+    assert session_state["deck_topping_material_name"] == project.deck_topping_material_name
     assert session_state["rebar_materials"] == project.rebar_materials
     assert session_state["prestress_materials"] == project.prestress_materials
     assert session_state["active_rebar_material_name"] == "SD40"
@@ -213,6 +220,28 @@ def test_apply_project_to_session_state_restores_core_objects() -> None:
     assert "loads_table" in session_state
     assert "rebar_table" in session_state
     assert "prestress_table" in session_state
+
+
+def test_old_project_with_single_concrete_material_keeps_active_primary() -> None:
+    loaded = project_from_json(
+        json.dumps(
+            {
+                "project_name": "Old C35 Project",
+                "concrete_material": {
+                    "name": "Legacy C35",
+                    "fc_MPa": 35.0,
+                    "ecu": 0.003,
+                    "density_kg_m3": 2400.0,
+                    "beta1": 0.8,
+                },
+            }
+        )
+    )
+
+    assert loaded.concrete_material.name == "Legacy C35"
+    assert loaded.concrete_material.fc_MPa == pytest.approx(35.0)
+    assert loaded.active_concrete_material_name == "Legacy C35"
+    assert DEFAULT_PRIMARY_CONCRETE_MATERIAL in {material.name for material in loaded.concrete_materials}
 
 
 def test_prestress_to_table_restores_standard_tendon_metadata_from_product_label() -> None:

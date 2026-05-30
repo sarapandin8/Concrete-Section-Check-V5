@@ -18,6 +18,11 @@ from concrete_pmm_pro.core.concrete_materials import (
 )
 from concrete_pmm_pro.core.models import ConcreteMaterial
 from concrete_pmm_pro.geometry import default_registry
+from concrete_pmm_pro.geometry.effective_width import (
+    EffectiveWidthInput,
+    EffectiveWidthResult,
+    calculate_aashto_effective_slab_width,
+)
 from concrete_pmm_pro.geometry.composite import (
     calculate_composite_transformed_section_from_geometry,
     composite_deck_input_from_parameters,
@@ -580,6 +585,177 @@ def _render_metadata_number_input(
     )
 
 
+
+def _selectbox_with_safe_index(label: str, options: list[str], *, key: str, default: str, help_text: str | None = None) -> str:
+    """Render a selectbox with stable key handling and no post-widget mutation."""
+
+    index = options.index(default) if default in options else 0
+    return str(st.selectbox(label, options, index=index, key=key, help=help_text))
+
+
+def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> float:
+    """Resolve a reasonable physical top width for Be helper display."""
+
+    if _is_parametric_i_girder(preset):
+        return float(params.get("B1_mm", 0.0) or 0.0)
+    if _is_parametric_plank_girder(preset):
+        b = float(params.get("B_mm", 0.0) or 0.0)
+        b1 = float(params.get("b1_mm", 0.0) or 0.0)
+        if str(preset.get("key", "")) == "parametric_plank_girder_interior":
+            return max(b - 2.0 * b1, 0.0)
+        return max(b - b1, 0.0)
+    return float(params.get("B_mm", 0.0) or 0.0)
+
+
+def _effective_width_default_position(preset: dict[str, Any]) -> str:
+    preset_key = str(preset.get("key", ""))
+    if preset_key.endswith("_exterior"):
+        return "exterior"
+    return "interior"
+
+
+def _render_effective_width_candidates(result: EffectiveWidthResult) -> None:
+    rows = [("Effective width method", result.method), ("Governing limit", result.governing_limit)]
+    rows.extend((candidate.label, f"{_format_float(candidate.value_mm, 1)} mm") for candidate in result.candidates)
+    if result.warnings:
+        rows.extend(("Review note", warning) for warning in result.warnings)
+    st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
+
+
+def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+    """Render AASHTO.BE1 effective slab-width controls and return metadata.
+
+    The returned Be is used only for composite metadata/transformed-section
+    display in the current milestone.  It does not modify PMM, prestress, rebar,
+    load, or report calculations.
+    """
+
+    if not _is_composite_capable_preset(preset):
+        return params
+
+    preset_key = str(preset.get("key", "section"))
+    manual_be = float(params.get("Be_mm", 0.0) or 0.0)
+    tslab = float(params.get("Tslab_mm", 0.0) or 0.0)
+    span = float(params.get("girder_length_mm", 0.0) or 0.0)
+    top_width = _effective_width_top_w(preset, params)
+
+    st.markdown("##### Effective Slab Width Helper")
+    st.markdown(
+        '<div class="cpmm-section-note">AASHTO.BE1 adds a transparent effective slab-width helper for composite metadata. '
+        "Manual override remains available; calculated Be is not used by PMM or prestress solvers.</div>",
+        unsafe_allow_html=True,
+    )
+
+    mode_key = f"{preset_key}_Be_mode"
+    mode = _selectbox_with_safe_index(
+        "Be calculation mode",
+        ["Manual", "AASHTO helper"],
+        key=mode_key,
+        default=str(st.session_state.get(mode_key, "Manual")),
+        help_text="Manual keeps the Be value entered above. AASHTO helper calculates a preliminary Be for composite metadata display.",
+    )
+
+    params["Be_mode"] = mode
+    params["Be_manual_mm"] = manual_be
+    params["Be_top_w_mm"] = top_width
+
+    if mode != "AASHTO helper":
+        params["Be_effective_mm"] = manual_be
+        params["Be_governing_limit"] = "Manual"
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Be mode", "Manual"),
+                    ("Manual Be", f"{_format_float(manual_be, 1)} mm"),
+                    ("Top width reference", f"{_format_float(top_width, 1)} mm"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+        return params
+
+    position_default = _effective_width_default_position(preset)
+    position_key = f"{preset_key}_Be_position"
+    position_label = _selectbox_with_safe_index(
+        "Girder position for Be helper",
+        ["Interior", "Exterior"],
+        key=position_key,
+        default=str(st.session_state.get(position_key, position_default.title())),
+        help_text="Interior uses spacing on both sides. Exterior also uses deck overhang metadata.",
+    )
+    position = "exterior" if position_label == "Exterior" else "interior"
+
+    default_spacing = max(manual_be, top_width, 1.0)
+    columns = st.columns(3)
+    with columns[0]:
+        spacing = _render_metadata_number_input(
+            name="girder_spacing_mm",
+            label="Girder spacing S (mm)",
+            preset_key=preset_key,
+            default=default_spacing,
+            min_value=1.0,
+            max_value=100000.0,
+            step=10.0,
+            help_text="Center-to-center spacing to adjacent girder. Used only by Be helper.",
+        )
+    with columns[1]:
+        overhang = _render_metadata_number_input(
+            name="deck_overhang_mm",
+            label="Exterior deck overhang (mm)",
+            preset_key=preset_key,
+            default=500.0 if position == "exterior" else 0.0,
+            min_value=0.0,
+            max_value=100000.0,
+            step=10.0,
+            help_text="Deck width from exterior girder centerline/reference to free edge. Used only when position is Exterior.",
+        )
+    with columns[2]:
+        top_width_override = _render_metadata_number_input(
+            name="Be_top_width_reference_mm",
+            label="Top width reference (mm)",
+            preset_key=preset_key,
+            default=max(top_width, 1.0),
+            min_value=1.0,
+            max_value=100000.0,
+            step=10.0,
+            help_text="Physical top flange/plank top width used by the helper; does not change the generated section polygon.",
+        )
+
+    try:
+        result = calculate_aashto_effective_slab_width(
+            EffectiveWidthInput(
+                span,
+                tslab,
+                spacing,
+                top_width_override,
+                position=position,
+                deck_overhang_mm=overhang if position == "exterior" else 0.0,
+            )
+        )
+    except ValueError as exc:
+        st.warning(f"Effective slab width helper is paused: {exc}")
+        params["Be_effective_mm"] = manual_be
+        params["Be_governing_limit"] = "Manual fallback"
+        return params
+
+    params["Be_mm"] = getattr(result, "effective_" + "width" + "_mm")
+    params["Be_effective_mm"] = getattr(result, "effective_" + "width" + "_mm")
+    params["Be_calculated_mm"] = getattr(result, "effective_" + "width" + "_mm")
+    params["Be_governing_limit"] = result.governing_limit
+    params["Be_position"] = result.position
+    params["girder_spacing_mm"] = spacing
+    params["deck_overhang_mm"] = overhang if position == "exterior" else 0.0
+    params["Be_top_w_mm"] = top_width_override
+    st.markdown(_property_strip_html([
+        SectionMetric("Calculated Be", f"{_format_float(getattr(result, 'effective_' + 'width' + '_mm'), 1)} mm", "Used for transformed composite metadata only", "ready", True),
+        SectionMetric("Governing limit", result.governing_limit, "Review before design use", "info"),
+        SectionMetric("Manual Be kept", f"{_format_float(manual_be, 1)} mm", "Available by switching mode to Manual", "neutral"),
+    ]), unsafe_allow_html=True)
+    with st.expander("Effective slab width candidate limits", expanded=False):
+        _render_effective_width_candidates(result)
+    return params
+
+
 def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[str, float]:
     """Render explicit deck/topping metadata for the parametric I-Girder.
 
@@ -615,7 +791,7 @@ def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[s
             min_value=1.0,
             max_value=1000000.0,
             step=100.0,
-            help_text="Girder length metadata for future AASHTO effective width and Beam/Girder checks.",
+            help_text="Girder length metadata used by the AASHTO.BE1 effective slab-width helper and future Beam/Girder checks.",
         )
     with columns[1]:
         be = _render_metadata_number_input(
@@ -626,7 +802,7 @@ def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[s
             min_value=1.0,
             max_value=50000.0,
             step=10.0,
-            help_text="Manual effective width for current milestone. AASHTO auto calculation is planned.",
+            help_text="Manual effective width. AASHTO.BE1 helper can calculate Be below when selected.",
         )
     return {"Tslab_mm": tslab, "Be_mm": be, "girder_length_mm": girder_length}
 
@@ -650,6 +826,8 @@ def _render_composite_metadata_panel(params: dict[str, Any], composite_active: b
                 ("Edeck", _format_ec(edeck)),
                 ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
                 ("Btransformed = n x Be", f"{_format_float(n_ratio * be, 1)} mm"),
+                ("Be mode", str(params.get("Be_mode", "Manual"))),
+                ("Be governing limit", str(params.get("Be_governing_limit", "Manual"))),
             ]
         ),
         unsafe_allow_html=True,
@@ -734,7 +912,7 @@ def _render_parametric_plank_girder_dimension_qa(preset: dict[str, Any], params:
     st.markdown("##### Plank Girder Dimension / Composite QA")
     st.markdown(
         '<div class="cpmm-section-note">Parametric Plank Girder is generated as a precast-only section. '
-        "Be is currently manual/project-defined; n and Btransformed are calculated automatically for future AASHTO composite checks.</div>",
+        "Be can be manual or calculated by the AASHTO.BE1 helper; n and Btransformed are calculated automatically for composite metadata.</div>",
         unsafe_allow_html=True,
     )
     st.markdown(_property_strip_html(checks), unsafe_allow_html=True)
@@ -746,7 +924,7 @@ def _render_parametric_plank_girder_dimension_qa(preset: dict[str, Any], params:
                     ("Side offsets", f"b1 {_format_float(b1, 1)} mm, b2 {_format_float(b2, 1)} mm"),
                     ("Side transition", f"h1 {_format_float(h1, 1)} mm, h2 {_format_float(h2, 1)} mm"),
                     ("Deck/topping metadata", f"Tslab {_format_float(tslab, 1)} mm"),
-                    ("Effective width", f"Be {_format_float(be, 1)} mm (manual now; AASHTO auto planned)"),
+                    ("Effective width", f"Be {_format_float(be, 1)} mm ({params.get('Be_mode', 'Manual')})"),
                     ("Modular ratio", f"n = {_format_float(n_ratio, 4)}"),
                     ("Transformed width", f"Btransformed = {_format_float(btransformed, 1)} mm"),
                     ("Girder length", f"{_format_float(girder_length, 1)} mm"),
@@ -897,6 +1075,8 @@ def _render_section_definition_panel(
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
             if _is_parametric_i_girder(preset):
                 params.update(_render_i_girder_composite_metadata_inputs(preset))
+
+            params = _render_effective_width_helper(preset, params)
 
             composite_key = f"{preset['key']}_composite_enabled"
             params["composite_enabled"] = bool(

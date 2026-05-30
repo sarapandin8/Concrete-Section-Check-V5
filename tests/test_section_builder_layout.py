@@ -316,3 +316,26 @@ def test_i_girder_is_composite_capable_but_geometry_ignores_metadata() -> None:
     assert len(dimensions) > 0
     assert "Tslab_mm" not in geometry.metadata["parameters"]
     assert "Be_mm" not in geometry.metadata["parameters"]
+
+
+def test_aashto_be1_section_builder_source_contains_effective_width_helper() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "AASHTO.BE1" in source
+    assert "Effective Slab Width Helper" in source
+    assert "Be calculation mode" in source
+    assert "AASHTO helper" in source
+    assert "calculate_aashto_effective_slab_width" in source
+    assert "Effective slab width candidate limits" in source
+
+
+def test_aashto_be1_top_width_reference_helpers_are_workflow_specific() -> None:
+    i_girder = preset_by_key("parametric_i_girder")
+    plank = preset_by_key("parametric_plank_girder_interior")
+    exterior_plank = preset_by_key("parametric_plank_girder_exterior")
+
+    assert section_builder._effective_width_top_w(i_girder, {"B1_mm": 800.0}) == 800.0
+    assert section_builder._effective_width_top_w(plank, {"B_mm": 990.0, "b1_mm": 45.0}) == 900.0
+    assert section_builder._effective_width_top_w(exterior_plank, {"B_mm": 990.0, "b1_mm": 45.0}) == 945.0
+    assert section_builder._effective_width_default_position(exterior_plank) == "exterior"
+    assert section_builder._effective_width_default_position(i_girder) == "interior"

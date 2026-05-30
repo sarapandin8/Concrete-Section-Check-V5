@@ -55,6 +55,21 @@ def test_summary_item_and_compact_panel_html_are_quiet() -> None:
     assert "cpmm-status-badge" not in panel
 
 
+def test_compact_panel_accepts_columns_layout_hint() -> None:
+    panel = _compact_panel_html(
+        [
+            DashboardCard("Member Type", "Beam / Girder", "Active analysis context", "info"),
+            DashboardCard("PMM Workflow", "Caution", "ULS/PMM workspace availability", "warning", strong=True),
+        ],
+        columns=2,
+    )
+
+    assert "cpmm-compact-panel" in panel
+    assert "cpmm-kv-grid-row" in panel
+    assert "Beam / Girder" in panel
+    assert "cpmm-status-badge warning" in panel
+
+
 def test_project_overview_cards_keep_existing_summary_values() -> None:
     cards = _project_overview_cards(
         ProjectModel(version="PS.DB1.2"),

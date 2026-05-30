@@ -127,6 +127,21 @@ _DASHBOARD_CSS = """
   padding: 0.38rem 0;
 }
 .cpmm-kv-row:last-child { border-bottom: 0; }
+.cpmm-kv-grid-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  border-bottom: 1px solid #edf0f5;
+  padding: 0.45rem 0;
+}
+.cpmm-kv-grid-row:last-child { border-bottom: 0; }
+.cpmm-kv-cell {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-width: 0;
+}
 .cpmm-kv-label {
   color: #667085;
   font-size: 0.82rem;
@@ -285,7 +300,34 @@ def _summary_item_html(card: DashboardCard) -> str:
     )
 
 
-def _compact_panel_html(cards: list[DashboardCard]) -> str:
+def _compact_panel_html(cards: list[DashboardCard], columns: int | None = None) -> str:
+    """Render compact key-value cards.
+
+    ``columns`` is accepted for small workflow panels that want a wider visual
+    rhythm, but the function remains backward-compatible with the earlier
+    single-column compact panel calls.  Keeping the parameter here avoids a
+    Streamlit runtime TypeError if callers pass the layout hint.
+    """
+    if columns is not None and columns > 1:
+        safe_columns = max(1, int(columns))
+        rows: list[str] = []
+        for start in range(0, len(cards), safe_columns):
+            row_cards = cards[start : start + safe_columns]
+            cells: list[str] = []
+            for card in row_cards:
+                badge = ""
+                if card.strong:
+                    status = card.status if card.status in {"ready", "warning", "danger", "info", "neutral"} else "info"
+                    badge = f' <span class="cpmm-status-badge {status}">{escape(status.upper())}</span>'
+                cells.append(
+                    '<div class="cpmm-kv-cell">'
+                    f'<div class="cpmm-kv-label">{escape(card.title)}</div>'
+                    f'<div class="cpmm-kv-value">{escape(card.value)}{badge}</div>'
+                    "</div>"
+                )
+            rows.append('<div class="cpmm-kv-grid-row">' + "".join(cells) + "</div>")
+        return '<div class="cpmm-compact-panel">' + "".join(rows) + "</div>"
+
     rows: list[str] = []
     for card in cards:
         badge = ""

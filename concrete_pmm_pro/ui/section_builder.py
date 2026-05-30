@@ -255,6 +255,41 @@ def _format_parameter_value(value: Any) -> str:
     return str(value)
 
 
+
+def _preset_option_label(preset: dict[str, Any]) -> str:
+    """Return the user-facing label for a section preset selector option."""
+    return f"{preset['display_name']}  ·  {preset.get('category', 'General')}"
+
+
+def _preset_maps(presets: list[dict[str, Any]]) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, str]]:
+    """Build stable key-based selector maps for Streamlit widgets.
+
+    The Section Type / Preset selectbox must be keyed by immutable preset keys,
+    not by display labels or a dynamically changing index. Otherwise Streamlit
+    can require two user selections: the first rerun updates the stored preset,
+    and the next rerun rebuilds the widget with a different default index.
+    """
+    preset_keys = [str(preset.get("key", "")) for preset in presets]
+    preset_map = {str(preset.get("key", "")): preset for preset in presets}
+    label_map = {key: _preset_option_label(preset_map[key]) for key in preset_keys}
+    return preset_keys, preset_map, label_map
+
+
+def _initial_preset_selector_key(preset_keys: list[str]) -> str:
+    """Resolve the initial section preset selector value from session state."""
+    if not preset_keys:
+        return ""
+
+    current_widget_value = st.session_state.get("section_preset_selector_key")
+    if current_widget_value in preset_keys:
+        return str(current_widget_value)
+
+    loaded_preset_key = st.session_state.get("section_preset_key")
+    if loaded_preset_key in preset_keys:
+        return str(loaded_preset_key)
+
+    return preset_keys[0]
+
 def _is_parametric_i_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")) == "parametric_i_girder"
 
@@ -418,26 +453,35 @@ def _render_section_definition_panel(
         )
 
         st.markdown("##### Section Type")
-        loaded_preset_key = st.session_state.get("section_preset_key")
+        preset_keys, preset_map, label_map = _preset_maps(presets)
+        if not preset_keys:
+            st.error("No section presets are available.")
+            return None
 
-        preset_options = [
-            f"{preset['display_name']}  ·  {preset.get('category', 'General')}"
-            for preset in presets
-        ]
-        preset_keys = [str(preset.get("key", "")) for preset in presets]
-        preset_index = preset_keys.index(str(loaded_preset_key)) if str(loaded_preset_key) in preset_keys else 0
+        selector_state_key = "section_preset_selector_key"
+        selector_initial_key = _initial_preset_selector_key(preset_keys)
+        if st.session_state.get(selector_state_key) not in preset_keys:
+            st.session_state[selector_state_key] = selector_initial_key
 
-        selected_option = st.selectbox(
+        selected_preset_key = st.selectbox(
             "Section Type / Preset",
-            preset_options,
-            index=preset_index,
+            preset_keys,
+            index=preset_keys.index(selector_initial_key),
+            format_func=lambda key: label_map.get(str(key), str(key)),
+            key=selector_state_key,
             help=(
                 "Select the actual section geometry directly. The geometry family/category is shown "
                 "after the dot for reference only."
             ),
         )
-        preset = presets[preset_options.index(selected_option)]
+        preset = preset_map[str(selected_preset_key)]
         selected_category = str(preset.get("category", "General"))
+
+        # Sync the selected preset key immediately, before geometry generation.
+        # This prevents the direct Section Type / Preset selector from snapping
+        # back to the previous preset and requiring a second click on rerun.
+        st.session_state["section_preset_key"] = str(selected_preset_key)
+        st.session_state["section_preset_name"] = str(preset.get("display_name", selected_preset_key))
 
         st.caption(
             f"Geometry family: {selected_category} · "

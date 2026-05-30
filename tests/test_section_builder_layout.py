@@ -92,3 +92,29 @@ def test_section_property_clarity_labels_are_present() -> None:
     assert "Section property convention" in source
     assert "Tslab, Be, n, and Btransformed are not merged" in source
 
+
+
+def test_section_type_selector_uses_stable_preset_keys() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "section_preset_selector_key" in source
+    assert "selected_preset_key = st.selectbox" in source
+    assert "format_func=lambda key" in source
+    assert 'st.session_state["section_preset_key"] = str(selected_preset_key)' in source
+
+
+def test_preset_option_label_keeps_display_name_and_category() -> None:
+    rectangle = preset_by_key("rectangle")
+
+    assert section_builder._preset_option_label(rectangle) == "Rectangle  ·  Basic Solid"
+
+
+def test_preset_maps_are_key_based_and_labelled() -> None:
+    rectangle = preset_by_key("rectangle")
+    i_girder = preset_by_key("parametric_i_girder")
+
+    keys, preset_map, label_map = section_builder._preset_maps([rectangle, i_girder])
+
+    assert keys == ["rectangle", "parametric_i_girder"]
+    assert preset_map["parametric_i_girder"]["display_name"] == "Parametric I-Girder"
+    assert label_map["parametric_i_girder"] == "Parametric I-Girder  ·  Girder"

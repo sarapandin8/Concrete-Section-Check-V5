@@ -89,12 +89,15 @@ from concrete_pmm_pro.reporting import (
 from concrete_pmm_pro.serviceability import (
     ALLOWED_STRESS_POINT_TYPES,
     ServiceabilitySettings,
+    build_girder_service_stress_basis_options,
     build_serviceability_summary_from_analysis_input,
     classify_service_stress_results_for_cracking,
     crack_classification_to_dataframe,
     custom_stress_check_points_from_dataframe,
     dataframe_to_stress_check_points,
+    girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
+    run_basic_girder_service_stress,
     run_elastic_sls_stress_check,
     service_stress_limits,
     service_stress_results_to_dataframe,
@@ -3257,6 +3260,101 @@ def _default_custom_stress_check_points_dataframe() -> pd.DataFrame:
     )
 
 
+
+def _render_beam_girder_service_stress_preview() -> None:
+    """Display GIRDER.SLS1B manual elastic service-stress preview for Beam/Girder mode.
+
+    This panel intentionally uses explicit trial actions and an explicit section
+    basis. It does not read PMM load tables as girder design actions, does not
+    include prestress effects, and does not modify any solver state.
+    """
+
+    mode_settings = _analysis_mode_from_session()
+    if not is_beam_girder_future_workflow(mode_settings):
+        return
+
+    st.markdown("### Beam/Girder Elastic Service Stress Preview")
+    st.info(
+        "GIRDER.SLS1B connects the Beam/Girder service-stress kernel to the Analysis workspace for manual trial actions only. "
+        "Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension."
+    )
+    st.warning(
+        "This preview does not include prestress force/eccentricity, staged construction, creep/shrinkage, losses, shear, or AASHTO stress limits yet. "
+        "It is not used by PMM, rebar, prestress, or report solvers."
+    )
+
+    section_geometry = st.session_state.get("section_geometry")
+    section_parameters = st.session_state.get("section_parameters", {})
+    basis_options = build_girder_service_stress_basis_options(
+        section_geometry,
+        section_parameters,
+        member_type=mode_settings.member_type,
+    )
+
+    for item in basis_options.info:
+        st.info(item)
+    for warning in basis_options.warnings:
+        st.warning(f"Girder SLS preview warning: {warning}")
+
+    if not basis_options.bases:
+        st.info("Build a valid Beam/Girder section before running the service-stress preview.")
+        return
+
+    basis_names = list(basis_options.bases.keys())
+    if st.session_state.get("girder_service_stress_basis_name") not in basis_names:
+        st.session_state["girder_service_stress_basis_name"] = basis_names[0]
+
+    input_cols = st.columns(3)
+    with input_cols[0]:
+        basis_name = st.selectbox(
+            "Section basis for stress preview",
+            basis_names,
+            format_func=lambda name: basis_options.labels.get(name, name),
+            key="girder_service_stress_basis_name",
+            help="Choose precast gross properties or composite transformed properties when composite metadata is active.",
+        )
+    with input_cols[1]:
+        axial_n = st.number_input(
+            "N service (kN, compression +)",
+            value=float(st.session_state.get("girder_service_stress_N_kN", 0.0)),
+            step=100.0,
+            format="%.3f",
+            key="girder_service_stress_N_kN",
+            help="Positive axial force is compression. Leave zero for ordinary flexural girder stress preview.",
+        )
+    with input_cols[2]:
+        moment_m = st.number_input(
+            "M service (kN-m, sagging +)",
+            value=float(st.session_state.get("girder_service_stress_M_kNm", 0.0)),
+            step=100.0,
+            format="%.3f",
+            key="girder_service_stress_M_kNm",
+            help="Positive sagging moment gives top compression and bottom tension.",
+        )
+
+    basis = basis_options.bases[basis_name]
+    result = run_basic_girder_service_stress(basis, N_kN=float(axial_n), M_kNm=float(moment_m))
+    result_df = pd.DataFrame(girder_service_stress_result_rows(result))
+
+    summary_cols = st.columns(5)
+    summary_cols[0].metric("Basis", basis_options.labels.get(basis_name, basis_name))
+    summary_cols[1].metric("Area", f"{basis.area_mm2:,.1f} mm²")
+    summary_cols[2].metric("Centroid yb", f"{basis.centroid_y_from_bottom_mm:,.2f} mm")
+    summary_cols[3].metric("Ix", f"{basis.ix_mm4:,.3e} mm⁴")
+    summary_cols[4].metric("Depth", f"{basis.total_depth_mm:,.1f} mm")
+
+    stress_cols = st.columns(2)
+    stress_cols[0].metric("Max compression", f"{result.max_compression_MPa:,.3f} MPa")
+    stress_cols[1].metric("Max tension", f"{result.max_tension_MPa:,.3f} MPa")
+
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
+    with st.expander("Beam/Girder service-stress sign convention", expanded=False):
+        st.write("- Compression stress is negative; tension stress is positive.")
+        st.write("- Axial compression N is positive and contributes negative stress: -N/A.")
+        st.write("- Sagging M is positive and gives top compression / bottom tension.")
+        st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
+        st.write("- This preview is a manual elastic stress check foundation only; design-code stress limits are future work.")
+
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()
     with st.expander("Serviceability / SLS Foundation", expanded=False):
@@ -4169,6 +4267,7 @@ def render_analysis_uls_pmm() -> None:
 def render_analysis_sls_stress() -> None:
     st.subheader("SLS / Stress & Cracking")
     st.info("SLS stress convention: compression is negative and tension is positive.")
+    _render_beam_girder_service_stress_preview()
     _render_serviceability_expander()
     _render_sls_verification_expander()
 

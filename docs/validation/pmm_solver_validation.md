@@ -294,3 +294,7 @@ A parametric bridge I-Girder section preset has been added as an analysis-ready 
 ## UI.SECTION.PRESET1.1 — Simplified section preset selection
 
 The section preset UI was simplified so users choose the actual section type directly. Category remains metadata for organization only; this reduces confusion when selecting parametric girder presets and does not change geometry generation, solver equations, or PMM analysis behavior.
+
+## SECTION.PRESET1A.1 — Parametric I-Girder Geometry QA
+
+The Parametric I-Girder preset remains a symmetric solid polygon generator using B1, B2, D1, D2, D3, D5, D6, T1, T2, and optional C1. The Section Builder now exposes a dimension QA panel so users can review the depth stack, web clear zone, transition widths, chamfer state, and analysis-compatibility tags before running PMM analysis.

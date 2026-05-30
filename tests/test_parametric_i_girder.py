@@ -28,6 +28,8 @@ def test_parametric_i_girder_generates_valid_section():
     assert validation.is_valid
     assert not validation.errors
     assert geometry.metadata["preset"] == "parametric_i_girder"
+    assert geometry.metadata["zone_depths_mm"]["web_clear_zone"] == 650
+    assert geometry.metadata["analysis_compatibility"]["uls_pmm"] == "supported"
     assert len(geometry.holes) == 0
     assert summary.area_mm2 > 0
     assert abs(summary.centroid_x_mm) < 1e-6
@@ -39,6 +41,13 @@ def test_parametric_i_girder_dimensions_are_registered():
     dimensions = default_registry.dimensions("parametric_i_girder")(**_default_params())
     symbols = {dim.symbol for dim in dimensions}
     assert {"B1", "B2", "D1", "D2", "D3", "D5", "D6", "T1", "T2"}.issubset(symbols)
+
+
+def test_parametric_i_girder_c1_dimension_is_optional():
+    params = _default_params()
+    assert "C1" not in {dim.symbol for dim in default_registry.dimensions("parametric_i_girder")(**params)}
+    params["C1_mm"] = 50
+    assert "C1" in {dim.symbol for dim in default_registry.dimensions("parametric_i_girder")(**params)}
 
 
 @pytest.mark.parametrize(

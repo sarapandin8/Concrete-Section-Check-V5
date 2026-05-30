@@ -369,6 +369,10 @@ def parametric_i_girder(
         raise ValueError("Invalid geometry: T1 must not exceed B1.")
     if T2_mm > B2_mm:
         raise ValueError("Invalid geometry: T2 must not exceed B2.")
+    if T1_mm > B2_mm:
+        raise ValueError("Invalid geometry: T1 must not exceed B2 so the web can connect through the section depth.")
+    if T2_mm > B1_mm:
+        raise ValueError("Invalid geometry: T2 must not exceed B1 so the web can connect through the section depth.")
 
     web_zone_mm = D1_mm - D2_mm - D3_mm - D5_mm - D6_mm
     if web_zone_mm <= 0:
@@ -445,6 +449,19 @@ def parametric_i_girder(
                 "T1_mm": T1_mm,
                 "T2_mm": T2_mm,
                 "C1_mm": C1_mm,
+            },
+            "zone_depths_mm": {
+                "top_flange": D2_mm,
+                "top_haunch": D3_mm,
+                "web_clear_zone": web_zone_mm,
+                "bottom_haunch": D6_mm,
+                "bottom_flange": D5_mm,
+            },
+            "analysis_compatibility": {
+                "uls_pmm": "supported",
+                "sls_stress": "planned",
+                "beam_girder_assignment": "planned",
+                "shear_torsion": "planned",
             },
         },
     )
@@ -664,7 +681,7 @@ def parametric_i_girder_dimensions(
     y_bottom_haunch_top = y_bottom_flange_top + D6_mm
     offset = max(B1_mm, B2_mm, D1_mm) * 0.08
     right = max(B1_mm, B2_mm) / 2.0
-    return [
+    dims = [
         _dim("D1", _point(right + offset, bottom_y), _point(right + offset, top_y), _point(right + 2.0 * offset, 0.0), "vertical", D1_mm),
         _dim("B1", _point(-B1_mm / 2.0, top_y + offset), _point(B1_mm / 2.0, top_y + offset), _point(0.0, top_y + 1.6 * offset), "horizontal", B1_mm),
         _dim("B2", _point(-B2_mm / 2.0, bottom_y - offset), _point(B2_mm / 2.0, bottom_y - offset), _point(0.0, bottom_y - 1.6 * offset), "horizontal", B2_mm),
@@ -675,6 +692,18 @@ def parametric_i_girder_dimensions(
         _dim("D5", _point(-right - offset, bottom_y), _point(-right - offset, y_bottom_flange_top), _point(-right - 2.0 * offset, bottom_y + D5_mm / 2.0), "vertical", D5_mm),
         _dim("D6", _point(-right - offset, y_bottom_flange_top), _point(-right - offset, y_bottom_haunch_top), _point(-right - 2.0 * offset, y_bottom_flange_top + D6_mm / 2.0), "vertical", D6_mm),
     ]
+    if C1_mm > 0:
+        dims.append(
+            _dim(
+                "C1",
+                _point(B2_mm / 2.0 - C1_mm, bottom_y),
+                _point(B2_mm / 2.0, bottom_y + C1_mm),
+                _point(B2_mm / 2.0 + offset * 0.7, bottom_y + offset * 0.35),
+                "aligned",
+                C1_mm,
+            )
+        )
+    return dims
 
 
 def psc_i_girder_dimensions(depth_mm: float, top_flange_width_mm: float, bottom_flange_width_mm: float, web_width_mm: float, **_: object) -> list[DimensionItem]:

@@ -599,3 +599,7 @@ Adds a bridge-oriented parametric I-Girder preset under the Girder category. The
 ### UI.SECTION.PRESET1.1 — Simplified section preset selection
 
 The Section Builder now uses a direct **Section Type / Preset** selector so parametric girder presets such as **Parametric I-Girder** are visible without first selecting a category. Geometry family/category is still shown as metadata and is available in an optional browse expander.
+
+### SECTION.PRESET1A.1 — I-Girder Geometry Visual Polish & Dimension QA
+
+Parametric I-Girder now includes an engineering-oriented dimension QA panel in Section Builder. The preset reports the depth stack, web clear zone, top/bottom web transition checks, optional C1 chamfer note, and analysis-compatibility status. Geometry metadata now records I-girder zone depths and ULS PMM / future SLS / future Beam-Girder compatibility tags.

@@ -243,6 +243,54 @@ def _format_parameter_value(value: Any) -> str:
     return str(value)
 
 
+def _is_parametric_i_girder(preset: dict[str, Any]) -> bool:
+    return str(preset.get("key", "")) == "parametric_i_girder"
+
+
+def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
+    """Show concise engineering-oriented checks for the parametric I-girder preset."""
+    b1 = float(params.get("B1_mm", 0.0))
+    b2 = float(params.get("B2_mm", 0.0))
+    d1 = float(params.get("D1_mm", 0.0))
+    d2 = float(params.get("D2_mm", 0.0))
+    d3 = float(params.get("D3_mm", 0.0))
+    d5 = float(params.get("D5_mm", 0.0))
+    d6 = float(params.get("D6_mm", 0.0))
+    t1 = float(params.get("T1_mm", 0.0))
+    t2 = float(params.get("T2_mm", 0.0))
+    c1 = float(params.get("C1_mm", 0.0))
+    web_zone = d1 - d2 - d3 - d5 - d6
+
+    checks = [
+        SectionMetric("Depth stack", "OK" if web_zone > 0 else "Invalid", f"Web clear zone = {_format_float(web_zone, 1)} mm", "ready" if web_zone > 0 else "danger", True),
+        SectionMetric("Top transition", "OK" if 0 < t1 <= min(b1, b2) else "Review", "T1 must connect within both flange widths", "ready" if 0 < t1 <= min(b1, b2) else "warning", True),
+        SectionMetric("Bottom transition", "OK" if 0 < t2 <= min(b1, b2) else "Review", "T2 must connect within both flange widths", "ready" if 0 < t2 <= min(b1, b2) else "warning", True),
+        SectionMetric("Chamfer", "None" if c1 == 0 else f"{_format_float(c1, 1)} mm", "C1 is used only at external bottom/top corners in this preset", "neutral" if c1 == 0 else "info"),
+    ]
+
+    st.markdown("##### I-Girder Dimension QA")
+    st.markdown(
+        '<div class="cpmm-section-note">Parametric I-Girder is symmetric about the vertical centerline. '
+        "The generated polygon is analysis-ready for ULS PMM; SLS / Beam-Girder assignment are planned workflow extensions.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(_property_strip_html(checks), unsafe_allow_html=True)
+    with st.expander("I-Girder zone breakdown", expanded=False):
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Top flange zone", f"B1 {_format_float(b1, 1)} mm × D2 {_format_float(d2, 1)} mm"),
+                    ("Top haunch / taper", f"D3 {_format_float(d3, 1)} mm; taper from B1 to T1"),
+                    ("Web clear zone", f"{_format_float(web_zone, 1)} mm between haunches"),
+                    ("Web widths", f"T1 {_format_float(t1, 1)} mm / T2 {_format_float(t2, 1)} mm"),
+                    ("Bottom haunch / taper", f"D6 {_format_float(d6, 1)} mm; taper from T2 to B2"),
+                    ("Bottom flange zone", f"B2 {_format_float(b2, 1)} mm × D5 {_format_float(d5, 1)} mm"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def _inertia_display(value: str) -> str:
     return "Not calculated" if value == "TODO" else value
 
@@ -350,6 +398,9 @@ def _render_section_definition_panel(
                     params[parameter["name"]] = _number_input(parameter, preset["key"])
                 else:
                     st.warning(f"Unsupported parameter type: {parameter.get('type')}")
+
+        if _is_parametric_i_girder(preset):
+            _render_parametric_i_girder_dimension_qa(params)
 
     return preset, label_mode, params
 
@@ -489,6 +540,8 @@ def _render_section_properties_summary(
                 SectionMetric("Holes / Voids", f"{len(geometry.holes):,}"),
                 SectionMetric("Active Preset", preset["display_name"]),
                 SectionMetric("Category", str(preset.get("category", "N/A"))),
+                SectionMetric("ULS PMM", "Supported" if _is_parametric_i_girder(preset) else "Supported", "Current section-analysis workflow", "ready"),
+                SectionMetric("Beam/Girder", "Planned" if _is_parametric_i_girder(preset) else "N/A", "Future station assignment", "info" if _is_parametric_i_girder(preset) else "neutral"),
                 SectionMetric("Readiness", _readiness_label(validation), "", _validation_status(validation), True),
             ]
         ),

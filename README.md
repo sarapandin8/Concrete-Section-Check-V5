@@ -591,3 +591,7 @@ Adds a first-screen design decision banner to the Analysis workspace. The banner
 ### UI.ANALYSIS4.4 — Final Analysis Workspace Polish
 
 The Analysis workspace decision area now avoids duplicate status storytelling between the top workspace header and the Design Decision banner.  The header acts as a compact workspace status strip, while the decision banner carries the engineering conclusion.  The banner also separates Decision, Confidence, and Scope / Exclusions into dedicated blocks so ULS PMM strength status, validation confidence, prestress inclusion, and SLS exclusion are easier to read.  This milestone is UI communication polish only and does not change solver equations, PMM surface generation, demand/capacity extraction, prestress behavior, load import, report export, or cache behavior.
+
+### SECTION.PRESET1A — Parametric I-Girder Geometry
+
+Adds a bridge-oriented parametric I-Girder preset under the Girder category. The preset uses mm units and the following user-facing variables: B1, B2, D1, D2, D3, D5, D6, T1, T2, and C1. The generated geometry is a symmetric analysis-ready concrete polygon with validation checks for web/flange/haunch dimensions before downstream PMM or future girder analysis.

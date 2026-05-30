@@ -328,6 +328,128 @@ def psc_i_girder(
     return SectionGeometry(name=name, outer_polygon=points, holes=[], metadata={"preset": "psc_i_girder"})
 
 
+def parametric_i_girder(
+    B1_mm: float,
+    B2_mm: float,
+    D1_mm: float,
+    D2_mm: float,
+    D3_mm: float,
+    D5_mm: float,
+    D6_mm: float,
+    T1_mm: float,
+    T2_mm: float,
+    C1_mm: float = 0.0,
+    name: str = "Parametric I-Girder",
+) -> SectionGeometry:
+    """Generate a symmetric parametric bridge I-girder section.
+
+    Parameter naming intentionally follows the user's bridge-girder drafting
+    convention rather than generic geometry names:
+      B1 = top flange width, B2 = bottom flange width, D1 = total depth,
+      D2 = top flange thickness, D3 = top haunch depth,
+      D5 = bottom flange thickness, D6 = bottom haunch depth,
+      T1 = upper web width, T2 = lower/main web width, C1 = corner chamfer.
+
+    The first implementation is a left-right symmetric solid concrete polygon.
+    It is intended as an analysis-ready section definition for PMM / future
+    prestressed-girder checks, not merely a preview sketch.
+    """
+    for label, value in {
+        "B1": B1_mm,
+        "B2": B2_mm,
+        "D1": D1_mm,
+        "T1": T1_mm,
+        "T2": T2_mm,
+    }.items():
+        _require_positive(label, value)
+    for label, value in {"D2": D2_mm, "D3": D3_mm, "D5": D5_mm, "D6": D6_mm, "C1": C1_mm}.items():
+        _require_non_negative(label, value)
+
+    if T1_mm > B1_mm:
+        raise ValueError("Invalid geometry: T1 must not exceed B1.")
+    if T2_mm > B2_mm:
+        raise ValueError("Invalid geometry: T2 must not exceed B2.")
+
+    web_zone_mm = D1_mm - D2_mm - D3_mm - D5_mm - D6_mm
+    if web_zone_mm <= 0:
+        raise ValueError("Invalid geometry: D1 must be greater than D2 + D3 + D5 + D6.")
+
+    chamfer_limit = max(0.0, min(B1_mm, B2_mm, D1_mm) / 2.0)
+    if C1_mm > chamfer_limit:
+        raise ValueError("Invalid geometry: C1 is too large for the selected girder dimensions.")
+
+    top_y = D1_mm / 2.0
+    bottom_y = -D1_mm / 2.0
+    y_top_flange_bottom = top_y - D2_mm
+    y_top_haunch_bottom = y_top_flange_bottom - D3_mm
+    y_bottom_flange_top = bottom_y + D5_mm
+    y_bottom_haunch_top = y_bottom_flange_top + D6_mm
+
+    b1 = B1_mm / 2.0
+    b2 = B2_mm / 2.0
+    t1 = T1_mm / 2.0
+    t2 = T2_mm / 2.0
+    c = float(C1_mm)
+
+    def add(points: list[Point2D], x: float, y: float) -> None:
+        if points and abs(points[-1].x - x) < 1e-9 and abs(points[-1].y - y) < 1e-9:
+            return
+        points.append(_point(x, y))
+
+    points: list[Point2D] = []
+    # Clockwise/counter-clockwise orientation is not important to Shapely for
+    # a solid polygon, but we keep an ordered perimeter without duplicate points.
+    if c > 0:
+        add(points, -b2 + c, bottom_y)
+        add(points, b2 - c, bottom_y)
+        add(points, b2, bottom_y + c)
+    else:
+        add(points, -b2, bottom_y)
+        add(points, b2, bottom_y)
+    add(points, b2, y_bottom_flange_top)
+    add(points, t2, y_bottom_haunch_top)
+    add(points, t1, y_top_haunch_bottom)
+    add(points, b1, y_top_flange_bottom)
+    if c > 0:
+        add(points, b1, top_y - c)
+        add(points, b1 - c, top_y)
+        add(points, -b1 + c, top_y)
+        add(points, -b1, top_y - c)
+    else:
+        add(points, b1, top_y)
+        add(points, -b1, top_y)
+    add(points, -b1, y_top_flange_bottom)
+    add(points, -t1, y_top_haunch_bottom)
+    add(points, -t2, y_bottom_haunch_top)
+    add(points, -b2, y_bottom_flange_top)
+    if c > 0:
+        add(points, -b2, bottom_y + c)
+
+    _ensure_valid_simple_polygon(points, "Parametric I-Girder")
+    return SectionGeometry(
+        name=name,
+        outer_polygon=points,
+        holes=[],
+        metadata={
+            "preset": "parametric_i_girder",
+            "girder_type": "I-Girder",
+            "units": "mm",
+            "parameters": {
+                "B1_mm": B1_mm,
+                "B2_mm": B2_mm,
+                "D1_mm": D1_mm,
+                "D2_mm": D2_mm,
+                "D3_mm": D3_mm,
+                "D5_mm": D5_mm,
+                "D6_mm": D6_mm,
+                "T1_mm": T1_mm,
+                "T2_mm": T2_mm,
+                "C1_mm": C1_mm,
+            },
+        },
+    )
+
+
 def u_girder(
     depth_mm: float,
     top_width_mm: float,
@@ -521,6 +643,40 @@ def box_section_fillet_dimensions(
     return dims
 
 
+def parametric_i_girder_dimensions(
+    B1_mm: float,
+    B2_mm: float,
+    D1_mm: float,
+    D2_mm: float,
+    D3_mm: float,
+    D5_mm: float,
+    D6_mm: float,
+    T1_mm: float,
+    T2_mm: float,
+    C1_mm: float = 0.0,
+    **_: object,
+) -> list[DimensionItem]:
+    top_y = D1_mm / 2.0
+    bottom_y = -D1_mm / 2.0
+    y_top_flange_bottom = top_y - D2_mm
+    y_top_haunch_bottom = y_top_flange_bottom - D3_mm
+    y_bottom_flange_top = bottom_y + D5_mm
+    y_bottom_haunch_top = y_bottom_flange_top + D6_mm
+    offset = max(B1_mm, B2_mm, D1_mm) * 0.08
+    right = max(B1_mm, B2_mm) / 2.0
+    return [
+        _dim("D1", _point(right + offset, bottom_y), _point(right + offset, top_y), _point(right + 2.0 * offset, 0.0), "vertical", D1_mm),
+        _dim("B1", _point(-B1_mm / 2.0, top_y + offset), _point(B1_mm / 2.0, top_y + offset), _point(0.0, top_y + 1.6 * offset), "horizontal", B1_mm),
+        _dim("B2", _point(-B2_mm / 2.0, bottom_y - offset), _point(B2_mm / 2.0, bottom_y - offset), _point(0.0, bottom_y - 1.6 * offset), "horizontal", B2_mm),
+        _dim("T1", _point(-T1_mm / 2.0, y_top_haunch_bottom), _point(T1_mm / 2.0, y_top_haunch_bottom), _point(0.0, y_top_haunch_bottom + offset), "horizontal", T1_mm),
+        _dim("T2", _point(-T2_mm / 2.0, y_bottom_haunch_top), _point(T2_mm / 2.0, y_bottom_haunch_top), _point(0.0, y_bottom_haunch_top - offset), "horizontal", T2_mm),
+        _dim("D2", _point(-right - offset, y_top_flange_bottom), _point(-right - offset, top_y), _point(-right - 2.0 * offset, top_y - D2_mm / 2.0), "vertical", D2_mm),
+        _dim("D3", _point(-right - offset, y_top_haunch_bottom), _point(-right - offset, y_top_flange_bottom), _point(-right - 2.0 * offset, y_top_flange_bottom - D3_mm / 2.0), "vertical", D3_mm),
+        _dim("D5", _point(-right - offset, bottom_y), _point(-right - offset, y_bottom_flange_top), _point(-right - 2.0 * offset, bottom_y + D5_mm / 2.0), "vertical", D5_mm),
+        _dim("D6", _point(-right - offset, y_bottom_flange_top), _point(-right - offset, y_bottom_haunch_top), _point(-right - 2.0 * offset, y_bottom_flange_top + D6_mm / 2.0), "vertical", D6_mm),
+    ]
+
+
 def psc_i_girder_dimensions(depth_mm: float, top_flange_width_mm: float, bottom_flange_width_mm: float, web_width_mm: float, **_: object) -> list[DimensionItem]:
     d = depth_mm / 2.0
     offset = depth_mm * 0.08
@@ -558,6 +714,7 @@ def register_builtin_generators(registry: GeometryRegistry) -> None:
         "rectangular_hollow": (rectangular_hollow, rectangular_hollow_dimensions),
         "box_section_fillet": (box_section_fillet, box_section_fillet_dimensions),
         "psc_i_girder": (psc_i_girder, psc_i_girder_dimensions),
+        "parametric_i_girder": (parametric_i_girder, parametric_i_girder_dimensions),
         "u_girder": (u_girder, u_girder_dimensions),
         "single_cell_box_girder": (single_cell_box_girder, single_cell_box_girder_dimensions),
     }

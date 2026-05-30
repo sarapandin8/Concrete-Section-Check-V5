@@ -286,3 +286,7 @@ The ULS / PMM Analysis workspace now separates result communication into two lev
 - a Design Decision banner that presents Decision, Confidence, and Scope / Exclusions as separate blocks.
 
 This reduces duplicate PASS / governing / D/C messaging and clarifies that the current decision applies to ULS PMM strength only.  SLS / Stress & Cracking remains outside this ULS decision and is reported as a separate planned workflow.  No solver equation, PMM generation, prestress model, axial-cap logic, or D/C extraction behavior is changed by this milestone.
+
+## SECTION.PRESET1A — Parametric I-Girder Geometry
+
+A parametric bridge I-Girder section preset has been added as an analysis-ready geometry generator. The first version supports symmetric solid I-Girder sections using B1/B2 flange widths, D1 total depth, D2/D5 flange thicknesses, D3/D6 haunch depths, T1/T2 web widths, and optional C1 outside chamfer. The preset validates basic geometric compatibility before storing the section for downstream analysis.

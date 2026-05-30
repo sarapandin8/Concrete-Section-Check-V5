@@ -196,7 +196,7 @@ def test_beam_girder_member_type_filters_out_column_basic_presets() -> None:
     assert "circular_hollow" not in keys
 
 
-def test_general_section_member_type_keeps_all_presets_visible() -> None:
+def test_legacy_general_section_member_type_uses_column_pier_filter() -> None:
     rectangle = preset_by_key("rectangle")
     i_girder = preset_by_key("parametric_i_girder")
 
@@ -205,7 +205,7 @@ def test_general_section_member_type_keeps_all_presets_visible() -> None:
         AnalysisModeSettings(member_type="general_section"),
     )
 
-    assert [preset["key"] for preset in filtered] == ["rectangle", "parametric_i_girder"]
+    assert [preset["key"] for preset in filtered] == ["rectangle"]
 
 
 def test_section_category_browser_uses_filtered_categories() -> None:
@@ -231,5 +231,8 @@ def test_section_builder_source_contains_member_type_preset_filter_notice() -> N
     source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
 
     assert "Section Type / Preset is filtered" in source
+    assert "workflow-specific categories" in source
     assert "_filter_presets_for_member_type" in source
     assert "available_presets" in source
+    assert "Custom PMM section presets" in source
+    assert "Custom Girder section presets" in source

@@ -11,7 +11,7 @@ def analysis_mode_label(settings: AnalysisModeSettings) -> str:
     if settings.member_type == "beam_girder":
         return "Beam / Girder - Flexure Mode Future"
     if settings.member_type == "general_section":
-        return "General Section"
+        return "Column / Pier / Wall / Pylon - PMM Mode"
     return "Unknown Analysis Mode"
 
 
@@ -30,8 +30,8 @@ def analysis_mode_description(settings: AnalysisModeSettings) -> str:
         )
     if settings.member_type == "general_section":
         return (
-            "General section review mode keeps PMM and SLS tools available when the member type "
-            "has not been classified yet."
+            "Legacy General Section mode is migrated to the explicit Column / Pier / Wall / Pylon "
+            "PMM workflow to avoid ambiguous design interpretation."
         )
     return "Analysis mode is not recognized."
 
@@ -55,5 +55,7 @@ def analysis_mode_warnings(settings: AnalysisModeSettings) -> list[str]:
             ]
         )
     elif settings.member_type == "general_section":
-        warnings.append("General Section mode requires careful interpretation of Pu, Mux, and Muy.")
+        warnings.append(
+            "Legacy General Section mode has been removed from the active workflow list; use Column/Pier PMM or Beam/Girder."
+        )
     return warnings

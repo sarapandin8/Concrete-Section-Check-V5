@@ -20,6 +20,9 @@ AnalysisType = Literal["PMM Surface"]
 StrengthLoadType = Literal["ULS", "Extreme", "Construction", "Other"]
 TransverseReinforcement = Literal["tied", "spiral"]
 PrestressStressModel = Literal["linear_cap", "bilinear"]
+# ``general_section`` is kept as a legacy input value so old project/session
+# data can be normalized without crashing. It is no longer exposed as an active
+# workflow in the UI.
 MemberType = Literal["column_pier_pmm", "beam_girder", "general_section"]
 AnalysisWorkflow = Literal["pmm_section", "beam_girder_future", "general_section"]
 
@@ -27,8 +30,9 @@ AnalysisWorkflow = Literal["pmm_section", "beam_girder_future", "general_section
 class AnalysisModeSettings(BaseModel):
     """Member type and workflow routing metadata.
 
-    This framework is intentionally descriptive in Milestone A.1. It does not
-    change the PMM solver, SLS stress formulas, or load case data model.
+    This framework is intentionally descriptive. It does not change the PMM
+    solver, SLS stress formulas, or load case data model. ``general_section``
+    is accepted only as a legacy value and is normalized to Column/Pier PMM.
     """
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
@@ -54,7 +58,11 @@ class AnalysisModeSettings(BaseModel):
             object.__setattr__(self, "allow_sls_workflow", True)
             object.__setattr__(self, "allow_beam_girder_placeholder", True)
         elif self.member_type == "general_section":
-            object.__setattr__(self, "analysis_workflow", "general_section")
+            # MEMBER.TYPE1.3 removes General Section from the active workflow UI.
+            # Preserve old project/session data by migrating it to the safe,
+            # explicit PMM workflow instead of keeping an ambiguous third mode.
+            object.__setattr__(self, "member_type", "column_pier_pmm")
+            object.__setattr__(self, "analysis_workflow", "pmm_section")
             object.__setattr__(self, "allow_pmm_workflow", True)
             object.__setattr__(self, "allow_sls_workflow", True)
             object.__setattr__(self, "allow_beam_girder_placeholder", False)

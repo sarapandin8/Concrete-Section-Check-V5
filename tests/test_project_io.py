@@ -51,7 +51,7 @@ def _sample_project() -> ProjectModel:
         active_prestress_material_name="PT Bar 32",
         loads=[LoadCase(name="ULS-01", Pu_N=1_000_000.0, Mux_Nmm=200_000_000.0, Muy_Nmm=50_000_000.0)],
         rebars=[Rebar(x_mm=100.0, y_mm=-200.0, diameter_mm=25.0, material_name="SD40", label="B1")],
-        analysis_mode_settings=AnalysisModeSettings(member_type="general_section", note="general review"),
+        analysis_mode_settings=AnalysisModeSettings(member_type="beam_girder", note="future girder review"),
         custom_stress_check_points=[
             StressCheckPoint(
                 name="Tendon Zone",
@@ -108,7 +108,7 @@ def test_project_to_json_returns_valid_json() -> None:
 
     assert parsed["project_name"] == "Bridge Pier P1"
     assert parsed["version"] == "PS.DB1.2"
-    assert parsed["analysis_mode_settings"]["member_type"] == "general_section"
+    assert parsed["analysis_mode_settings"]["member_type"] == "beam_girder"
     assert parsed["include_default_stress_check_points"] is False
     assert parsed["custom_stress_check_points"][1]["active"] is False
     assert parsed["custom_stress_check_points"][1]["include_in_governing"] is False
@@ -152,7 +152,7 @@ def test_project_round_trip_preserves_key_engineering_data() -> None:
     assert loaded.prestress_elements[0].pe_eff_n == pytest.approx(120_000.0)
     assert loaded.prestress_elements[0].initial_stress_mpa == pytest.approx(857.142857)
     assert loaded.analysis_mode_settings is not None
-    assert loaded.analysis_mode_settings.member_type == "general_section"
+    assert loaded.analysis_mode_settings.member_type == "beam_girder"
     assert loaded.include_default_stress_check_points is False
     assert len(loaded.custom_stress_check_points) == 2
     assert loaded.custom_stress_check_points[0].point_type == "tendon_zone"

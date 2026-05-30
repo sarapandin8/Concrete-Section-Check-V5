@@ -40,10 +40,11 @@ def test_beam_girder_maps_to_future_workflow() -> None:
     assert settings.allow_beam_girder_placeholder is True
 
 
-def test_general_section_maps_to_general_section_workflow() -> None:
+def test_legacy_general_section_is_migrated_to_column_pier_pmm() -> None:
     settings = AnalysisModeSettings(member_type="general_section")
 
-    assert settings.analysis_workflow == "general_section"
+    assert settings.member_type == "column_pier_pmm"
+    assert settings.analysis_workflow == "pmm_section"
     assert settings.allow_pmm_workflow is True
     assert settings.allow_sls_workflow is True
 
@@ -55,7 +56,7 @@ def test_analysis_mode_label_returns_readable_label() -> None:
 
 def test_analysis_mode_description_returns_non_empty_description() -> None:
     assert analysis_mode_description(AnalysisModeSettings())
-    assert analysis_mode_description(AnalysisModeSettings(member_type="general_section"))
+    assert analysis_mode_description(AnalysisModeSettings(member_type="beam_girder"))
 
 
 def test_is_pmm_primary_workflow_true_for_column_pier_pmm() -> None:
@@ -74,10 +75,10 @@ def test_analysis_mode_warnings_for_beam_girder_include_double_count_warning() -
     assert any("not implemented" in warning for warning in warnings)
 
 
-def test_general_section_warning_mentions_load_interpretation() -> None:
+def test_legacy_general_section_has_no_active_warning_after_migration() -> None:
     warnings = analysis_mode_warnings(AnalysisModeSettings(member_type="general_section"))
 
-    assert any("Pu, Mux, and Muy" in warning for warning in warnings)
+    assert warnings == []
 
 
 def test_project_model_save_load_preserves_analysis_mode_settings() -> None:

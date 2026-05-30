@@ -161,7 +161,6 @@ _DASHBOARD_CSS = """
 _MEMBER_TYPE_OPTIONS: dict[str, str] = {
     "Column / Pier / Wall / Pylon - PMM Mode": "column_pier_pmm",
     "Beam / Girder - Future Design Workflow": "beam_girder",
-    "General Section": "general_section",
 }
 
 
@@ -188,11 +187,6 @@ def _mode_guidance_lines(settings: AnalysisModeSettings) -> list[str]:
             "Beam/Girder mode is a routing placeholder for future girder Mu/Vu/SLS/prestress design checks.",
             "Current PMM tools are not the primary design method for typical bridge girders.",
             "Deck/topping material remains composite metadata only until future composite/girder milestones.",
-        ]
-    if settings.member_type == "general_section":
-        return [
-            "General Section mode keeps PMM and SLS tools available with user-controlled interpretation.",
-            "Use this mode only when the member is not clearly classified as a column/pier or beam/girder.",
         ]
     return [
         "Column/Pier/Wall/Pylon mode uses the existing Pu, Mux, Muy PMM workflow.",
@@ -224,14 +218,14 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
     with st.container(border=True):
         st.markdown("#### Analysis Mode / Member Type")
         st.caption(
-            "Select the primary engineering workflow before defining loads and running analysis. "
-            "This controls UI guidance only; MEMBER.TYPE1 does not change solver equations."
+            "Select the primary engineering workflow before defining sections, loads, and analysis. "
+            "Custom sections are handled inside Section Builder under the selected workflow; MEMBER.TYPE1.3 removes ambiguous General Section mode."
         )
         selected_label = st.selectbox(
             "Active member workflow",
             labels,
             key=widget_key,
-            help="Column/Pier uses the existing PMM workflow. Beam/Girder is prepared as a future girder-design workflow.",
+            help="Column/Pier uses the existing PMM workflow. Beam/Girder is prepared as a future girder-design workflow. Custom section presets are selected in Section Builder.",
         )
         note = st.text_area(
             "Analysis mode note",

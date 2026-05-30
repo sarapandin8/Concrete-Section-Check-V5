@@ -174,5 +174,6 @@ def test_project_page_member_type_selector_source_is_present() -> None:
 
     assert "Analysis Mode / Member Type" in source
     assert "Beam / Girder - Future Design Workflow" in source
-    assert "MEMBER.TYPE1 does not change solver equations" in source
+    assert "MEMBER.TYPE1.3 removes ambiguous General Section mode" in source
     assert "project_analysis_mode_member_type_label" in source
+    assert '"General Section": "general_section"' not in source

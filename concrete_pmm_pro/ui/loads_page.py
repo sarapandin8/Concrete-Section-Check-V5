@@ -89,8 +89,6 @@ def _render_load_workflow_notice() -> None:
             "Beam/Girder design load tables for Mu, Vu, Tu, transfer stage, service stage, and prestress effects "
             "are future work. Do not treat the current Pu/Mux/Muy PMM table as a completed bridge girder design workflow."
         )
-    elif settings.member_type == "general_section":
-        st.warning("General Section mode is active. Verify the engineering meaning of Pu, Mux, and Muy before running checks.")
 
 def _default_load_table() -> pd.DataFrame:
     return pd.DataFrame(

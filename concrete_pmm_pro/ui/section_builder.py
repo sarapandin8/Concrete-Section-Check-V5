@@ -430,29 +430,25 @@ _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "
 _BEAM_GIRDER_SECTION_CATEGORIES = frozenset({"Girder", "Box Girder", "Custom"})
 
 
-def _section_categories_for_member_type(settings: AnalysisModeSettings) -> set[str] | None:
+def _section_categories_for_member_type(settings: AnalysisModeSettings) -> set[str]:
     """Return the section preset categories allowed by the active member workflow.
 
-    General Section mode intentionally returns ``None`` so it can keep all
-    presets visible for advanced/custom engineering interpretation. Column/Pier
-    mode should not offer girder presets by default, and Beam/Girder mode
-    should not offer column-only presets by default. This is a UI-routing guard
-    only; it does not change geometry generation or solver behavior.
+    MEMBER.TYPE1.3 removes the ambiguous General Section workflow. Custom
+    presets remain available inside the active workflow: Custom PMM sections for
+    Column/Pier/Wall/Pylon and Custom Girder sections for Beam/Girder. This is a
+    UI-routing guard only; it does not change geometry generation or solver
+    behavior.
     """
 
-    if settings.member_type == "column_pier_pmm":
-        return set(_COLUMN_PIER_SECTION_CATEGORIES)
     if settings.member_type == "beam_girder":
         return set(_BEAM_GIRDER_SECTION_CATEGORIES)
-    return None
+    return set(_COLUMN_PIER_SECTION_CATEGORIES)
 
 
 def _preset_matches_member_type(preset: dict[str, Any], settings: AnalysisModeSettings) -> bool:
     """Return whether a section preset should be shown for the active workflow."""
 
     allowed_categories = _section_categories_for_member_type(settings)
-    if allowed_categories is None:
-        return True
     return str(preset.get("category", "General")) in allowed_categories
 
 
@@ -482,10 +478,8 @@ def _member_type_filter_description(settings: AnalysisModeSettings) -> str:
     """Human-readable description of the active Section Type / Preset filter."""
 
     allowed_categories = _section_categories_for_member_type(settings)
-    if allowed_categories is None:
-        return "All section presets are visible in General Section mode."
     category_text = ", ".join(sorted(allowed_categories))
-    return f"Section Type / Preset is filtered to: {category_text}."
+    return f"Section Type / Preset is filtered to workflow-specific categories: {category_text}."
 
 
 
@@ -509,6 +503,7 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
         rows.extend(
             [
                 ("Recommended section family", "I-Girder / Plank Girder / future bridge girder presets"),
+                ("Custom category", "Custom Girder section presets remain under this workflow"),
                 ("Current geometry status", "Gross precast polygon only"),
                 ("Girder design checks", "Future milestone; not implemented in MEMBER.TYPE1"),
                 ("Current preset fit", "Good for Beam/Girder" if is_girder_preset else "Review: selected preset is not a girder preset"),
@@ -519,22 +514,12 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
         if not is_girder_preset:
             st.warning("Beam/Girder mode is active, but the selected preset is not a dedicated girder preset. Use only with engineering judgment.")
         st.caption("MEMBER.TYPE1 routes the workflow only. It does not add AASHTO girder SLS/ULS equations yet.")
-    elif settings.member_type == "general_section":
-        rows.extend(
-            [
-                ("Primary analysis meaning", "General section review"),
-                ("PMM tools", "Available with user-controlled load interpretation"),
-                ("Deck/topping material", "Not used unless a future composite workflow is explicitly added"),
-            ]
-        )
-        st.markdown("##### Member Workflow Guidance")
-        st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
-        st.caption("General Section mode is flexible but requires explicit engineering interpretation of Pu, Mux, and Muy.")
     else:
         rows.extend(
             [
                 ("Primary analysis meaning", "Column / Pier / Wall / Pylon PMM"),
                 ("PMM demand inputs", "Pu, Mux, Muy"),
+                ("Custom category", "Custom PMM section presets remain under this workflow"),
                 ("Concrete material used by PMM", "Primary / section concrete only"),
                 ("Deck/topping material", "Ignored by PMM"),
             ]

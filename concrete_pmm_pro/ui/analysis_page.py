@@ -1801,7 +1801,7 @@ def _render_input_summary() -> None:
         if is_beam_girder_future_workflow(mode_settings):
             st.warning("PMM interaction is not the primary design method for typical beam/girder flexural design. Beam/Girder design checks are future work.")
         elif not is_pmm_primary_workflow(mode_settings):
-            st.info("General Section mode is active; PMM and SLS tools remain available for engineering review.")
+            st.info("Non-PMM workflow is active; PMM output should be interpreted as an auxiliary section review only.")
         st.info(f"Prestress stress model: {settings.prestress_stress_model}.")
         st.info(
             "Rebar displaced concrete subtraction: "

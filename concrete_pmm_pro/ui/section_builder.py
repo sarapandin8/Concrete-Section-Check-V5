@@ -247,6 +247,10 @@ def _is_parametric_i_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")) == "parametric_i_girder"
 
 
+def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
+    return str(preset.get("key", "")).startswith("parametric_plank_girder_")
+
+
 def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
     """Show concise engineering-oriented checks for the parametric I-girder preset."""
     b1 = float(params.get("B1_mm", 0.0))
@@ -290,6 +294,61 @@ def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
+
+
+def _render_parametric_plank_girder_dimension_qa(preset: dict[str, Any], params: dict[str, Any]) -> None:
+    """Show concise QA and transformed-width metadata for plank girder presets."""
+    b = float(params.get("B_mm", 0.0))
+    b1 = float(params.get("b1_mm", 0.0))
+    b2 = float(params.get("b2_mm", 0.0))
+    b3 = float(params.get("b3_mm", 0.0))
+    h = float(params.get("H_mm", 0.0))
+    h1 = float(params.get("h1_mm", 0.0))
+    h2 = float(params.get("h2_mm", 0.0))
+    tslab = float(params.get("Tslab_mm", 0.0))
+    be = float(params.get("Be_mm", 0.0))
+    ebeam = float(params.get("Ebeam_MPa", 0.0))
+    edeck = float(params.get("Edeck_MPa", 0.0))
+    girder_length = float(params.get("girder_length_mm", 0.0))
+    n_ratio = edeck / ebeam if ebeam > 0 else 0.0
+    btransformed = n_ratio * be
+    is_interior = str(preset.get("key", "")) == "parametric_plank_girder_interior"
+    width_rule = b - b3 - (2.0 * b2 if is_interior else b2)
+    width_ok = abs(width_rule) <= max(2.0, 0.005 * max(b, 1.0))
+    side_label = "Interior" if is_interior else "Exterior"
+
+    checks = [
+        SectionMetric("Plank type", side_label, "Precast-only polygon; deck slab retained as composite metadata", "info", True),
+        SectionMetric("Width stack", "OK" if width_ok else "Review", f"B - b3 - {'2b2' if is_interior else 'b2'} = {_format_float(width_rule, 1)} mm", "ready" if width_ok else "warning", True),
+        SectionMetric("Depth stack", "OK" if 0 <= h1 <= h2 < h else "Invalid", f"h1 {_format_float(h1, 1)} mm / h2 {_format_float(h2, 1)} mm / H {_format_float(h, 1)} mm", "ready" if 0 <= h1 <= h2 < h else "danger", True),
+        SectionMetric("Composite mode", "Metadata only", "Tslab/Be/n are not merged into the precast polygon in this milestone", "info"),
+        SectionMetric("n = Edeck/Ebeam", _format_float(n_ratio, 3), f"Edeck {_format_float(edeck, 0)} / Ebeam {_format_float(ebeam, 0)} MPa", "ready" if n_ratio > 0 else "danger"),
+        SectionMetric("Btransformed", f"{_format_float(btransformed, 1)} mm", "Auto = n × Be", "ready" if btransformed > 0 else "danger"),
+    ]
+
+    st.markdown("##### Plank Girder Dimension / Composite QA")
+    st.markdown(
+        '<div class="cpmm-section-note">Parametric Plank Girder is generated as a precast-only section. '
+        "Be is currently manual/project-defined; n and Btransformed are calculated automatically for future AASHTO composite checks.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(_property_strip_html(checks), unsafe_allow_html=True)
+    with st.expander("Plank geometry / transformed-width breakdown", expanded=False):
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Precast geometry", f"B {_format_float(b, 1)} mm, b3 {_format_float(b3, 1)} mm, H {_format_float(h, 1)} mm"),
+                    ("Side offsets", f"b1 {_format_float(b1, 1)} mm, b2 {_format_float(b2, 1)} mm"),
+                    ("Side transition", f"h1 {_format_float(h1, 1)} mm, h2 {_format_float(h2, 1)} mm"),
+                    ("Deck/topping metadata", f"Tslab {_format_float(tslab, 1)} mm"),
+                    ("Effective width", f"Be {_format_float(be, 1)} mm (manual now; AASHTO auto planned)"),
+                    ("Modular ratio", f"n = {_format_float(n_ratio, 4)}"),
+                    ("Transformed width", f"Btransformed = {_format_float(btransformed, 1)} mm"),
+                    ("Girder length", f"{_format_float(girder_length, 1)} mm"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
 
 def _inertia_display(value: str) -> str:
     return "Not calculated" if value == "TODO" else value
@@ -401,6 +460,8 @@ def _render_section_definition_panel(
 
         if _is_parametric_i_girder(preset):
             _render_parametric_i_girder_dimension_qa(params)
+        if _is_parametric_plank_girder(preset):
+            _render_parametric_plank_girder_dimension_qa(preset, params)
 
     return preset, label_mode, params
 
@@ -546,8 +607,13 @@ def _render_section_properties_summary(
                 SectionMetric("Holes / Voids", f"{len(geometry.holes):,}"),
                 SectionMetric("Active Preset", preset["display_name"]),
                 SectionMetric("Category", str(preset.get("category", "N/A"))),
-                SectionMetric("ULS PMM", "Supported" if _is_parametric_i_girder(preset) else "Supported", "Current section-analysis workflow", "ready"),
-                SectionMetric("Beam/Girder", "Planned" if _is_parametric_i_girder(preset) else "N/A", "Future station assignment", "info" if _is_parametric_i_girder(preset) else "neutral"),
+                SectionMetric("ULS PMM", "Supported", "Current section-analysis workflow", "ready"),
+                SectionMetric(
+                    "Beam/Girder",
+                    "Planned" if (_is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)) else "N/A",
+                    "Future station assignment",
+                    "info" if (_is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)) else "neutral",
+                ),
                 SectionMetric("Readiness", _readiness_label(validation), "", _validation_status(validation), True),
             ]
         ),

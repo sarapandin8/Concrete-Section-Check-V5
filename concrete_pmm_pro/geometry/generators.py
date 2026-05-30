@@ -467,6 +467,225 @@ def parametric_i_girder(
     )
 
 
+
+def _plank_transformed_metadata(
+    *,
+    Tslab_mm: float,
+    Be_mm: float,
+    Ebeam_MPa: float,
+    Edeck_MPa: float,
+    girder_length_mm: float,
+    overhang_mm: float = 0.0,
+) -> dict[str, float | str]:
+    _require_non_negative("Tslab", Tslab_mm)
+    _require_positive("Be", Be_mm)
+    _require_positive("Ebeam", Ebeam_MPa)
+    _require_positive("Edeck", Edeck_MPa)
+    _require_positive("Girder length", girder_length_mm)
+    _require_non_negative("overhang", overhang_mm)
+    n = Edeck_MPa / Ebeam_MPa
+    return {
+        "Tslab_mm": float(Tslab_mm),
+        "Be_mm": float(Be_mm),
+        "Ebeam_MPa": float(Ebeam_MPa),
+        "Edeck_MPa": float(Edeck_MPa),
+        "n_Edeck_over_Ebeam": float(n),
+        "Btransformed_mm": float(n * Be_mm),
+        "girder_length_mm": float(girder_length_mm),
+        "overhang_mm": float(overhang_mm),
+        "Be_calculation_mode": "manual_current__auto_aashto_planned",
+    }
+
+
+def parametric_plank_girder_interior(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    Tslab_mm: float = 100.0,
+    Be_mm: float = 1000.0,
+    Ebeam_MPa: float = 35000.0,
+    Edeck_MPa: float = 28560.0,
+    girder_length_mm: float = 12000.0,
+    name: str = "Parametric Plank Girder — Interior",
+) -> SectionGeometry:
+    """Generate a symmetric interior precast plank-girder polygon.
+
+    The polygon represents the precast plank only. Composite deck metadata is
+    retained for future AASHTO SLS/transformed-section checks, but the slab is
+    not merged into the concrete polygon in this milestone.
+    """
+    for label, value in {"B": B_mm, "b3": b3_mm, "H": H_mm}.items():
+        _require_positive(label, value)
+    for label, value in {"b1": b1_mm, "b2": b2_mm, "h1": h1_mm, "h2": h2_mm}.items():
+        _require_non_negative(label, value)
+    if b3_mm >= B_mm:
+        raise ValueError("Invalid geometry: b3 must be smaller than B for an interior plank with side offsets.")
+    if h1_mm > h2_mm:
+        raise ValueError("Invalid geometry: h1 must not exceed h2.")
+    if h2_mm >= H_mm:
+        raise ValueError("Invalid geometry: h2 must be less than H.")
+    expected_b2 = (B_mm - b3_mm) / 2.0
+    if abs(expected_b2 - b2_mm) > max(2.0, 0.05 * B_mm):
+        raise ValueError("Invalid geometry: for interior plank, B should approximately equal b3 + 2*b2.")
+    if b1_mm > (B_mm - b3_mm) / 2.0 + b1_mm + B_mm:
+        raise ValueError("Invalid geometry: b1 is not compatible with the selected plank width.")
+
+    top_y = H_mm / 2.0
+    bottom_y = -H_mm / 2.0
+    y1 = bottom_y + h1_mm
+    y2 = bottom_y + h2_mm
+    x_outer = B_mm / 2.0
+    x_bottom = b3_mm / 2.0
+    x_step = x_outer - b1_mm
+    if x_step < x_bottom:
+        x_step = x_bottom
+
+    points = [
+        _point(-x_outer, top_y),
+        _point(x_outer, top_y),
+        _point(x_step, y2),
+        _point(x_bottom, y1),
+        _point(x_bottom, bottom_y),
+        _point(-x_bottom, bottom_y),
+        _point(-x_bottom, y1),
+        _point(-x_step, y2),
+    ]
+    _ensure_valid_simple_polygon(points, "Parametric interior plank girder")
+    transformed = _plank_transformed_metadata(
+        Tslab_mm=Tslab_mm,
+        Be_mm=Be_mm,
+        Ebeam_MPa=Ebeam_MPa,
+        Edeck_MPa=Edeck_MPa,
+        girder_length_mm=girder_length_mm,
+        overhang_mm=0.0,
+    )
+    return SectionGeometry(
+        name=name,
+        outer_polygon=points,
+        holes=[],
+        metadata={
+            "preset": "parametric_plank_girder_interior",
+            "girder_type": "Plank Girder",
+            "plank_position": "Interior",
+            "units": "mm",
+            "parameters": {
+                "B_mm": B_mm,
+                "b1_mm": b1_mm,
+                "b2_mm": b2_mm,
+                "b3_mm": b3_mm,
+                "H_mm": H_mm,
+                "h1_mm": h1_mm,
+                "h2_mm": h2_mm,
+            },
+            "composite_metadata": transformed,
+            "analysis_compatibility": {
+                "uls_pmm": "supported_precast_only",
+                "sls_stress": "planned_composite_metadata_ready",
+                "beam_girder_assignment": "planned",
+                "aashto_effective_width_auto": "planned",
+                "shear_torsion": "planned",
+            },
+        },
+    )
+
+
+def parametric_plank_girder_exterior(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    Tslab_mm: float = 100.0,
+    Be_mm: float = 1000.0,
+    Ebeam_MPa: float = 35000.0,
+    Edeck_MPa: float = 28560.0,
+    girder_length_mm: float = 12000.0,
+    overhang_mm: float = 500.0,
+    name: str = "Parametric Plank Girder — Exterior",
+) -> SectionGeometry:
+    """Generate an asymmetric exterior precast plank-girder polygon.
+
+    The exterior side is kept vertical; the interior side follows the stepped
+    plank profile. The polygon is precast-only. Effective slab width data are
+    retained as metadata for future AASHTO composite checks.
+    """
+    for label, value in {"B": B_mm, "b3": b3_mm, "H": H_mm}.items():
+        _require_positive(label, value)
+    for label, value in {"b1": b1_mm, "b2": b2_mm, "h1": h1_mm, "h2": h2_mm, "overhang": overhang_mm}.items():
+        _require_non_negative(label, value)
+    if b3_mm >= B_mm:
+        raise ValueError("Invalid geometry: b3 must be smaller than B for an exterior plank with one side offset.")
+    if h1_mm > h2_mm:
+        raise ValueError("Invalid geometry: h1 must not exceed h2.")
+    if h2_mm >= H_mm:
+        raise ValueError("Invalid geometry: h2 must be less than H.")
+    expected_b2 = B_mm - b3_mm
+    if abs(expected_b2 - b2_mm) > max(2.0, 0.05 * B_mm):
+        raise ValueError("Invalid geometry: for exterior plank, B should approximately equal b3 + b2.")
+
+    top_y = H_mm / 2.0
+    bottom_y = -H_mm / 2.0
+    y1 = bottom_y + h1_mm
+    y2 = bottom_y + h2_mm
+    x_left = -B_mm / 2.0
+    x_right = B_mm / 2.0
+    x_bottom_left = x_right - b3_mm
+    x_step = x_left + b1_mm
+    if x_step > x_bottom_left:
+        x_step = x_bottom_left
+
+    points = [
+        _point(x_left, top_y),
+        _point(x_right, top_y),
+        _point(x_right, bottom_y),
+        _point(x_bottom_left, bottom_y),
+        _point(x_bottom_left, y1),
+        _point(x_step, y2),
+    ]
+    _ensure_valid_simple_polygon(points, "Parametric exterior plank girder")
+    transformed = _plank_transformed_metadata(
+        Tslab_mm=Tslab_mm,
+        Be_mm=Be_mm,
+        Ebeam_MPa=Ebeam_MPa,
+        Edeck_MPa=Edeck_MPa,
+        girder_length_mm=girder_length_mm,
+        overhang_mm=overhang_mm,
+    )
+    return SectionGeometry(
+        name=name,
+        outer_polygon=points,
+        holes=[],
+        metadata={
+            "preset": "parametric_plank_girder_exterior",
+            "girder_type": "Plank Girder",
+            "plank_position": "Exterior",
+            "units": "mm",
+            "parameters": {
+                "B_mm": B_mm,
+                "b1_mm": b1_mm,
+                "b2_mm": b2_mm,
+                "b3_mm": b3_mm,
+                "H_mm": H_mm,
+                "h1_mm": h1_mm,
+                "h2_mm": h2_mm,
+            },
+            "composite_metadata": transformed,
+            "analysis_compatibility": {
+                "uls_pmm": "supported_precast_only",
+                "sls_stress": "planned_composite_metadata_ready",
+                "beam_girder_assignment": "planned",
+                "aashto_effective_width_auto": "planned",
+                "shear_torsion": "planned",
+            },
+        },
+    )
+
 def u_girder(
     depth_mm: float,
     top_width_mm: float,
@@ -706,6 +925,59 @@ def parametric_i_girder_dimensions(
     return dims
 
 
+
+def parametric_plank_girder_interior_dimensions(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    **_: object,
+) -> list[DimensionItem]:
+    x_outer = B_mm / 2.0
+    x_bottom = b3_mm / 2.0
+    top_y = H_mm / 2.0
+    bottom_y = -H_mm / 2.0
+    offset = max(B_mm, H_mm) * 0.07
+    return [
+        _dim("B", _point(-x_outer, top_y + offset), _point(x_outer, top_y + offset), _point(0, top_y + 1.6 * offset), "horizontal", B_mm),
+        _dim("b3", _point(-x_bottom, bottom_y - offset), _point(x_bottom, bottom_y - offset), _point(0, bottom_y - 1.6 * offset), "horizontal", b3_mm),
+        _dim("H", _point(x_outer + offset, bottom_y), _point(x_outer + offset, top_y), _point(x_outer + 1.8 * offset, 0), "vertical", H_mm),
+        _dim("h1", _point(-x_outer - offset, bottom_y), _point(-x_outer - offset, bottom_y + h1_mm), _point(-x_outer - 1.8 * offset, bottom_y + h1_mm / 2.0), "vertical", h1_mm),
+        _dim("h2", _point(-x_outer - 2.1 * offset, bottom_y), _point(-x_outer - 2.1 * offset, bottom_y + h2_mm), _point(-x_outer - 2.9 * offset, bottom_y + h2_mm / 2.0), "vertical", h2_mm),
+        _dim("b1", _point(x_outer - b1_mm, top_y + 0.35 * offset), _point(x_outer, top_y + 0.35 * offset), _point(x_outer - b1_mm / 2.0, top_y + 0.9 * offset), "horizontal", b1_mm),
+        _dim("b2", _point(x_bottom, bottom_y - 0.35 * offset), _point(x_outer, bottom_y - 0.35 * offset), _point((x_bottom + x_outer) / 2.0, bottom_y - 0.9 * offset), "horizontal", b2_mm),
+    ]
+
+
+def parametric_plank_girder_exterior_dimensions(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    **_: object,
+) -> list[DimensionItem]:
+    x_left = -B_mm / 2.0
+    x_right = B_mm / 2.0
+    x_bottom_left = x_right - b3_mm
+    top_y = H_mm / 2.0
+    bottom_y = -H_mm / 2.0
+    offset = max(B_mm, H_mm) * 0.07
+    return [
+        _dim("B", _point(x_left, top_y + offset), _point(x_right, top_y + offset), _point(0, top_y + 1.6 * offset), "horizontal", B_mm),
+        _dim("b3", _point(x_bottom_left, bottom_y - offset), _point(x_right, bottom_y - offset), _point((x_bottom_left + x_right) / 2.0, bottom_y - 1.6 * offset), "horizontal", b3_mm),
+        _dim("H", _point(x_right + offset, bottom_y), _point(x_right + offset, top_y), _point(x_right + 1.8 * offset, 0), "vertical", H_mm),
+        _dim("h1", _point(x_left - offset, bottom_y), _point(x_left - offset, bottom_y + h1_mm), _point(x_left - 1.8 * offset, bottom_y + h1_mm / 2.0), "vertical", h1_mm),
+        _dim("h2", _point(x_left - 2.1 * offset, bottom_y), _point(x_left - 2.1 * offset, bottom_y + h2_mm), _point(x_left - 2.9 * offset, bottom_y + h2_mm / 2.0), "vertical", h2_mm),
+        _dim("b1", _point(x_left, top_y + 0.35 * offset), _point(x_left + b1_mm, top_y + 0.35 * offset), _point(x_left + b1_mm / 2.0, top_y + 0.9 * offset), "horizontal", b1_mm),
+        _dim("b2", _point(x_left, bottom_y - 0.35 * offset), _point(x_bottom_left, bottom_y - 0.35 * offset), _point((x_left + x_bottom_left) / 2.0, bottom_y - 0.9 * offset), "horizontal", b2_mm),
+    ]
+
 def psc_i_girder_dimensions(depth_mm: float, top_flange_width_mm: float, bottom_flange_width_mm: float, web_width_mm: float, **_: object) -> list[DimensionItem]:
     d = depth_mm / 2.0
     offset = depth_mm * 0.08
@@ -744,6 +1016,8 @@ def register_builtin_generators(registry: GeometryRegistry) -> None:
         "box_section_fillet": (box_section_fillet, box_section_fillet_dimensions),
         "psc_i_girder": (psc_i_girder, psc_i_girder_dimensions),
         "parametric_i_girder": (parametric_i_girder, parametric_i_girder_dimensions),
+        "parametric_plank_girder_interior": (parametric_plank_girder_interior, parametric_plank_girder_interior_dimensions),
+        "parametric_plank_girder_exterior": (parametric_plank_girder_exterior, parametric_plank_girder_exterior_dimensions),
         "u_girder": (u_girder, u_girder_dimensions),
         "single_cell_box_girder": (single_cell_box_girder, single_cell_box_girder_dimensions),
     }

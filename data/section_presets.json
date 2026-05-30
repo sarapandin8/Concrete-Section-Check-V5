@@ -381,6 +381,274 @@
       ]
     },
     {
+      "key": "parametric_plank_girder_interior",
+      "display_name": "Parametric Plank Girder \u2014 Interior",
+      "category": "Girder",
+      "generator": "parametric_plank_girder_interior",
+      "dimensions_generator": "parametric_plank_girder_interior",
+      "parameters": [
+        {
+          "name": "B_mm",
+          "label": "B Overall plank width (mm)",
+          "type": "number",
+          "default": 990,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Overall precast plank width."
+        },
+        {
+          "name": "b1_mm",
+          "label": "b1 Top side offset (mm)",
+          "type": "number",
+          "default": 45,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Top side offset shown in the plank detail."
+        },
+        {
+          "name": "b2_mm",
+          "label": "b2 Lower side offset (mm)",
+          "type": "number",
+          "default": 70,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Lower side offset. Interior: B \u2248 b3 + 2b2. Exterior: B \u2248 b3 + b2."
+        },
+        {
+          "name": "b3_mm",
+          "label": "b3 Lower reference width (mm)",
+          "type": "number",
+          "default": 850,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Bottom/lower reference width of the precast plank."
+        },
+        {
+          "name": "H_mm",
+          "label": "H Overall plank depth (mm)",
+          "type": "number",
+          "default": 450,
+          "min": 1,
+          "max": 10000,
+          "step": 5,
+          "description": "Overall depth of the precast plank."
+        },
+        {
+          "name": "h1_mm",
+          "label": "h1 Lower step height (mm)",
+          "type": "number",
+          "default": 80,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Lower step height shown in the plank detail."
+        },
+        {
+          "name": "h2_mm",
+          "label": "h2 Side transition depth (mm)",
+          "type": "number",
+          "default": 140,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Side transition depth shown in the plank detail."
+        },
+        {
+          "name": "Tslab_mm",
+          "label": "Tslab Deck/topping thickness (mm)",
+          "type": "number",
+          "default": 100,
+          "min": 0,
+          "max": 1000,
+          "step": 5,
+          "description": "Composite deck/topping thickness metadata. Not merged into precast polygon in this milestone."
+        },
+        {
+          "name": "Be_mm",
+          "label": "Be Effective slab width (mm)",
+          "type": "number",
+          "default": 1000,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Manual effective width for current milestone. AASHTO auto calculation is planned."
+        },
+        {
+          "name": "Ebeam_MPa",
+          "label": "Ebeam Girder concrete modulus (MPa)",
+          "type": "number",
+          "default": 35000,
+          "min": 1,
+          "max": 100000,
+          "step": 100,
+          "description": "Precast girder concrete modulus used for n = Edeck/Ebeam."
+        },
+        {
+          "name": "Edeck_MPa",
+          "label": "Edeck Deck concrete modulus (MPa)",
+          "type": "number",
+          "default": 28560,
+          "min": 1,
+          "max": 100000,
+          "step": 100,
+          "description": "Deck concrete modulus used for n = Edeck/Ebeam."
+        },
+        {
+          "name": "girder_length_mm",
+          "label": "Girder length / span (mm)",
+          "type": "number",
+          "default": 12000,
+          "min": 1,
+          "max": 1000000,
+          "step": 100,
+          "description": "Girder length metadata for future bridge-girder checks."
+        }
+      ]
+    },
+    {
+      "key": "parametric_plank_girder_exterior",
+      "display_name": "Parametric Plank Girder \u2014 Exterior",
+      "category": "Girder",
+      "generator": "parametric_plank_girder_exterior",
+      "dimensions_generator": "parametric_plank_girder_exterior",
+      "parameters": [
+        {
+          "name": "B_mm",
+          "label": "B Overall plank width (mm)",
+          "type": "number",
+          "default": 990,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Overall precast plank width."
+        },
+        {
+          "name": "b1_mm",
+          "label": "b1 Top side offset (mm)",
+          "type": "number",
+          "default": 45,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Top side offset shown in the plank detail."
+        },
+        {
+          "name": "b2_mm",
+          "label": "b2 Lower side offset (mm)",
+          "type": "number",
+          "default": 70,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Lower side offset. Interior: B \u2248 b3 + 2b2. Exterior: B \u2248 b3 + b2."
+        },
+        {
+          "name": "b3_mm",
+          "label": "b3 Lower reference width (mm)",
+          "type": "number",
+          "default": 920,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Bottom/lower reference width of the precast plank."
+        },
+        {
+          "name": "H_mm",
+          "label": "H Overall plank depth (mm)",
+          "type": "number",
+          "default": 450,
+          "min": 1,
+          "max": 10000,
+          "step": 5,
+          "description": "Overall depth of the precast plank."
+        },
+        {
+          "name": "h1_mm",
+          "label": "h1 Lower step height (mm)",
+          "type": "number",
+          "default": 80,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Lower step height shown in the plank detail."
+        },
+        {
+          "name": "h2_mm",
+          "label": "h2 Side transition depth (mm)",
+          "type": "number",
+          "default": 140,
+          "min": 0,
+          "max": 5000,
+          "step": 5,
+          "description": "Side transition depth shown in the plank detail."
+        },
+        {
+          "name": "Tslab_mm",
+          "label": "Tslab Deck/topping thickness (mm)",
+          "type": "number",
+          "default": 100,
+          "min": 0,
+          "max": 1000,
+          "step": 5,
+          "description": "Composite deck/topping thickness metadata. Not merged into precast polygon in this milestone."
+        },
+        {
+          "name": "Be_mm",
+          "label": "Be Effective slab width (mm)",
+          "type": "number",
+          "default": 1000,
+          "min": 1,
+          "max": 20000,
+          "step": 5,
+          "description": "Manual effective width for current milestone. AASHTO auto calculation is planned."
+        },
+        {
+          "name": "Ebeam_MPa",
+          "label": "Ebeam Girder concrete modulus (MPa)",
+          "type": "number",
+          "default": 35000,
+          "min": 1,
+          "max": 100000,
+          "step": 100,
+          "description": "Precast girder concrete modulus used for n = Edeck/Ebeam."
+        },
+        {
+          "name": "Edeck_MPa",
+          "label": "Edeck Deck concrete modulus (MPa)",
+          "type": "number",
+          "default": 28560,
+          "min": 1,
+          "max": 100000,
+          "step": 100,
+          "description": "Deck concrete modulus used for n = Edeck/Ebeam."
+        },
+        {
+          "name": "girder_length_mm",
+          "label": "Girder length / span (mm)",
+          "type": "number",
+          "default": 12000,
+          "min": 1,
+          "max": 1000000,
+          "step": 100,
+          "description": "Girder length metadata for future bridge-girder checks."
+        },
+        {
+          "name": "overhang_mm",
+          "label": "Overhang width for AASHTO Be (mm)",
+          "type": "number",
+          "default": 500,
+          "min": 0,
+          "max": 20000,
+          "step": 5,
+          "description": "Exterior overhang metadata for future AASHTO effective width calculation."
+        }
+      ]
+    },
+    {
       "key": "psc_i_girder",
       "display_name": "PSC I-Girder",
       "category": "Girder",

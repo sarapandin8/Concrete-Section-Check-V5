@@ -305,3 +305,15 @@ The Parametric I-Girder preset remains a symmetric solid polygon generator using
 - Parametric I-Girder section properties now display analysis-ready Ix/Iy instead of placeholder values.
 - These properties provide the basis for future prestressed bridge girder SLS stress checks and station-based Beam/Girder workflows.
 
+
+## SECTION.PRESET1B — Parametric Plank Girder Geometry
+
+Parametric plank girder presets have been added for Interior and Exterior bridge plank sections.  These presets generate precast-only concrete polygons and calculate gross section properties through the existing SECTION.PROP1 summary path.  Composite slab/effective-width data are stored as metadata only in this milestone:
+
+- `Tslab` is retained as deck/topping thickness metadata.
+- `Be` is currently manual/project-defined.
+- `n = Edeck / Ebeam` is calculated automatically.
+- `Btransformed = n * Be` is calculated automatically.
+- AASHTO LRFD automatic effective flange width calculation remains a future code-profile milestone.
+
+No PMM solver, D/C extraction, prestress model, or service-stress equation is changed by this section-preset milestone.

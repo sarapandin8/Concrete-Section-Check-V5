@@ -610,3 +610,7 @@ Parametric I-Girder now includes an engineering-oriented dimension QA panel in S
 - Parametric I-Girder section properties now display analysis-ready Ix/Iy instead of placeholder values.
 - These properties provide the basis for future prestressed bridge girder SLS stress checks and station-based Beam/Girder workflows.
 
+
+### SECTION.PRESET1B — Parametric Plank Girder Geometry
+
+Adds bridge-oriented parametric plank girder presets for **Interior** and **Exterior** girders.  The generated concrete polygon is the precast plank only, using B, b1, b2, b3, H, h1, and h2 in mm.  Composite bridge-girder metadata is retained for future AASHTO workflows: Tslab, manual Be, Ebeam, Edeck, auto n = Edeck/Ebeam, auto Btransformed = n × Be, girder length, and exterior overhang where applicable.  Auto AASHTO effective flange width calculation is intentionally marked as planned; current Be is project/manual input with transformed-width values calculated automatically.

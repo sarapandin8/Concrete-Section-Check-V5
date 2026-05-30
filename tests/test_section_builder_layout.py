@@ -236,3 +236,40 @@ def test_section_builder_source_contains_member_type_preset_filter_notice() -> N
     assert "available_presets" in source
     assert "Custom PMM section presets" in source
     assert "Custom Girder section presets" in source
+
+
+def test_composite1b_section_builder_source_displays_transformed_properties() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Composite Transformed Section Properties" in source
+    assert "Enable composite deck/topping transformed properties" in source
+    assert "calculate_composite_transformed_section_from_geometry" in source
+    assert "Composite transformed-section breakdown" in source
+    assert "not used by PMM/SLS solver yet" in source
+
+
+def test_build_geometry_ignores_non_geometry_composite_metadata() -> None:
+    plank = preset_by_key("parametric_plank_girder_interior")
+    params = {
+        "B_mm": 990.0,
+        "b1_mm": 45.0,
+        "b2_mm": 70.0,
+        "b3_mm": 850.0,
+        "H_mm": 450.0,
+        "h1_mm": 80.0,
+        "h2_mm": 140.0,
+        "Tslab_mm": 100.0,
+        "Be_mm": 1000.0,
+        "Ebeam_MPa": 31529.0,
+        "Edeck_MPa": 27806.0,
+        "girder_length_mm": 12000.0,
+        "composite_enabled": True,
+    }
+
+    geometry, dimensions, validation = section_builder._build_geometry(plank, params)
+
+    assert validation.is_valid
+    assert validation.errors == []
+    assert geometry is not None
+    assert geometry.name == "Parametric Plank Girder — Interior"
+    assert len(dimensions) > 0

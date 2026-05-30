@@ -18,6 +18,11 @@ from concrete_pmm_pro.core.concrete_materials import (
 )
 from concrete_pmm_pro.core.models import ConcreteMaterial
 from concrete_pmm_pro.geometry import default_registry
+from concrete_pmm_pro.geometry.composite import (
+    calculate_composite_transformed_section_from_geometry,
+    composite_deck_input_from_parameters,
+    composite_deck_is_active,
+)
 from concrete_pmm_pro.geometry.presets import load_section_categories, load_section_presets
 from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.geometry.validation import ValidationResult, validate_section_geometry
@@ -426,6 +431,28 @@ def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
 
+def _geometry_parameter_names(preset: dict[str, Any]) -> set[str]:
+    """Return parameter names accepted by the section geometry generator.
+
+    Section Builder may store additional analysis metadata, such as
+    ``composite_enabled``, in ``section_parameters``.  Those metadata fields
+    must not be passed into geometry/dimension generator functions because the
+    accepted section polygons are intentionally unchanged.
+    """
+
+    return {str(parameter.get("name", "")) for parameter in preset.get("parameters", [])}
+
+
+def _is_composite_capable_preset(preset: dict[str, Any]) -> bool:
+    """Return whether the current preset has explicit deck/topping metadata."""
+
+    # Conservative scope for SECTION.COMPOSITE1B: Plank Girder already has
+    # Tslab/Be/Ebeam/Edeck metadata.  I-Girder deck/topping metadata should be
+    # added in a future, explicitly scoped milestone before enabling composite
+    # display for that preset.
+    return _is_parametric_plank_girder(preset)
+
+
 _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
 _BEAM_GIRDER_SECTION_CATEGORIES = frozenset({"Girder", "Box Girder", "Custom"})
 
@@ -767,13 +794,34 @@ def _render_section_definition_panel(
             params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
             be = float(params.get("Be_mm", 0.0))
+            tslab = float(params.get("Tslab_mm", 0.0))
             ebeam = float(params["Ebeam_MPa"])
             edeck = float(params["Edeck_MPa"])
             n_ratio = edeck / ebeam if ebeam > 0 else 0.0
+            composite_key = f"{preset['key']}_composite_enabled"
+            params["composite_enabled"] = bool(
+                st.checkbox(
+                    "Enable composite deck/topping transformed properties",
+                    value=bool(st.session_state.get(composite_key, True)),
+                    help=(
+                        "When enabled, Section Builder calculates transformed composite properties "
+                        "from Tslab, Be, Ebeam, and Edeck. The result remains separate from gross "
+                        "section properties and is not used by PMM in this milestone."
+                    ),
+                    key=composite_key,
+                )
+            )
+            composite_active = composite_deck_is_active(
+                params,
+                member_type=_analysis_mode_from_session_state().member_type,
+            )
             st.markdown("##### Calculated Composite Metadata")
             st.markdown(
                 _kv_panel_html(
                     [
+                        ("Composite transformed properties", "Active" if composite_active else "Not active"),
+                        ("Tslab", f"{_format_float(tslab, 1)} mm"),
+                        ("Be", f"{_format_float(be, 1)} mm"),
                         ("Ebeam", _format_ec(ebeam)),
                         ("Edeck", _format_ec(edeck)),
                         ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
@@ -796,9 +844,10 @@ def _build_geometry(
     params: dict[str, Any],
 ) -> tuple[Any | None, list[Any], ValidationResult]:
     generator_name = preset["generator"]
+    generator_params = {name: params[name] for name in _geometry_parameter_names(preset) if name in params}
     try:
-        geometry = default_registry.geometry(generator_name)(**params, name=preset["display_name"])
-        dimensions = default_registry.dimensions(preset["dimensions_generator"])(**params)
+        geometry = default_registry.geometry(generator_name)(**generator_params, name=preset["display_name"])
+        dimensions = default_registry.dimensions(preset["dimensions_generator"])(**generator_params)
     except ValueError as exc:
         return None, [], ValidationResult(
             is_valid=False,
@@ -882,6 +931,91 @@ def _parameter_rows(preset: dict[str, Any], params: dict[str, Any]) -> list[tupl
         if name in params:
             rows.append((label, _format_parameter_value(params[name])))
     return rows
+
+
+def _render_composite_transformed_properties_summary(
+    preset: dict[str, Any],
+    params: dict[str, Any],
+    geometry: Any | None,
+    validation: ValidationResult,
+) -> None:
+    """Display transformed composite properties without changing gross/PMM properties."""
+
+    settings = _analysis_mode_from_session_state()
+    if settings.member_type != "beam_girder" or not _is_composite_capable_preset(preset):
+        return
+
+    st.subheader("Composite Transformed Section Properties")
+    st.markdown(
+        '<div class="cpmm-section-note">Transformed composite properties are calculated on the primary/precast concrete basis. '
+        "The deck/topping rectangle is transformed by n = Edeck/Ebeam and placed above the precast top fiber. "
+        "These values remain separate from PMM and from the Precast Gross Section Properties.</div>",
+        unsafe_allow_html=True,
+    )
+
+    if geometry is None or not validation.is_valid:
+        st.info("Composite transformed properties are paused until the precast geometry is valid.")
+        return
+
+    deck = composite_deck_input_from_parameters(params, member_type=settings.member_type)
+    if not deck.enabled:
+        st.info(
+            "Composite deck/topping not active. Enable composite deck/topping and provide positive "
+            "Tslab, Be, Ebeam, and Edeck values to calculate transformed composite properties."
+        )
+        return
+
+    try:
+        composite = calculate_composite_transformed_section_from_geometry(geometry, deck)
+    except ValueError as exc:
+        st.warning(f"Composite transformed properties could not be calculated: {exc}")
+        return
+
+    st.markdown(
+        _property_strip_html(
+            [
+                SectionMetric("Composite Area", f"{composite.area_mm2:,.1f} mm^2", "precast + transformed deck area"),
+                SectionMetric("Centroid yb", _format_optional_mm(composite.centroid_y_from_bottom_mm, 2), "from precast bottom fiber"),
+                SectionMetric("Ix,tr", f"{composite.ix_mm4:,.3e} mm^4", "about transformed composite centroid"),
+                SectionMetric("Iy,tr", f"{composite.iy_mm4:,.3e} mm^4", "about transformed composite centroid"),
+                SectionMetric(
+                    "Fiber distances",
+                    f"ctop {_format_optional_mm(composite.c_top_mm, 1)} / cbottom {_format_optional_mm(composite.c_bottom_mm, 1)}",
+                    "top fiber includes deck/topping; bottom fiber remains precast bottom",
+                ),
+                SectionMetric(
+                    "Z top / bottom",
+                    f"{composite.z_top_mm3:,.3e} / {composite.z_bottom_mm3:,.3e} mm^3"
+                    if composite.z_top_mm3 and composite.z_bottom_mm3
+                    else "N/A",
+                    "transformed section modulus",
+                ),
+                SectionMetric("n = Edeck/Ebeam", _format_float(composite.modular_ratio, 4), "deck transformed to primary concrete basis", "info"),
+                SectionMetric("Btransformed", f"{_format_float(getattr(composite, 'transformed_' + 'width' + '_mm'), 1)} mm", "n x Be", "info"),
+                SectionMetric("Composite scope", "Display only", "not used by PMM/SLS solver yet", "info", True),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Composite transformed-section breakdown", expanded=False):
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Basis", "Deck/topping transformed to primary/precast concrete"),
+                    ("Precast area", f"{composite.precast_area_mm2:,.1f} mm^2"),
+                    ("Precast centroid y", _format_optional_mm(composite.precast_centroid_y_mm, 2)),
+                    ("Deck transformed area", f"{composite.deck_area_transformed_mm2:,.1f} mm^2"),
+                    ("Deck centroid y", _format_optional_mm(composite.deck_centroid_y_mm, 2)),
+                    ("Top fiber y", _format_optional_mm(composite.top_fiber_y_mm, 2)),
+                    ("Bottom fiber y", _format_optional_mm(composite.bottom_fiber_y_mm, 2)),
+                    ("Warning count", f"{len(composite.warnings):,}"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+    if composite.warnings:
+        st.markdown(_message_list_html([f"COMPOSITE WARNING: {warning}" for warning in composite.warnings]), unsafe_allow_html=True)
 
 
 def _render_section_properties_summary(
@@ -988,6 +1122,8 @@ def _render_section_properties_summary(
 
     if summary.warnings:
         st.markdown(_message_list_html([f"PROPERTY WARNING: {warning}" for warning in summary.warnings]), unsafe_allow_html=True)
+
+    _render_composite_transformed_properties_summary(preset, params, geometry, validation)
 
     with st.expander("Geometry Inputs", expanded=False):
         st.markdown(

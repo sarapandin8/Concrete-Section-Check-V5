@@ -603,3 +603,10 @@ The Section Builder now uses a direct **Section Type / Preset** selector so para
 ### SECTION.PRESET1A.1 — I-Girder Geometry Visual Polish & Dimension QA
 
 Parametric I-Girder now includes an engineering-oriented dimension QA panel in Section Builder. The preset reports the depth stack, web clear zone, top/bottom web transition checks, optional C1 chamfer note, and analysis-compatibility status. Geometry metadata now records I-girder zone depths and ULS PMM / future SLS / future Beam-Girder compatibility tags.
+
+### SECTION.PROP1 — Parametric Section Properties Calculation
+
+- Added gross section property calculation for generated section polygons, including net area, centroid, centroidal Ix/Iy, extreme-fiber distances, and top/bottom section modulus.
+- Parametric I-Girder section properties now display analysis-ready Ix/Iy instead of placeholder values.
+- These properties provide the basis for future prestressed bridge girder SLS stress checks and station-based Beam/Girder workflows.
+

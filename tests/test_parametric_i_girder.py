@@ -33,8 +33,12 @@ def test_parametric_i_girder_generates_valid_section():
     assert len(geometry.holes) == 0
     assert summary.area_mm2 > 0
     assert abs(summary.centroid_x_mm) < 1e-6
-    assert summary.ix_display == "TODO"
-    assert summary.iy_display == "TODO"
+    assert summary.ix_nmm4 is not None and summary.ix_nmm4 > 0
+    assert summary.iy_nmm4 is not None and summary.iy_nmm4 > 0
+    assert summary.z_top_mm3 is not None and summary.z_top_mm3 > 0
+    assert summary.z_bottom_mm3 is not None and summary.z_bottom_mm3 > 0
+    assert summary.ix_display != "Not calculated"
+    assert summary.iy_display != "Not calculated"
 
 
 def test_parametric_i_girder_dimensions_are_registered():

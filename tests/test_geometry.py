@@ -71,3 +71,13 @@ def pytest_approx(value: float, rel: float) -> object:
     import pytest
 
     return pytest.approx(value, rel=rel)
+
+
+def test_rectangle_inertia_and_section_modulus() -> None:
+    geometry = rectangle(width_mm=400, height_mm=600)
+    summary = summarize_geometry(geometry)
+    assert summary.ix_nmm4 == pytest_approx(400 * 600**3 / 12, rel=1e-12)
+    assert summary.iy_nmm4 == pytest_approx(600 * 400**3 / 12, rel=1e-12)
+    assert summary.z_top_mm3 == pytest_approx(summary.ix_nmm4 / 300, rel=1e-12)
+    assert summary.z_bottom_mm3 == pytest_approx(summary.ix_nmm4 / 300, rel=1e-12)
+    assert summary.ix_display != "Not calculated"

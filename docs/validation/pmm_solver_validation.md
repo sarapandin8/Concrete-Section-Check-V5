@@ -298,3 +298,10 @@ The section preset UI was simplified so users choose the actual section type dir
 ## SECTION.PRESET1A.1 — Parametric I-Girder Geometry QA
 
 The Parametric I-Girder preset remains a symmetric solid polygon generator using B1, B2, D1, D2, D3, D5, D6, T1, T2, and optional C1. The Section Builder now exposes a dimension QA panel so users can review the depth stack, web clear zone, transition widths, chamfer state, and analysis-compatibility tags before running PMM analysis.
+
+### SECTION.PROP1 — Parametric Section Properties Calculation
+
+- Added gross section property calculation for generated section polygons, including net area, centroid, centroidal Ix/Iy, extreme-fiber distances, and top/bottom section modulus.
+- Parametric I-Girder section properties now display analysis-ready Ix/Iy instead of placeholder values.
+- These properties provide the basis for future prestressed bridge girder SLS stress checks and station-based Beam/Girder workflows.
+

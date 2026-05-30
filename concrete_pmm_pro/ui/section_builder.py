@@ -537,6 +537,12 @@ def _render_section_properties_summary(
                 ),
                 SectionMetric("Ix", _inertia_display(summary.ix_display)),
                 SectionMetric("Iy", _inertia_display(summary.iy_display)),
+                SectionMetric(
+                    "Fiber distances",
+                    f"top {_format_float((summary.y_max_mm or 0.0) - summary.centroid_y_mm, 1)} / "
+                    f"bottom {_format_float(summary.centroid_y_mm - (summary.y_min_mm or 0.0), 1)} mm",
+                ),
+                SectionMetric("Z top / bottom", f"{summary.z_top_display} / {summary.z_bottom_display}"),
                 SectionMetric("Holes / Voids", f"{len(geometry.holes):,}"),
                 SectionMetric("Active Preset", preset["display_name"]),
                 SectionMetric("Category", str(preset.get("category", "N/A"))),

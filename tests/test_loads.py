@@ -211,3 +211,14 @@ def test_excel_template_bytes_can_be_generated() -> None:
 
     assert data.startswith(b"PK")
     assert len(data) > 1000
+
+
+def test_loads_page_includes_member_workflow_notice_source() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
+
+    assert "Active member workflow" in source
+    assert "Beam/Girder design load tables" in source
+    assert "Pu/Mux/Muy PMM table" in source

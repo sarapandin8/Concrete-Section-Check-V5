@@ -149,3 +149,15 @@ def test_report_foundation_cards_count_manifest_items_or_snapshot_fallback() -> 
     assert fallback["Report Manifest"].value == "No"
     assert fallback["Report Manifest"].strong is True
     assert fallback["Engineering Limitations"].value == "9"
+
+
+def test_project_page_member_type_selector_source_is_present() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "project_page.py").read_text(encoding="utf-8")
+
+    assert "Analysis Mode / Member Type" in source
+    assert "Beam / Girder - Future Design Workflow" in source
+    assert "MEMBER.TYPE1 does not change solver equations" in source
+    assert "project_analysis_mode_member_type_label" in source

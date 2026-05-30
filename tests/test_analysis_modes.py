@@ -116,3 +116,14 @@ def test_project_page_imports_without_error() -> None:
     import concrete_pmm_pro.ui.project_page as project_page
 
     assert hasattr(project_page, "render_project_page")
+
+
+def test_analysis_page_displays_project_owned_member_type_source() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(encoding="utf-8")
+
+    assert "Configured in Project" in source
+    assert "single editable owner" in source
+    assert "st.selectbox(\"Member Type\"" not in source

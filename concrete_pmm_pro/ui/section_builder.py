@@ -8,6 +8,8 @@ from typing import Any
 
 import streamlit as st
 
+from concrete_pmm_pro.core.analysis import AnalysisModeSettings
+from concrete_pmm_pro.core.analysis_modes import analysis_mode_label
 from concrete_pmm_pro.core.concrete_materials import (
     DEFAULT_DECK_TOPPING_MATERIAL,
     c45_precast_material,
@@ -424,6 +426,60 @@ def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
 
+
+def _analysis_mode_from_session_state() -> AnalysisModeSettings:
+    value = st.session_state.get("analysis_mode_settings")
+    if isinstance(value, AnalysisModeSettings):
+        return value
+    if isinstance(value, dict):
+        return AnalysisModeSettings.model_validate(value)
+    return AnalysisModeSettings()
+
+
+def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
+    """Show non-invasive Section Builder guidance for the active member workflow."""
+    settings = _analysis_mode_from_session_state()
+    preset_key = str(preset.get("key", ""))
+    is_girder_preset = preset_key == "parametric_i_girder" or preset_key.startswith("parametric_plank_girder_")
+
+    rows = [("Active member workflow", analysis_mode_label(settings))]
+    if settings.member_type == "beam_girder":
+        rows.extend(
+            [
+                ("Recommended section family", "I-Girder / Plank Girder / future bridge girder presets"),
+                ("Current geometry status", "Gross precast polygon only"),
+                ("Girder design checks", "Future milestone; not implemented in MEMBER.TYPE1"),
+                ("Current preset fit", "Good for Beam/Girder" if is_girder_preset else "Review: selected preset is not a girder preset"),
+            ]
+        )
+        st.markdown("##### Member Workflow Guidance")
+        st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
+        if not is_girder_preset:
+            st.warning("Beam/Girder mode is active, but the selected preset is not a dedicated girder preset. Use only with engineering judgment.")
+        st.caption("MEMBER.TYPE1 routes the workflow only. It does not add AASHTO girder SLS/ULS equations yet.")
+    elif settings.member_type == "general_section":
+        rows.extend(
+            [
+                ("Primary analysis meaning", "General section review"),
+                ("PMM tools", "Available with user-controlled load interpretation"),
+                ("Deck/topping material", "Not used unless a future composite workflow is explicitly added"),
+            ]
+        )
+        st.markdown("##### Member Workflow Guidance")
+        st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
+        st.caption("General Section mode is flexible but requires explicit engineering interpretation of Pu, Mux, and Muy.")
+    else:
+        rows.extend(
+            [
+                ("Primary analysis meaning", "Column / Pier / Wall / Pylon PMM"),
+                ("PMM demand inputs", "Pu, Mux, Muy"),
+                ("Concrete material used by PMM", "Primary / section concrete only"),
+                ("Deck/topping material", "Ignored by PMM"),
+            ]
+        )
+        st.markdown("##### Member Workflow Guidance")
+        st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
+
 def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
     """Show concise engineering-oriented checks for the parametric I-girder preset."""
     b1 = float(params.get("B1_mm", 0.0))
@@ -613,6 +669,8 @@ def _render_section_definition_panel(
             f"Geometry family: {selected_category} · "
             "Select a parametric preset, then edit the dimensions below."
         )
+
+        _render_member_type_section_guidance(preset)
 
         with st.expander("Browse by geometry family", expanded=False):
             st.caption("Optional helper for filtering presets by family. The direct selector above is the primary control.")

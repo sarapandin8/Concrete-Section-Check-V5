@@ -536,22 +536,19 @@ def _render_readiness_panel() -> None:
 
 
 def _render_analysis_mode_section() -> AnalysisModeSettings:
-    current = _analysis_mode_from_session()
-    options = {
-        "Column / Pier / Wall / Pylon - PMM Mode": "column_pier_pmm",
-        "Beam / Girder - Flexure Mode Future": "beam_girder",
-        "General Section": "general_section",
-    }
-    labels = list(options.keys())
-    current_label = next(label for label, member_type in options.items() if member_type == current.member_type)
+    """Show the active member workflow selected in Project setup.
+
+    MEMBER.TYPE1 keeps a single editable owner for analysis mode in the Project
+    page. The Analysis page displays that selection as workflow context so tabs
+    rendered later cannot silently overwrite the Project-level selection.
+    """
+    settings = _analysis_mode_from_session()
 
     with st.expander("Analysis Mode / Member Type", expanded=True):
-        selected_label = st.selectbox("Member Type", labels, index=labels.index(current_label))
-        note = st.text_area("Analysis mode note", value=current.note or "", height=80)
-        settings = AnalysisModeSettings(member_type=options[selected_label], note=note or None)
-        st.session_state["analysis_mode_settings"] = settings
-
         st.markdown(f"**{analysis_mode_label(settings)}**")
+        st.caption("Configured in Project → Analysis Mode / Member Type.")
+        if settings.note:
+            st.caption(f"Project note: {settings.note}")
         st.info(analysis_mode_description(settings))
         mode_cols = st.columns(4)
         mode_cols[0].metric("Analysis Workflow", settings.analysis_workflow)

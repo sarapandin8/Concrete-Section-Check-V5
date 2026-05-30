@@ -144,3 +144,12 @@ def test_material_assignment_uses_canonical_session_keys() -> None:
     assert 'key="deck_topping_material_name"' in source
     assert 'key="section_primary_concrete_material_name"' not in source
     assert 'key="section_deck_topping_material_name"' not in source
+
+
+def test_member_type_guidance_source_is_present_in_section_builder() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Member Workflow Guidance" in source
+    assert "Beam/Girder mode is active" in source
+    assert "Column / Pier / Wall / Pylon PMM" in source
+    assert "MEMBER.TYPE1 routes the workflow only" in source

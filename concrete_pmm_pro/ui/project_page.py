@@ -9,7 +9,7 @@ from typing import Any
 import streamlit as st
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
-from concrete_pmm_pro.core.analysis_modes import analysis_mode_label
+from concrete_pmm_pro.core.analysis_modes import analysis_mode_description, analysis_mode_label, analysis_mode_warnings
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.io.project_io import (
     ProjectIOError,
@@ -141,6 +141,103 @@ _DASHBOARD_CSS = """
 }
 </style>
 """
+
+
+_MEMBER_TYPE_OPTIONS: dict[str, str] = {
+    "Column / Pier / Wall / Pylon - PMM Mode": "column_pier_pmm",
+    "Beam / Girder - Future Design Workflow": "beam_girder",
+    "General Section": "general_section",
+}
+
+
+_MEMBER_TYPE_REVERSE_OPTIONS: dict[str, str] = {value: label for label, value in _MEMBER_TYPE_OPTIONS.items()}
+
+
+def _coerce_analysis_mode_settings(value: Any) -> AnalysisModeSettings:
+    """Return a validated AnalysisModeSettings object from session/project data."""
+    if isinstance(value, AnalysisModeSettings):
+        return value
+    if isinstance(value, dict):
+        return AnalysisModeSettings.model_validate(value)
+    return AnalysisModeSettings()
+
+
+def _analysis_mode_label_for_member_type(member_type: str) -> str:
+    return _MEMBER_TYPE_REVERSE_OPTIONS.get(member_type, _MEMBER_TYPE_REVERSE_OPTIONS["column_pier_pmm"])
+
+
+def _mode_guidance_lines(settings: AnalysisModeSettings) -> list[str]:
+    """Concise project-level guidance for the selected member workflow."""
+    if settings.member_type == "beam_girder":
+        return [
+            "Beam/Girder mode is a routing placeholder for future girder Mu/Vu/SLS/prestress design checks.",
+            "Current PMM tools are not the primary design method for typical bridge girders.",
+            "Deck/topping material remains composite metadata only until future composite/girder milestones.",
+        ]
+    if settings.member_type == "general_section":
+        return [
+            "General Section mode keeps PMM and SLS tools available with user-controlled interpretation.",
+            "Use this mode only when the member is not clearly classified as a column/pier or beam/girder.",
+        ]
+    return [
+        "Column/Pier/Wall/Pylon mode uses the existing Pu, Mux, Muy PMM workflow.",
+        "The primary section concrete material is used for PMM analysis; deck/topping material is ignored by PMM.",
+    ]
+
+
+def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisModeSettings:
+    """Project-level Analysis Mode / Member Type selector.
+
+    The app already has detailed analysis controls inside the Analysis workspace.
+    This project-level selector makes the member workflow explicit before users
+    start assigning sections, materials, loads, and reports.
+    """
+    labels = list(_MEMBER_TYPE_OPTIONS.keys())
+    current_label = _analysis_mode_label_for_member_type(current.member_type)
+    widget_key = "project_analysis_mode_member_type_label"
+    note_key = "project_analysis_mode_note"
+    sync_key = "project_analysis_mode_member_type_sync"
+
+    # Keep the Project-page widgets synchronized when a project is loaded. This
+    # selector is the single editable owner of analysis_mode_settings; downstream
+    # pages render this setting as read-only workflow context.
+    if st.session_state.get(sync_key) != current.member_type or st.session_state.get(widget_key) not in labels:
+        st.session_state[widget_key] = current_label
+        st.session_state[note_key] = current.note or ""
+        st.session_state[sync_key] = current.member_type
+
+    with st.container(border=True):
+        st.markdown("#### Analysis Mode / Member Type")
+        st.caption(
+            "Select the primary engineering workflow before defining loads and running analysis. "
+            "This controls UI guidance only; MEMBER.TYPE1 does not change solver equations."
+        )
+        selected_label = st.selectbox(
+            "Active member workflow",
+            labels,
+            key=widget_key,
+            help="Column/Pier uses the existing PMM workflow. Beam/Girder is prepared as a future girder-design workflow.",
+        )
+        note = st.text_area(
+            "Analysis mode note",
+            key=note_key,
+            height=80,
+            help="Optional project note for member/workflow interpretation. Saved with the project JSON.",
+        )
+        selected_member_type = _MEMBER_TYPE_OPTIONS[selected_label]
+        settings = AnalysisModeSettings(member_type=selected_member_type, note=note or None)
+        st.session_state["analysis_mode_settings"] = settings
+        st.session_state[sync_key] = settings.member_type
+
+        mode_cards = _analysis_configuration_cards(settings)
+        st.markdown(_compact_panel_html(mode_cards, columns=2), unsafe_allow_html=True)
+        st.info(analysis_mode_description(settings))
+        for line in _mode_guidance_lines(settings):
+            st.caption(f"• {line}")
+        for warning in analysis_mode_warnings(settings):
+            st.warning(warning)
+
+    return settings
 
 
 def status_style_for_value(value: Any) -> str:
@@ -405,9 +502,8 @@ def render_project_page() -> None:
     prestress_elements = st.session_state.get("prestress_elements", [])
     custom_points = st.session_state.get("custom_stress_check_points", [])
     include_default_stress_points = bool(st.session_state.get("include_default_stress_check_points", True))
-    analysis_mode = st.session_state.get("analysis_mode_settings", AnalysisModeSettings())
-    if isinstance(analysis_mode, dict):
-        analysis_mode = AnalysisModeSettings.model_validate(analysis_mode)
+    analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
+    analysis_mode = _render_analysis_mode_selector(analysis_mode)
 
     rebar_valid = st.session_state.get("rebars_valid_for_analysis")
     prestress_valid = st.session_state.get("prestress_valid_for_analysis")

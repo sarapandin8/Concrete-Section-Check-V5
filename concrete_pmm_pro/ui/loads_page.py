@@ -14,6 +14,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from concrete_pmm_pro.core.analysis import AnalysisModeSettings
+from concrete_pmm_pro.core.analysis_modes import analysis_mode_label
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
 
@@ -65,6 +67,30 @@ class LoadCaseSummary:
     inactive_rows: int
     excluded_rows: int
 
+
+
+def _analysis_mode_from_session_state() -> AnalysisModeSettings:
+    value = st.session_state.get("analysis_mode_settings")
+    if isinstance(value, AnalysisModeSettings):
+        return value
+    if isinstance(value, dict):
+        return AnalysisModeSettings.model_validate(value)
+    return AnalysisModeSettings()
+
+
+def _render_load_workflow_notice() -> None:
+    settings = _analysis_mode_from_session_state()
+    st.info(
+        f"Active member workflow: {analysis_mode_label(settings)}. "
+        "The current load table stores Pu, Mux, and Muy for PMM/SLS section workflows."
+    )
+    if settings.member_type == "beam_girder":
+        st.warning(
+            "Beam/Girder design load tables for Mu, Vu, Tu, transfer stage, service stage, and prestress effects "
+            "are future work. Do not treat the current Pu/Mux/Muy PMM table as a completed bridge girder design workflow."
+        )
+    elif settings.member_type == "general_section":
+        st.warning("General Section mode is active. Verify the engineering meaning of Pu, Mux, and Muy before running checks.")
 
 def _default_load_table() -> pd.DataFrame:
     return pd.DataFrame(
@@ -546,6 +572,8 @@ def _render_load_import_workflow(force_unit: str, moment_unit: str) -> None:
 def render_loads_page() -> None:
     st.subheader("Loads")
     st.caption("Paste-friendly load case input for PMM strength and serviceability workflows.")
+
+    _render_load_workflow_notice()
 
     st.info(
         "PMM strength checks currently use active ULS demand values: Pu, Mux, and Muy. "

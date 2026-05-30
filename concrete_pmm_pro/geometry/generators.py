@@ -538,21 +538,33 @@ def parametric_plank_girder_interior(
     bottom_y = -H_mm / 2.0
     y1 = bottom_y + h1_mm
     y2 = bottom_y + h2_mm
-    x_outer = B_mm / 2.0
+
+    # Drawing convention for the user-supplied plank:
+    #   B is the overall reference width.
+    #   The solid top face is inset by b1 from both sides.
+    #   The solid bottom/reference face has width b3, leaving b2 each side.
+    # Earlier versions incorrectly used B as the physical top face, which made
+    # the plank an inverted wide-top trapezoid.  The physical section is built
+    # from the visible precast outline, while B remains the dimension guide.
+    x_ref = B_mm / 2.0
+    x_top = max(0.0, x_ref - b1_mm)
     x_bottom = b3_mm / 2.0
-    x_step = x_outer - b1_mm
-    if x_step < x_bottom:
-        x_step = x_bottom
+    x_lower_ref = max(x_bottom, x_ref - b2_mm)
+
+    if x_top <= 0.0:
+        raise ValueError("Invalid geometry: B must be greater than 2*b1 for an interior plank.")
+    if x_bottom <= 0.0:
+        raise ValueError("Invalid geometry: b3 must be greater than zero.")
 
     points = [
-        _point(-x_outer, top_y),
-        _point(x_outer, top_y),
-        _point(x_step, y2),
-        _point(x_bottom, y1),
+        _point(-x_top, top_y),
+        _point(x_top, top_y),
+        _point(x_top, y2),
+        _point(x_lower_ref, y1),
         _point(x_bottom, bottom_y),
         _point(-x_bottom, bottom_y),
-        _point(-x_bottom, y1),
-        _point(-x_step, y2),
+        _point(-x_lower_ref, y1),
+        _point(-x_top, y2),
     ]
     _ensure_valid_simple_polygon(points, "Parametric interior plank girder")
     transformed = _plank_transformed_metadata(
@@ -633,20 +645,30 @@ def parametric_plank_girder_exterior(
     bottom_y = -H_mm / 2.0
     y1 = bottom_y + h1_mm
     y2 = bottom_y + h2_mm
-    x_left = -B_mm / 2.0
+
+    # Exterior plank drawing convention:
+    #   one exterior side is kept vertical/full-depth;
+    #   the interior side is inset by b1 at the top and by b2/b3 at the bottom.
+    # This matches the supplied exterior-girder sketch instead of using the
+    # full reference width as the physical top face.
     x_right = B_mm / 2.0
+    x_left_ref = -B_mm / 2.0
+    x_top_left = x_left_ref + b1_mm
     x_bottom_left = x_right - b3_mm
-    x_step = x_left + b1_mm
-    if x_step > x_bottom_left:
-        x_step = x_bottom_left
+    x_lower_ref = min(x_bottom_left, x_left_ref + b2_mm)
+
+    if x_top_left >= x_right:
+        raise ValueError("Invalid geometry: B must be greater than b1 for an exterior plank.")
+    if x_bottom_left >= x_right:
+        raise ValueError("Invalid geometry: b3 must be smaller than B for an exterior plank.")
 
     points = [
-        _point(x_left, top_y),
+        _point(x_top_left, top_y),
         _point(x_right, top_y),
         _point(x_right, bottom_y),
         _point(x_bottom_left, bottom_y),
-        _point(x_bottom_left, y1),
-        _point(x_step, y2),
+        _point(x_lower_ref, y1),
+        _point(x_top_left, y2),
     ]
     _ensure_valid_simple_polygon(points, "Parametric exterior plank girder")
     transformed = _plank_transformed_metadata(

@@ -327,6 +327,9 @@ def test_aashto_be1_section_builder_source_contains_effective_width_helper() -> 
     assert "AASHTO helper" in source
     assert "calculate_aashto_effective_slab_width" in source
     assert "Effective slab width candidate limits" in source
+    assert "Auto precast top contact width b_top" in source
+    assert "Advanced effective-width override" in source
+    assert "Manual b_top override" in source
 
 
 def test_aashto_be1_top_width_reference_helpers_are_workflow_specific() -> None:
@@ -339,3 +342,6 @@ def test_aashto_be1_top_width_reference_helpers_are_workflow_specific() -> None:
     assert section_builder._effective_width_top_w(exterior_plank, {"B_mm": 990.0, "b1_mm": 45.0}) == 945.0
     assert section_builder._effective_width_default_position(exterior_plank) == "exterior"
     assert section_builder._effective_width_default_position(i_girder) == "interior"
+    assert "B1" in section_builder._effective_width_top_width_basis_note(i_girder)
+    assert "B - 2b1" in section_builder._effective_width_top_width_basis_note(plank)
+    assert "B - b1" in section_builder._effective_width_top_width_basis_note(exterior_plank)

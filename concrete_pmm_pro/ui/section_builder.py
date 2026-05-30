@@ -594,7 +594,13 @@ def _selectbox_with_safe_index(label: str, options: list[str], *, key: str, defa
 
 
 def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> float:
-    """Resolve a reasonable physical top width for Be helper display."""
+    """Resolve the physical precast top contact width for Be helper metadata.
+
+    This is deliberately auto-derived from the selected section geometry so the
+    user does not have to guess a code-helper input.  The value is used only by
+    the AASHTO.BE1 effective slab-width helper; it never changes the generated
+    precast polygon.
+    """
 
     if _is_parametric_i_girder(preset):
         return float(params.get("B1_mm", 0.0) or 0.0)
@@ -605,6 +611,18 @@ def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> fl
             return max(b - 2.0 * b1, 0.0)
         return max(b - b1, 0.0)
     return float(params.get("B_mm", 0.0) or 0.0)
+
+
+def _effective_width_top_width_basis_note(preset: dict[str, Any]) -> str:
+    """Return the engineering basis for the auto top-contact width."""
+
+    if _is_parametric_i_girder(preset):
+        return "Auto from I-Girder top flange width B1."
+    if _is_parametric_plank_girder(preset):
+        if str(preset.get("key", "")) == "parametric_plank_girder_interior":
+            return "Auto from Interior Plank top width B - 2b1."
+        return "Auto from Exterior Plank top contact width B - b1."
+    return "Auto from selected section top width metadata."
 
 
 def _effective_width_default_position(preset: dict[str, Any]) -> str:
@@ -637,12 +655,15 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
     manual_be = float(params.get("Be_mm", 0.0) or 0.0)
     tslab = float(params.get("Tslab_mm", 0.0) or 0.0)
     span = float(params.get("girder_length_mm", 0.0) or 0.0)
-    top_width = _effective_width_top_w(preset, params)
+    auto_top_width = _effective_width_top_w(preset, params)
+    top_width_basis = _effective_width_top_width_basis_note(preset)
 
     st.markdown("##### Effective Slab Width Helper")
     st.markdown(
         '<div class="cpmm-section-note">AASHTO.BE1 adds a transparent effective slab-width helper for composite metadata. '
-        "Manual override remains available; calculated Be is not used by PMM or prestress solvers.</div>",
+        "Manual Be remains available; calculated Be is not used by PMM or prestress solvers. "
+        "The precast top contact width b<sub>top</sub> is auto-calculated from the selected section geometry, "
+        "with manual override available only under Advanced effective-width override.</div>",
         unsafe_allow_html=True,
     )
 
@@ -657,7 +678,9 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
 
     params["Be_mode"] = mode
     params["Be_manual_mm"] = manual_be
-    params["Be_top_w_mm"] = top_width
+    params["Be_top_w_auto_mm"] = auto_top_width
+    params["Be_top_w_mm"] = auto_top_width
+    params["Be_top_w_source"] = "Auto from section geometry"
 
     if mode != "AASHTO helper":
         params["Be_effective_mm"] = manual_be
@@ -667,7 +690,8 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
                 [
                     ("Be mode", "Manual"),
                     ("Manual Be", f"{_format_float(manual_be, 1)} mm"),
-                    ("Top width reference", f"{_format_float(top_width, 1)} mm"),
+                    ("Auto precast top contact width b_top", f"{_format_float(auto_top_width, 1)} mm"),
+                    ("b_top basis", top_width_basis),
                 ]
             ),
             unsafe_allow_html=True,
@@ -685,8 +709,8 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
     )
     position = "exterior" if position_label == "Exterior" else "interior"
 
-    default_spacing = max(manual_be, top_width, 1.0)
-    columns = st.columns(3)
+    default_spacing = max(manual_be, auto_top_width, 1.0)
+    columns = st.columns(2)
     with columns[0]:
         spacing = _render_metadata_number_input(
             name="girder_spacing_mm",
@@ -709,17 +733,48 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
             step=10.0,
             help_text="Deck width from exterior girder centerline/reference to free edge. Used only when position is Exterior.",
         )
-    with columns[2]:
-        top_width_override = _render_metadata_number_input(
-            name="Be_top_width_reference_mm",
-            label="Top width reference (mm)",
-            preset_key=preset_key,
-            default=max(top_width, 1.0),
-            min_value=1.0,
-            max_value=100000.0,
-            step=10.0,
-            help_text="Physical top flange/plank top width used by the helper; does not change the generated section polygon.",
+
+    top_width_used = auto_top_width
+    top_width_source = "Auto from section geometry"
+    with st.expander("Advanced effective-width override", expanded=False):
+        st.caption(
+            "Precast top contact width b_top is normally calculated from the selected section geometry. "
+            "Override it only when the design effective-width reference is intentionally different from the generated section."
         )
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Auto b_top", f"{_format_float(auto_top_width, 1)} mm"),
+                    ("Auto basis", top_width_basis),
+                    ("Scope", "Used only by AASHTO.BE1 helper; does not change section geometry"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+        top_width_source_key = f"{preset_key}_Be_top_width_source"
+        top_width_source = _selectbox_with_safe_index(
+            "Precast top contact width b_top source",
+            ["Auto from section geometry", "Manual override"],
+            key=top_width_source_key,
+            default=str(st.session_state.get(top_width_source_key, "Auto from section geometry")),
+            help_text="Keep Auto for normal use. Manual override is only for special effective-width assumptions.",
+        )
+        if top_width_source == "Manual override":
+            top_width_used = _render_metadata_number_input(
+                name="Be_top_contact_width_override_mm",
+                label="Manual b_top override (mm)",
+                preset_key=preset_key,
+                default=max(auto_top_width, 1.0),
+                min_value=1.0,
+                max_value=100000.0,
+                step=10.0,
+                help_text="Manual physical top contact width used by Be helper only. It does not change the generated section polygon.",
+            )
+        else:
+            top_width_used = auto_top_width
+
+    params["Be_top_w_mm"] = top_width_used
+    params["Be_top_w_source"] = top_width_source
 
     try:
         result = calculate_aashto_effective_slab_width(
@@ -727,7 +782,7 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
                 span,
                 tslab,
                 spacing,
-                top_width_override,
+                top_width_used,
                 position=position,
                 deck_overhang_mm=overhang if position == "exterior" else 0.0,
             )
@@ -738,17 +793,18 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
         params["Be_governing_limit"] = "Manual fallback"
         return params
 
-    params["Be_mm"] = getattr(result, "effective_" + "width" + "_mm")
-    params["Be_effective_mm"] = getattr(result, "effective_" + "width" + "_mm")
-    params["Be_calculated_mm"] = getattr(result, "effective_" + "width" + "_mm")
+    calculated_be = getattr(result, "effective_" + "width" + "_mm")
+    params["Be_mm"] = calculated_be
+    params["Be_effective_mm"] = calculated_be
+    params["Be_calculated_mm"] = calculated_be
     params["Be_governing_limit"] = result.governing_limit
     params["Be_position"] = result.position
     params["girder_spacing_mm"] = spacing
     params["deck_overhang_mm"] = overhang if position == "exterior" else 0.0
-    params["Be_top_w_mm"] = top_width_override
     st.markdown(_property_strip_html([
-        SectionMetric("Calculated Be", f"{_format_float(getattr(result, 'effective_' + 'width' + '_mm'), 1)} mm", "Used for transformed composite metadata only", "ready", True),
+        SectionMetric("Calculated Be", f"{_format_float(calculated_be, 1)} mm", "Used for transformed composite metadata only", "ready", True),
         SectionMetric("Governing limit", result.governing_limit, "Review before design use", "info"),
+        SectionMetric("b_top used", f"{_format_float(top_width_used, 1)} mm", top_width_source, "neutral"),
         SectionMetric("Manual Be kept", f"{_format_float(manual_be, 1)} mm", "Available by switching mode to Manual", "neutral"),
     ]), unsafe_allow_html=True)
     with st.expander("Effective slab width candidate limits", expanded=False):

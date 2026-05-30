@@ -25,6 +25,7 @@ def test_status_style_for_value_maps_key_project_states() -> None:
     assert status_style_for_value("NOT_READY") == "danger"
     assert status_style_for_value("No") == "danger"
     assert status_style_for_value("N/A") == "neutral"
+    assert status_style_for_value("Not applicable") == "neutral"
 
 
 def test_dashboard_card_html_escapes_text_and_marks_status() -> None:
@@ -59,7 +60,7 @@ def test_compact_panel_accepts_columns_layout_hint() -> None:
     panel = _compact_panel_html(
         [
             DashboardCard("Member Type", "Beam / Girder", "Active analysis context", "info"),
-            DashboardCard("PMM Workflow", "Caution", "ULS/PMM workspace availability", "warning", strong=True),
+            DashboardCard("PMM Workflow", "Not applicable", "Reserved for Column/Pier/Wall/Pylon PMM workflow", "neutral", strong=False),
         ],
         columns=2,
     )
@@ -67,7 +68,7 @@ def test_compact_panel_accepts_columns_layout_hint() -> None:
     assert "cpmm-compact-panel" in panel
     assert "cpmm-kv-grid-row" in panel
     assert "Beam / Girder" in panel
-    assert "cpmm-status-badge warning" in panel
+    assert "cpmm-status-badge" not in panel
 
 
 def test_project_overview_cards_keep_existing_summary_values() -> None:
@@ -98,9 +99,10 @@ def test_analysis_configuration_cards_show_workflow_statuses() -> None:
     by_title = {card.title: card for card in cards}
 
     assert by_title["Analysis Workflow"].value == "beam_girder_future"
-    assert by_title["PMM Workflow"].value == "Caution"
-    assert by_title["PMM Workflow"].status == "warning"
-    assert by_title["PMM Workflow"].strong is True
+    assert by_title["PMM Workflow"].value == "Not applicable"
+    assert by_title["PMM Workflow"].status == "neutral"
+    assert by_title["PMM Workflow"].strong is False
+    assert "Reserved for Column/Pier/Wall/Pylon" in by_title["PMM Workflow"].detail
     assert by_title["SLS Workflow"].value == "Yes"
     assert by_title["SLS Workflow"].strong is False
     assert by_title["Beam/Girder Workflow"].value == "Future / not implemented"

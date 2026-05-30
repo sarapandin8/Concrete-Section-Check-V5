@@ -227,12 +227,13 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
             key=widget_key,
             help="Column/Pier uses the existing PMM workflow. Beam/Girder is prepared as a future girder-design workflow. Custom section presets are selected in Section Builder.",
         )
-        note = st.text_area(
-            "Analysis mode note",
-            key=note_key,
-            height=80,
-            help="Optional project note for member/workflow interpretation. Saved with the project JSON.",
-        )
+        with st.expander("Optional workflow note", expanded=bool(current.note)):
+            note = st.text_area(
+                "Analysis mode note",
+                key=note_key,
+                height=80,
+                help="Optional project note for member/workflow interpretation. Saved with the project JSON.",
+            )
         selected_member_type = _MEMBER_TYPE_OPTIONS[selected_label]
         settings = AnalysisModeSettings(member_type=selected_member_type, note=note or None)
         st.session_state["analysis_mode_settings"] = settings
@@ -244,7 +245,7 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
         for line in _mode_guidance_lines(settings):
             st.caption(f"• {line}")
         for warning in analysis_mode_warnings(settings):
-            st.warning(warning)
+            st.info(warning)
 
     return settings
 
@@ -257,7 +258,7 @@ def status_style_for_value(value: Any) -> str:
         return "warning"
     if text in {"NOT_READY", "NO", "FAIL", "FAILED", "INVALID", "CRITICAL", "ERROR"}:
         return "danger"
-    if text in {"N/A", "NA", "NONE", "NOT ACTIVE", "FUTURE / NOT IMPLEMENTED"}:
+    if text in {"N/A", "NA", "NONE", "NOT ACTIVE", "FUTURE / NOT IMPLEMENTED", "NOT APPLICABLE"}:
         return "neutral"
     return "info"
 
@@ -403,15 +404,21 @@ def _project_overview_cards(
 
 def _analysis_configuration_cards(analysis_mode: AnalysisModeSettings) -> list[DashboardCard]:
     beam_status = "Future / not implemented" if analysis_mode.allow_beam_girder_placeholder else "Not active"
+    pmm_value = "Available" if analysis_mode.allow_pmm_workflow else "Not applicable"
+    pmm_detail = (
+        "Column/Pier/Wall/Pylon PMM workspace availability"
+        if analysis_mode.allow_pmm_workflow
+        else "Reserved for Column/Pier/Wall/Pylon PMM workflow"
+    )
     return [
         DashboardCard("Member Type", analysis_mode_label(analysis_mode), "Active analysis context", "info"),
         DashboardCard("Analysis Workflow", analysis_mode.analysis_workflow, "Configured workflow mode", "info"),
         DashboardCard(
             "PMM Workflow",
-            "Yes" if analysis_mode.allow_pmm_workflow else "Caution",
-            "ULS/PMM workspace availability",
-            "ready" if analysis_mode.allow_pmm_workflow else "warning",
-            strong=not analysis_mode.allow_pmm_workflow,
+            pmm_value,
+            pmm_detail,
+            "ready" if analysis_mode.allow_pmm_workflow else "neutral",
+            strong=False,
         ),
         DashboardCard(
             "SLS Workflow",

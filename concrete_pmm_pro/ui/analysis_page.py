@@ -552,7 +552,7 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
         st.info(analysis_mode_description(settings))
         mode_cols = st.columns(4)
         mode_cols[0].metric("Analysis Workflow", settings.analysis_workflow)
-        mode_cols[1].metric("PMM Workflow", "Available" if settings.allow_pmm_workflow else "Caution / not primary")
+        mode_cols[1].metric("PMM Workflow", "Available" if settings.allow_pmm_workflow else "Not applicable")
         mode_cols[2].metric("SLS Workflow", "Available" if settings.allow_sls_workflow else "Unavailable")
         mode_cols[3].metric(
             "Beam/Girder Workflow",
@@ -564,17 +564,17 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
             st.info("SLS stress checks remain available for selected service load cases.")
             st.info("Prestress is treated as internal prestress/reinforcement action, not duplicated as Pu demand.")
         elif settings.member_type == "beam_girder":
-            st.warning("Beam/Girder mode is a future workflow placeholder.")
+            st.info("Beam/Girder mode is a future workflow placeholder; PMM is not applicable as the primary girder design workflow.")
             st.info("Future inputs will include Mu, Vu, Tu, service/transfer stages, Pe/e, and tendon profile.")
             st.info("Existing SLS stress checks can still be used for section stress review.")
-            st.warning("Do not enter prestress Pe again as Pu if prestress elements are already defined.")
-            st.warning("Beam/Girder flexure, shear, torsion, and transfer-stage checks are not implemented yet.")
+            st.info("Do not enter prestress Pe again as Pu if prestress elements are already defined.")
+            st.info("Beam/Girder flexure, shear, torsion, and transfer-stage checks are not implemented yet.")
         else:
             st.info("General section mode keeps PMM and SLS tools available.")
             st.warning("Use carefully and verify load interpretation.")
 
         for warning in analysis_mode_warnings(settings):
-            st.warning(warning)
+            st.info(warning)
 
     return settings
 

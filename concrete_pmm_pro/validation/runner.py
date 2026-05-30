@@ -8,6 +8,7 @@ from concrete_pmm_pro.validation.composite_section import validate_composite_sec
 from concrete_pmm_pro.validation.effective_width import validate_effective_width
 from concrete_pmm_pro.validation.girder_service_stress import validate_girder_service_stress
 from concrete_pmm_pro.validation.girder_prestress import validate_girder_prestress_stress
+from concrete_pmm_pro.validation.girder_stage import validate_girder_service_stage_stress
 from concrete_pmm_pro.validation.material_routing import validate_material_routing
 from concrete_pmm_pro.validation.materials import validate_materials
 from concrete_pmm_pro.validation.models import ValidationReport, ValidationResult
@@ -27,6 +28,7 @@ def validation_suites() -> list[ValidationSuite]:
         validate_material_routing,
         validate_girder_service_stress,
         validate_girder_prestress_stress,
+        validate_girder_service_stage_stress,
         validate_pmm_solver_sanity,
         validate_prestress_guards,
     ]

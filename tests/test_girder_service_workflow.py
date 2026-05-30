@@ -89,5 +89,7 @@ def test_analysis_page_includes_beam_girder_service_stress_preview_source():
     assert "Beam/Girder Elastic Service Stress Preview" in source
     assert "girder_service_stress_basis_name" in source
     assert "run_basic_girder_service_stress" in source
-    assert "does not include prestress force/eccentricity" in source
+    assert "Include effective prestress stress component" in source
+    assert "run_girder_prestress_stress_effect" in source
+    assert "summarize_girder_prestress_elements" in source
     assert "Section basis for stress preview" in source

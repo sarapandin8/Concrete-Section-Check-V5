@@ -57,6 +57,7 @@ from concrete_pmm_pro.core.analysis_modes import (
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
+from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.reporting import (
     build_result_traceability_snapshot,
     build_report_manifest,
@@ -95,9 +96,12 @@ from concrete_pmm_pro.serviceability import (
     crack_classification_to_dataframe,
     custom_stress_check_points_from_dataframe,
     dataframe_to_stress_check_points,
+    girder_prestress_stress_result_rows,
     girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
     run_basic_girder_service_stress,
+    run_girder_prestress_stress_effect,
+    summarize_girder_prestress_elements,
     run_elastic_sls_stress_check,
     service_stress_limits,
     service_stress_results_to_dataframe,
@@ -3261,12 +3265,44 @@ def _default_custom_stress_check_points_dataframe() -> pd.DataFrame:
 
 
 
+def _girder_stress_type(stress_MPa: float, *, zero_tolerance_MPa: float = 1.0e-9) -> str:
+    """Classify a girder SLS stress value for display only."""
+
+    if abs(float(stress_MPa)) <= zero_tolerance_MPa:
+        return "zero"
+    return "compression" if float(stress_MPa) < 0.0 else "tension"
+
+
+def _girder_combined_service_prestress_rows(service_result, prestress_result) -> list[dict[str, object]]:
+    """Return top/bottom total stress rows for GIRDER.PS1B preview display."""
+
+    rows: list[dict[str, object]] = []
+    pairs = (("Top", service_result.top, prestress_result.top), ("Bottom", service_result.bottom, prestress_result.bottom))
+    for fiber_name, service_stress, prestress_stress in pairs:
+        combined = float(service_stress.total_stress_MPa) + float(prestress_stress.total_stress_MPa)
+        rows.append(
+            {
+                "Fiber": fiber_name,
+                "Service axial (MPa)": service_stress.axial_stress_MPa,
+                "Service bending (MPa)": service_stress.bending_stress_MPa,
+                "Service total (MPa)": service_stress.total_stress_MPa,
+                "PS axial (MPa)": prestress_stress.axial_stress_MPa,
+                "PS eccentric (MPa)": prestress_stress.eccentric_bending_stress_MPa,
+                "PS total (MPa)": prestress_stress.total_stress_MPa,
+                "Combined total (MPa)": combined,
+                "Stress type": _girder_stress_type(combined),
+            }
+        )
+    return rows
+
+
 def _render_beam_girder_service_stress_preview() -> None:
-    """Display GIRDER.SLS1B manual elastic service-stress preview for Beam/Girder mode.
+    """Display GIRDER.SLS1B/PS1B manual stress preview for Beam/Girder mode.
 
     This panel intentionally uses explicit trial actions and an explicit section
-    basis. It does not read PMM load tables as girder design actions, does not
-    include prestress effects, and does not modify any solver state.
+    basis.  GIRDER.PS1B adds an optional effective-prestress component using
+    ``Pe_eff`` only; it does not derive prestress from breaking load, strand
+    count metadata, or duct diameter and it does not modify solver state.
     """
 
     mode_settings = _analysis_mode_from_session()
@@ -3275,12 +3311,13 @@ def _render_beam_girder_service_stress_preview() -> None:
 
     st.markdown("### Beam/Girder Elastic Service Stress Preview")
     st.info(
-        "GIRDER.SLS1B connects the Beam/Girder service-stress kernel to the Analysis workspace for manual trial actions only. "
-        "Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension."
+        "GIRDER.SLS1B/PS1B previews elastic Beam/Girder service stress using manual trial actions and optional effective-prestress stress effect. "
+        "Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension. "
+        "Pe_eff is positive for compressive effective prestress after losses."
     )
     st.warning(
-        "This preview does not include prestress force/eccentricity, staged construction, creep/shrinkage, losses, shear, or AASHTO stress limits yet. "
-        "It is not used by PMM, rebar, prestress, or report solvers."
+        "This preview is not a staged prestressed girder design check yet. It does not include transfer/final stage automation, creep/shrinkage, "
+        "AASHTO stress limits, shear, or report integration. It is not used by PMM, rebar, prestress, or report solvers."
     )
 
     section_geometry = st.session_state.get("section_geometry")
@@ -3344,16 +3381,134 @@ def _render_beam_girder_service_stress_preview() -> None:
     summary_cols[4].metric("Depth", f"{basis.total_depth_mm:,.1f} mm")
 
     stress_cols = st.columns(2)
-    stress_cols[0].metric("Max compression", f"{result.max_compression_MPa:,.3f} MPa")
-    stress_cols[1].metric("Max tension", f"{result.max_tension_MPa:,.3f} MPa")
+    stress_cols[0].metric("Service max compression", f"{result.max_compression_MPa:,.3f} MPa")
+    stress_cols[1].metric("Service max tension", f"{result.max_tension_MPa:,.3f} MPa")
 
     st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Effective Prestress Stress Effect")
+    include_prestress = st.checkbox(
+        "Include effective prestress stress component",
+        value=bool(st.session_state.get("girder_service_include_prestress", False)),
+        key="girder_service_include_prestress",
+        help="Preview the stress contribution from Pe_eff. This uses Pe_eff only and does not change the Prestress or PMM solvers.",
+    )
+
+    if include_prestress:
+        st.info(
+            "GIRDER.PS1B uses Pe_eff as the effective prestress after losses. Breaking Load, duct diameter, and strand-count metadata are not used to derive Pe_eff."
+        )
+        prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
+        section_bottom_y_mm = 0.0
+        if section_geometry is not None:
+            try:
+                section_bottom_y_mm = float(summarize_geometry(section_geometry).y_min_mm or 0.0)
+            except (TypeError, ValueError) as exc:
+                st.warning(f"Unable to convert prestress coordinates to girder bottom-fiber coordinates: {exc}")
+
+        mode_options = ["From Prestress table", "Manual Pe_eff and yps"]
+        if st.session_state.get("girder_prestress_input_mode") not in mode_options:
+            st.session_state["girder_prestress_input_mode"] = "From Prestress table" if prestress_elements else "Manual Pe_eff and yps"
+        prestress_mode = st.radio(
+            "Prestress source",
+            mode_options,
+            horizontal=True,
+            key="girder_prestress_input_mode",
+            help="Use the normalized Prestress table Pe_eff values, or enter a manual equivalent effective prestress and centroid for a trial check.",
+        )
+
+        pe_eff_kN = 0.0
+        tendon_y_from_bottom_mm = basis.centroid_y_from_bottom_mm
+        source_ready = False
+
+        if prestress_mode == "From Prestress table":
+            summary = summarize_girder_prestress_elements(
+                prestress_elements,
+                section_bottom_y_mm=section_bottom_y_mm,
+                include_unbonded=True,
+            )
+            table_cols = st.columns(4)
+            table_cols[0].metric("Included PS rows", f"{summary.included_element_count:,}")
+            table_cols[1].metric("Ignored PS rows", f"{summary.ignored_element_count:,}")
+            table_cols[2].metric("Σ Pe_eff", f"{summary.total_pe_eff_kN:,.3f} kN")
+            table_cols[3].metric(
+                "PS centroid yb",
+                "—" if summary.tendon_y_from_bottom_mm is None else f"{summary.tendon_y_from_bottom_mm:,.2f} mm",
+            )
+            for warning in summary.warnings:
+                st.warning(warning)
+            with st.expander("Prestress source notes", expanded=False):
+                if summary.info:
+                    for item in summary.info:
+                        st.write(f"- {item}")
+                else:
+                    st.write("No positive Pe_eff prestress element has been included yet.")
+            if summary.total_pe_eff_kN > 0.0 and summary.tendon_y_from_bottom_mm is not None:
+                pe_eff_kN = float(summary.total_pe_eff_kN)
+                tendon_y_from_bottom_mm = float(summary.tendon_y_from_bottom_mm)
+                source_ready = True
+            else:
+                st.info("No positive Pe_eff was found in the Prestress table. Use manual mode or define Pe_eff in the Prestress page.")
+        else:
+            manual_cols = st.columns(2)
+            with manual_cols[0]:
+                pe_eff_kN = float(
+                    st.number_input(
+                        "Pe_eff (kN, compression +)",
+                        min_value=0.0,
+                        value=float(st.session_state.get("girder_manual_pe_eff_kN", 0.0)),
+                        step=100.0,
+                        format="%.3f",
+                        key="girder_manual_pe_eff_kN",
+                        help="Effective prestress after losses. Do not enter breaking load here.",
+                    )
+                )
+            with manual_cols[1]:
+                tendon_y_from_bottom_mm = float(
+                    st.number_input(
+                        "Prestress centroid yps (mm from bottom)",
+                        value=float(st.session_state.get("girder_manual_ps_y_from_bottom_mm", basis.centroid_y_from_bottom_mm)),
+                        step=10.0,
+                        format="%.3f",
+                        key="girder_manual_ps_y_from_bottom_mm",
+                        help="Centroid of effective prestress measured upward from the selected section-basis bottom fiber.",
+                    )
+                )
+            source_ready = pe_eff_kN > 0.0
+            if not source_ready:
+                st.info("Enter a positive Pe_eff to preview prestress stress effects.")
+
+        if source_ready:
+            ps_result = run_girder_prestress_stress_effect(
+                basis,
+                Pe_eff_kN=pe_eff_kN,
+                tendon_y_from_bottom_mm=tendon_y_from_bottom_mm,
+            )
+            ps_cols = st.columns(4)
+            ps_cols[0].metric("Pe_eff", f"{ps_result.Pe_eff_kN:,.3f} kN")
+            ps_cols[1].metric("e = yps - yc", f"{ps_result.eccentricity_mm:,.2f} mm")
+            ps_cols[2].metric("Mps", f"{ps_result.equivalent_moment_kNm:,.3f} kN-m")
+            ps_cols[3].metric("PS max compression", f"{ps_result.max_compression_MPa:,.3f} MPa")
+
+            for warning in ps_result.warnings:
+                st.warning(f"Prestress stress preview warning: {warning}")
+
+            st.dataframe(pd.DataFrame(girder_prestress_stress_result_rows(ps_result)), use_container_width=True, hide_index=True)
+            combined_df = pd.DataFrame(_girder_combined_service_prestress_rows(result, ps_result))
+            st.markdown("#### Combined Service + Effective Prestress Stress")
+            combined_cols = st.columns(2)
+            combined_cols[0].metric("Combined max compression", f"{combined_df['Combined total (MPa)'].min():,.3f} MPa")
+            combined_cols[1].metric("Combined max tension", f"{combined_df['Combined total (MPa)'].max():,.3f} MPa")
+            st.dataframe(combined_df, use_container_width=True, hide_index=True)
+
     with st.expander("Beam/Girder service-stress sign convention", expanded=False):
         st.write("- Compression stress is negative; tension stress is positive.")
         st.write("- Axial compression N is positive and contributes negative stress: -N/A.")
         st.write("- Sagging M is positive and gives top compression / bottom tension.")
+        st.write("- Pe_eff is positive compressive effective prestress after losses.")
+        st.write("- Prestress eccentricity e = yps - yc. A low tendon has negative e and gives higher bottom compression.")
         st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
-        st.write("- This preview is a manual elastic stress check foundation only; design-code stress limits are future work.")
+        st.write("- This preview is a manual elastic stress check foundation only; design-code stress limits and staged checks are future work.")
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()

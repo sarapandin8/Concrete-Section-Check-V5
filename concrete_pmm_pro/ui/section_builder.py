@@ -312,7 +312,9 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
         key="active_concrete_material_name",
     )
     primary_material = material_map[selected_primary]
-    st.session_state["active_concrete_material_name"] = selected_primary
+    # Do not assign to st.session_state["active_concrete_material_name"] here.
+    # The selectbox owns that widget key; assigning to the same key after widget
+    # instantiation raises StreamlitAPIException on Streamlit Cloud.
     st.session_state["primary_concrete_material_name"] = selected_primary
     st.session_state["concrete_material"] = primary_material
 
@@ -336,7 +338,8 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
             key="deck_topping_material_name",
         )
         deck_material = material_map[selected_deck]
-        st.session_state["deck_topping_material_name"] = selected_deck
+        # The deck selectbox owns st.session_state["deck_topping_material_name"].
+        # Do not reassign it after widget creation.
         assignment.update(
             {
                 "deck_topping_material_name": selected_deck,

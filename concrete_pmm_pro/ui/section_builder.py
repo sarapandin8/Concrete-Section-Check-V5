@@ -272,7 +272,7 @@ def _ensure_concrete_material_session() -> list[ConcreteMaterial]:
         concrete_materials=st.session_state.get("concrete_materials", []),
         active_concrete_material_name=st.session_state.get("active_concrete_material_name"),
         deck_topping_material_name=st.session_state.get("deck_topping_material_name"),
-        preserve_existing_primary="concrete_materials" not in st.session_state,
+        preserve_existing_primary=not bool(st.session_state.get("concrete_materials", [])),
     )
     st.session_state["concrete_materials"] = library_state.materials
     st.session_state["active_concrete_material_name"] = library_state.active_concrete_material_name
@@ -300,6 +300,8 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
     material_names = list(material_map)
     active_name = st.session_state.get("active_concrete_material_name")
     default_primary_index = _material_select_index(material_names, active_name)
+    if active_name not in material_map:
+        st.session_state["active_concrete_material_name"] = material_names[default_primary_index]
 
     st.markdown("##### Concrete Material Assignment")
     selected_primary = st.selectbox(
@@ -307,7 +309,7 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
         material_names,
         index=default_primary_index,
         help="Material for the main concrete polygon. This is the concrete material used by PMM analysis.",
-        key="section_primary_concrete_material_name",
+        key="active_concrete_material_name",
     )
     primary_material = material_map[selected_primary]
     st.session_state["active_concrete_material_name"] = selected_primary
@@ -324,12 +326,14 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
     if _is_parametric_plank_girder(preset):
         deck_name = st.session_state.get("deck_topping_material_name", DEFAULT_DECK_TOPPING_MATERIAL)
         deck_index = _material_select_index(material_names, deck_name, fallback_index=min(1, len(material_names) - 1))
+        if deck_name not in material_map:
+            st.session_state["deck_topping_material_name"] = material_names[deck_index]
         selected_deck = st.selectbox(
             "Deck / topping concrete material",
             material_names,
             index=deck_index,
             help="Used for Edeck, modular ratio n, and transformed-width metadata only in this milestone.",
-            key="section_deck_topping_material_name",
+            key="deck_topping_material_name",
         )
         deck_material = material_map[selected_deck]
         st.session_state["deck_topping_material_name"] = selected_deck

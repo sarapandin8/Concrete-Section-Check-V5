@@ -88,7 +88,7 @@ def _ensure_material_defaults() -> None:
         concrete_materials=st.session_state.get("concrete_materials", []),
         active_concrete_material_name=st.session_state.get("active_concrete_material_name"),
         deck_topping_material_name=st.session_state.get("deck_topping_material_name"),
-        preserve_existing_primary="concrete_materials" not in st.session_state,
+        preserve_existing_primary=not bool(st.session_state.get("concrete_materials", [])),
     )
     st.session_state["concrete_materials"] = concrete_library.materials
     st.session_state["active_concrete_material_name"] = concrete_library.active_concrete_material_name

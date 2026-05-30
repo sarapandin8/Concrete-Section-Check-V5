@@ -135,3 +135,12 @@ def test_plank_material_assignment_source_includes_transformed_width_metadata() 
     assert "DEFAULT_DECK_TOPPING_MATERIAL" in source
     assert "n = Edeck/Ebeam" in source
     assert "Btransformed = n x Be" in source
+
+
+def test_material_assignment_uses_canonical_session_keys() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert 'key="active_concrete_material_name"' in source
+    assert 'key="deck_topping_material_name"' in source
+    assert 'key="section_primary_concrete_material_name"' not in source
+    assert 'key="section_deck_topping_material_name"' not in source

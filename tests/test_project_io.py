@@ -381,3 +381,17 @@ def test_stress_check_point_dataframe_round_trip_preserves_metadata() -> None:
     assert round_trip[1].active is False
     assert round_trip[1].include_in_governing is False
     assert round_trip[1].note == "stored inactive point"
+
+
+def test_session_state_with_empty_concrete_materials_keeps_existing_primary() -> None:
+    session_state = {
+        "concrete_material": ConcreteMaterial(name="Session Legacy C35", fc_MPa=35.0, beta1=0.80),
+        "concrete_materials": [],
+    }
+
+    project = project_from_session_state(session_state)
+
+    assert project.concrete_material.name == "Session Legacy C35"
+    assert project.concrete_material.fc_MPa == pytest.approx(35.0)
+    assert project.active_concrete_material_name == "Session Legacy C35"
+    assert DEFAULT_PRIMARY_CONCRETE_MATERIAL in {material.name for material in project.concrete_materials}

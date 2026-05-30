@@ -158,3 +158,19 @@ def test_loading_old_project_without_materials_does_not_crash() -> None:
     assert loaded.concrete_material.fc_MPa > 0
     assert loaded.rebar_materials == []
     assert loaded.prestress_materials == []
+
+
+def test_empty_material_library_preserves_existing_singleton_primary() -> None:
+    old_material = ConcreteMaterial(name="Legacy Empty List C35", fc_MPa=35.0, beta1=aci_beta1(35.0))
+    library_state = ensure_concrete_material_library(
+        concrete_material=old_material,
+        concrete_materials=[],
+        active_concrete_material_name=None,
+        deck_topping_material_name=None,
+        preserve_existing_primary=False,
+    )
+
+    assert library_state.active_material.name == "Legacy Empty List C35"
+    assert library_state.active_material.fc_MPa == pytest.approx(35.0)
+    assert DEFAULT_PRIMARY_CONCRETE_MATERIAL in {material.name for material in library_state.materials}
+    assert DEFAULT_DECK_TOPPING_MATERIAL in {material.name for material in library_state.materials}

@@ -99,7 +99,10 @@ def ensure_concrete_material_library(
         else None
     )
 
-    if not materials and existing_primary is not None and preserve_existing_primary:
+    # Preserve an existing singleton concrete material whenever the library is empty.
+    # This protects legacy projects/sessions that carry project.concrete_material but
+    # have an empty concrete_materials list from being silently converted to C45_PRECAST.
+    if not materials and existing_primary is not None:
         materials.append(existing_primary)
 
     for default_material in default_concrete_materials():

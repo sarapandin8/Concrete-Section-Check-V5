@@ -107,10 +107,11 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     if prestress_table_metadata:
         metadata["prestress_table_metadata"] = prestress_table_metadata
 
-    preserve_existing_primary = "concrete_materials" not in session_state if hasattr(session_state, "__contains__") else True
+    concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
+    preserve_existing_primary = not bool(concrete_materials_value)
     concrete_library = ensure_concrete_material_library(
         concrete_material=_get_session_value(session_state, "concrete_material", c45_precast_material()),
-        concrete_materials=_coerce_list(_get_session_value(session_state, "concrete_materials", [])),
+        concrete_materials=concrete_materials_value,
         active_concrete_material_name=_get_session_value(session_state, "active_concrete_material_name", None),
         deck_topping_material_name=_get_session_value(session_state, "deck_topping_material_name", None),
         preserve_existing_primary=preserve_existing_primary,

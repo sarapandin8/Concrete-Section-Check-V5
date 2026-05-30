@@ -60,8 +60,27 @@ def c35_topping_material() -> ConcreteMaterial:
     )
 
 
+def concrete_grade_material(fc_MPa: float) -> ConcreteMaterial:
+    """Return a standard normal-weight concrete grade material."""
+    grade = int(fc_MPa) if float(fc_MPa).is_integer() else fc_MPa
+    return ConcreteMaterial(
+        name=f"C{grade}",
+        fc_MPa=float(fc_MPa),
+        density_kg_m3=2400.0,
+        ecu=0.003,
+        beta1=None,
+        Ec_method=CONCRETE_EC_METHOD_ACI,
+        Ec_MPa=None,
+        note=f"Normal-weight concrete, f'c = {float(fc_MPa):g} MPa",
+    )
+
+
+def standard_concrete_grade_materials() -> list[ConcreteMaterial]:
+    return [concrete_grade_material(fc) for fc in (28.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0)]
+
+
 def default_concrete_materials() -> list[ConcreteMaterial]:
-    return [c45_precast_material(), c35_topping_material()]
+    return [c45_precast_material(), c35_topping_material(), *standard_concrete_grade_materials()]
 
 
 def concrete_materials_by_name(materials: Iterable[ConcreteMaterial]) -> dict[str, ConcreteMaterial]:

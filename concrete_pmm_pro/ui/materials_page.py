@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,27 @@ def _optional_float(value: Any) -> float | None:
         return None
     parsed = float(value)
     return parsed if parsed > 0 else None
+
+
+def _infer_fc_from_material_id(name: str) -> float | None:
+    """Infer f'c from simple grade IDs such as C40 or C45.5."""
+    match = re.fullmatch(r"C\s*(\d+(?:\.\d+)?)", name.strip(), flags=re.IGNORECASE)
+    if not match:
+        return None
+    fc = float(match.group(1))
+    return fc if fc > 0 else None
+
+
+def _default_concrete_row_value(column: str, name: str) -> float | str | None:
+    if column == "fc_MPa":
+        return _infer_fc_from_material_id(name)
+    if column == "ecu":
+        return 0.003
+    if column == "density_kg_m3":
+        return 2400.0
+    if column == "Ec_method":
+        return "ACI auto"
+    return None
 
 
 def _bool_from_value(value: Any) -> bool:
@@ -112,46 +134,92 @@ def _concrete_materials_dataframe(materials: list[ConcreteMaterial]) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-def _parse_concrete_materials(df: pd.DataFrame) -> tuple[list[ConcreteMaterial], list[str]]:
+def _positive_float_from_cell(value: Any, *, row_number: int, label: str, errors: list[str]) -> tuple[float | None, bool]:
+    if _is_blank(value):
+        return None, True
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"Row {row_number}: {label} must be a positive number.")
+        return None, False
+    if parsed <= 0:
+        errors.append(f"Row {row_number}: {label} must be greater than 0.")
+        return None, False
+    return parsed, True
+
+
+def _parse_concrete_materials(df: pd.DataFrame) -> tuple[list[ConcreteMaterial], list[str], list[str]]:
     materials: list[ConcreteMaterial] = []
+    warnings: list[str] = []
     errors: list[str] = []
     seen_names: set[str] = set()
+    required_columns = ["name", "fc_MPa", "ecu", "density_kg_m3", "Ec_method", "Ec_MPa", "note"]
     for index, row in df.iterrows():
         row_number = int(index) + 1
-        if all(
-            _is_blank(row.get(column))
-            for column in ["name", "fc_MPa", "ecu", "density_kg_m3", "beta1", "Ec_MPa", "note"]
-        ):
+        if all(_is_blank(row.get(column)) for column in required_columns):
             continue
+
         name = str(row.get("name") or "").strip()
         if not name:
-            errors.append(f"Row {row_number}: Material ID / name must not be blank.")
+            # A blank dynamic row is a draft; do not block the page with a hard error.
+            if any(not _is_blank(row.get(column)) for column in required_columns if column != "name"):
+                warnings.append(f"Row {row_number}: draft material ignored until Material ID is entered.")
             continue
         if name in seen_names:
-            errors.append(f"Row {row_number}: duplicate concrete Material ID '{name}'.")
+            warnings.append(f"Row {row_number}: duplicate Material ID '{name}' was ignored; material IDs must be unique.")
             continue
         seen_names.add(name)
-        ec_method = str(row.get("Ec_method") or "ACI auto").strip()
-        ec_override = _optional_float(row.get("Ec_MPa"))
-        if ec_method == "Manual" and ec_override is None:
-            errors.append(f"Row {row_number}: Manual Ec_MPa must be positive.")
+
+        fc_value, fc_ok = _positive_float_from_cell(row.get("fc_MPa"), row_number=row_number, label="f'c", errors=errors)
+        ecu_value, ecu_ok = _positive_float_from_cell(row.get("ecu"), row_number=row_number, label="ecu", errors=errors)
+        density_value, density_ok = _positive_float_from_cell(
+            row.get("density_kg_m3"), row_number=row_number, label="density_kg_m3", errors=errors
+        )
+        beta1_value, beta1_ok = _positive_float_from_cell(row.get("beta1"), row_number=row_number, label="beta1", errors=errors)
+        ec_override, ec_ok = _positive_float_from_cell(row.get("Ec_MPa"), row_number=row_number, label="Manual Ec_MPa", errors=errors)
+        if not all((fc_ok, ecu_ok, density_ok, beta1_ok, ec_ok)):
             continue
+
+        fc_value = fc_value or _default_concrete_row_value("fc_MPa", name)
+        ecu_value = ecu_value or _default_concrete_row_value("ecu", name)
+        density_value = density_value or _default_concrete_row_value("density_kg_m3", name)
+        ec_method_raw = row.get("Ec_method")
+        ec_method = str(ec_method_raw or _default_concrete_row_value("Ec_method", name) or "ACI auto").strip()
+        if ec_method not in CONCRETE_EC_METHOD_OPTIONS:
+            ec_method = "ACI auto"
+
+        if fc_value is None:
+            warnings.append(
+                f"Row {row_number}: '{name}' is incomplete and was not saved. "
+                "Enter f'c, or use a grade-style ID such as C40 to auto-fill defaults."
+            )
+            continue
+        if ecu_value is None or density_value is None:
+            warnings.append(
+                f"Row {row_number}: '{name}' is incomplete and was not saved. "
+                "ecu and density must be positive values."
+            )
+            continue
+        if ec_method == "Manual" and ec_override is None:
+            warnings.append(f"Row {row_number}: '{name}' uses Manual Ec but no positive Manual Ec_MPa was entered.")
+            continue
+
         try:
             materials.append(
                 ConcreteMaterial(
                     name=name,
-                    fc_MPa=float(row.get("fc_MPa")),
-                    ecu=float(row.get("ecu")),
-                    density_kg_m3=float(row.get("density_kg_m3")),
-                    beta1=_optional_float(row.get("beta1")),
-                    Ec_method=ec_method if ec_method in CONCRETE_EC_METHOD_OPTIONS else "ACI auto",
+                    fc_MPa=float(fc_value),
+                    ecu=float(ecu_value),
+                    density_kg_m3=float(density_value),
+                    beta1=beta1_value,
+                    Ec_method=ec_method,
                     Ec_MPa=ec_override,
                     note=None if _is_blank(row.get("note")) else str(row.get("note")),
                 )
             )
         except (TypeError, ValueError, ValidationError) as exc:
             errors.append(f"Row {row_number}: invalid concrete material ({exc}).")
-    return materials, errors
+    return materials, warnings, errors
 
 
 def _render_concrete_section() -> None:
@@ -180,7 +248,9 @@ def _render_concrete_section() -> None:
         },
         key="concrete_materials_editor",
     )
-    materials, errors = _parse_concrete_materials(edited_df)
+    materials, warnings, errors = _parse_concrete_materials(edited_df)
+    for warning in warnings:
+        st.warning(warning)
     if errors:
         for error in errors:
             st.error(error)

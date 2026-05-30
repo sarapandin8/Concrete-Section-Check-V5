@@ -49,6 +49,19 @@ def test_default_concrete_material_library_contains_precast_and_topping() -> Non
     assert materials[DEFAULT_DECK_TOPPING_MATERIAL].effective_Ec_MPa == pytest.approx(27805.6, abs=0.1)
 
 
+
+
+def test_default_concrete_material_library_contains_standard_grades() -> None:
+    materials = {material.name: material for material in default_concrete_materials()}
+
+    for fc in (28, 30, 35, 40, 45, 50, 55, 60):
+        material = materials[f"C{fc}"]
+        assert material.fc_MPa == pytest.approx(float(fc))
+        assert material.density_kg_m3 == pytest.approx(2400.0)
+        assert material.ecu == pytest.approx(0.003)
+        assert material.effective_Ec_MPa == pytest.approx(aci_concrete_ec_mpa(float(fc)), abs=0.1)
+
+
 def test_rebar_material_creation() -> None:
     material = RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)
 

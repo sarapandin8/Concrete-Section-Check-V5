@@ -273,3 +273,46 @@ def test_build_geometry_ignores_non_geometry_composite_metadata() -> None:
     assert geometry is not None
     assert geometry.name == "Parametric Plank Girder — Interior"
     assert len(dimensions) > 0
+
+
+def test_composite1c_enables_i_girder_composite_metadata_display() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "SECTION.COMPOSITE1C" in source
+    assert "Composite Deck / Topping Metadata" in source
+    assert "parametric_i_girder_Tslab_mm" in source or "Tslab Deck/topping thickness" in source
+    assert "_render_i_girder_composite_metadata_inputs" in source
+
+
+def test_i_girder_is_composite_capable_but_geometry_ignores_metadata() -> None:
+    i_girder = preset_by_key("parametric_i_girder")
+    assert section_builder._is_composite_capable_preset(i_girder)
+
+    params = {
+        "B1_mm": 800.0,
+        "B2_mm": 500.0,
+        "D1_mm": 1400.0,
+        "D2_mm": 200.0,
+        "D3_mm": 150.0,
+        "D5_mm": 250.0,
+        "D6_mm": 150.0,
+        "T1_mm": 200.0,
+        "T2_mm": 200.0,
+        "C1_mm": 0.0,
+        "Tslab_mm": 200.0,
+        "Be_mm": 2000.0,
+        "Ebeam_MPa": 31529.0,
+        "Edeck_MPa": 27806.0,
+        "girder_length_mm": 30000.0,
+        "composite_enabled": True,
+    }
+
+    geometry, dimensions, validation = section_builder._build_geometry(i_girder, params)
+
+    assert validation.is_valid
+    assert validation.errors == []
+    assert geometry is not None
+    assert geometry.name == "Parametric I-Girder"
+    assert len(dimensions) > 0
+    assert "Tslab_mm" not in geometry.metadata["parameters"]
+    assert "Be_mm" not in geometry.metadata["parameters"]

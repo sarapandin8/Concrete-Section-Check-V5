@@ -110,6 +110,32 @@ def test_interior_plank_composite_calculation_is_separate_from_gross_properties(
     assert composite.transformed_width_mm == pytest.approx(params["Be_mm"] * params["Edeck_MPa"] / params["Ebeam_MPa"])
 
 
+
+
+def test_i_girder_composite_calculation_is_display_only_and_separate_from_gross_properties():
+    params = {
+        "B1_mm": 800.0,
+        "B2_mm": 500.0,
+        "D1_mm": 1400.0,
+        "D2_mm": 200.0,
+        "D3_mm": 150.0,
+        "D5_mm": 250.0,
+        "D6_mm": 150.0,
+        "T1_mm": 200.0,
+        "T2_mm": 200.0,
+        "C1_mm": 0.0,
+    }
+    geometry = default_registry.geometry("parametric_i_girder")(**params)
+    gross = summarize_geometry(geometry)
+    deck = CompositeDeckInput(True, Tslab_mm=200.0, Be_mm=2000.0, Ebeam_MPa=31529.0, Edeck_MPa=27806.0)
+    composite = calculate_composite_transformed_section_from_geometry(geometry, deck)
+
+    assert composite.area_mm2 > gross.area_mm2
+    assert composite.top_fiber_y_mm == pytest.approx(gross.y_max_mm + deck.Tslab_mm)
+    assert composite.bottom_fiber_y_mm == pytest.approx(gross.y_min_mm)
+    assert composite.modular_ratio == pytest.approx(deck.Edeck_MPa / deck.Ebeam_MPa)
+    assert composite.transformed_width_mm == pytest.approx(deck.Be_mm * deck.Edeck_MPa / deck.Ebeam_MPa)
+
 def test_composite_validation_suite_passes():
     results = validate_composite_section_properties()
     assert results

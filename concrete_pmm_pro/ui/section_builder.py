@@ -329,10 +329,10 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
         "primary_material_name": selected_primary,
         "primary_fc_MPa": primary_material.fc_MPa,
         "Ebeam_MPa": primary_material.effective_Ec_MPa,
-        "is_composite_applicable": _is_parametric_plank_girder(preset),
+        "is_composite_applicable": _is_composite_capable_preset(preset),
     }
 
-    if _is_parametric_plank_girder(preset):
+    if _is_composite_capable_preset(preset):
         deck_name = st.session_state.get("deck_topping_material_name", DEFAULT_DECK_TOPPING_MATERIAL)
         deck_index = _material_select_index(material_names, deck_name, fallback_index=min(1, len(material_names) - 1))
         if deck_name not in material_map:
@@ -446,11 +446,11 @@ def _geometry_parameter_names(preset: dict[str, Any]) -> set[str]:
 def _is_composite_capable_preset(preset: dict[str, Any]) -> bool:
     """Return whether the current preset has explicit deck/topping metadata."""
 
-    # Conservative scope for SECTION.COMPOSITE1B: Plank Girder already has
-    # Tslab/Be/Ebeam/Edeck metadata.  I-Girder deck/topping metadata should be
-    # added in a future, explicitly scoped milestone before enabling composite
-    # display for that preset.
-    return _is_parametric_plank_girder(preset)
+    # SECTION.COMPOSITE1C enables display-only transformed composite properties
+    # for the parametric I-Girder as well as Plank Girder presets.  The deck
+    # metadata is still explicit UI input and remains separate from gross
+    # section properties and all PMM/prestress solver paths.
+    return _is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)
 
 
 _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
@@ -554,6 +554,108 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
         st.markdown("##### Member Workflow Guidance")
         st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
 
+def _render_metadata_number_input(
+    *,
+    name: str,
+    label: str,
+    preset_key: str,
+    default: float,
+    min_value: float,
+    max_value: float,
+    step: float,
+    help_text: str,
+) -> float:
+    """Render a metadata input that is intentionally not a geometry parameter."""
+
+    return float(
+        st.number_input(
+            label,
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=float(default),
+            step=float(step),
+            help=help_text,
+            key=f"{preset_key}_{name}",
+        )
+    )
+
+
+def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[str, float]:
+    """Render explicit deck/topping metadata for the parametric I-Girder.
+
+    These values are not part of the I-Girder polygon generator. They are
+    stored in section_parameters only for display-only transformed composite
+    properties and future Beam/Girder SLS workflows.
+    """
+
+    preset_key = str(preset.get("key", "parametric_i_girder"))
+    st.markdown("##### Composite Deck / Topping Metadata")
+    st.markdown(
+        '<div class="cpmm-section-note">I-Girder deck/topping metadata is explicit and display-only in SECTION.COMPOSITE1C. '
+        "It is not merged into the precast polygon and is not used by PMM, prestress, or report logic.</div>",
+        unsafe_allow_html=True,
+    )
+    columns = st.columns(2)
+    with columns[0]:
+        tslab = _render_metadata_number_input(
+            name="Tslab_mm",
+            label="Tslab Deck/topping thickness (mm)",
+            preset_key=preset_key,
+            default=200.0,
+            min_value=0.0,
+            max_value=3000.0,
+            step=5.0,
+            help_text="Composite deck/topping thickness metadata. Not merged into the I-Girder polygon.",
+        )
+        girder_length = _render_metadata_number_input(
+            name="girder_length_mm",
+            label="Girder length / span (mm)",
+            preset_key=preset_key,
+            default=30000.0,
+            min_value=1.0,
+            max_value=1000000.0,
+            step=100.0,
+            help_text="Girder length metadata for future AASHTO effective width and Beam/Girder checks.",
+        )
+    with columns[1]:
+        be = _render_metadata_number_input(
+            name="Be_mm",
+            label="Be Effective slab width (mm)",
+            preset_key=preset_key,
+            default=2000.0,
+            min_value=1.0,
+            max_value=50000.0,
+            step=10.0,
+            help_text="Manual effective width for current milestone. AASHTO auto calculation is planned.",
+        )
+    return {"Tslab_mm": tslab, "Be_mm": be, "girder_length_mm": girder_length}
+
+
+def _render_composite_metadata_panel(params: dict[str, Any], composite_active: bool) -> None:
+    """Show common calculated composite metadata for composite-capable girders."""
+
+    tslab = float(params.get("Tslab_mm", 0.0))
+    be = float(params.get("Be_mm", 0.0))
+    ebeam = float(params.get("Ebeam_MPa", 0.0))
+    edeck = float(params.get("Edeck_MPa", 0.0))
+    n_ratio = edeck / ebeam if ebeam > 0 else 0.0
+    st.markdown("##### Calculated Composite Metadata")
+    st.markdown(
+        _kv_panel_html(
+            [
+                ("Composite transformed properties", "Active" if composite_active else "Not active"),
+                ("Tslab", f"{_format_float(tslab, 1)} mm"),
+                ("Be", f"{_format_float(be, 1)} mm"),
+                ("Ebeam", _format_ec(ebeam)),
+                ("Edeck", _format_ec(edeck)),
+                ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
+                ("Btransformed = n x Be", f"{_format_float(n_ratio * be, 1)} mm"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
     """Show concise engineering-oriented checks for the parametric I-girder preset."""
     b1 = float(params.get("B1_mm", 0.0))
@@ -578,7 +680,7 @@ def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
     st.markdown("##### I-Girder Dimension QA")
     st.markdown(
         '<div class="cpmm-section-note">Parametric I-Girder is symmetric about the vertical centerline. '
-        "The generated polygon is analysis-ready for ULS PMM; SLS / Beam-Girder assignment are planned workflow extensions.</div>",
+        "Composite deck/topping metadata can be defined below for transformed-section display, but the generated polygon remains precast-only.</div>",
         unsafe_allow_html=True,
     )
     st.markdown(_property_strip_html(checks), unsafe_allow_html=True)
@@ -790,14 +892,12 @@ def _render_section_definition_panel(
                 else:
                     st.warning(f"Unsupported parameter type: {parameter.get('type')}")
 
-        if _is_parametric_plank_girder(preset):
+        if _is_composite_capable_preset(preset):
             params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
-            be = float(params.get("Be_mm", 0.0))
-            tslab = float(params.get("Tslab_mm", 0.0))
-            ebeam = float(params["Ebeam_MPa"])
-            edeck = float(params["Edeck_MPa"])
-            n_ratio = edeck / ebeam if ebeam > 0 else 0.0
+            if _is_parametric_i_girder(preset):
+                params.update(_render_i_girder_composite_metadata_inputs(preset))
+
             composite_key = f"{preset['key']}_composite_enabled"
             params["composite_enabled"] = bool(
                 st.checkbox(
@@ -815,21 +915,7 @@ def _render_section_definition_panel(
                 params,
                 member_type=_analysis_mode_from_session_state().member_type,
             )
-            st.markdown("##### Calculated Composite Metadata")
-            st.markdown(
-                _kv_panel_html(
-                    [
-                        ("Composite transformed properties", "Active" if composite_active else "Not active"),
-                        ("Tslab", f"{_format_float(tslab, 1)} mm"),
-                        ("Be", f"{_format_float(be, 1)} mm"),
-                        ("Ebeam", _format_ec(ebeam)),
-                        ("Edeck", _format_ec(edeck)),
-                        ("n = Edeck/Ebeam", _format_float(n_ratio, 3)),
-                        ("Btransformed = n x Be", f"{_format_float(n_ratio * be, 1)} mm"),
-                    ]
-                ),
-                unsafe_allow_html=True,
-            )
+            _render_composite_metadata_panel(params, composite_active)
 
         if _is_parametric_i_girder(preset):
             _render_parametric_i_girder_dimension_qa(params)
@@ -1060,7 +1146,7 @@ def _render_section_properties_summary(
     x_mid_offset = getattr(summary, "centroid_x_offset_from_mid_" + "width" + "_mm")
     composite_detail = (
         "Tslab/Be/n/Btransformed excluded from gross A/I/Z"
-        if _is_parametric_plank_girder(preset)
+        if _is_composite_capable_preset(preset)
         else "Concrete polygon only; no transformed deck/slab included"
     )
 

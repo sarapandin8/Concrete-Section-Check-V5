@@ -9,6 +9,7 @@ from concrete_pmm_pro.geometry.composite import (
     composite_deck_input_from_parameters,
     composite_deck_is_active,
 )
+from concrete_pmm_pro.geometry import default_registry
 from concrete_pmm_pro.geometry.generators import rectangle
 from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.validation.models import ValidationResult, boolean_validation_result, numeric_validation_result
@@ -89,9 +90,77 @@ def validate_modular_ratio_and_width() -> list[ValidationResult]:
     ]
 
 
+
+
+def validate_i_girder_composite_display_kernel() -> list[ValidationResult]:
+    """Protect I-Girder transformed-section display without touching solver paths."""
+
+    params = {
+        "B1_mm": 800.0,
+        "B2_mm": 500.0,
+        "D1_mm": 1400.0,
+        "D2_mm": 200.0,
+        "D3_mm": 150.0,
+        "D5_mm": 250.0,
+        "D6_mm": 150.0,
+        "T1_mm": 200.0,
+        "T2_mm": 200.0,
+        "C1_mm": 0.0,
+    }
+    geometry = default_registry.geometry("parametric_i_girder")(**params)
+    deck_params = {
+        "composite_enabled": True,
+        "Tslab_mm": 200.0,
+        "Be_mm": 2000.0,
+        "Ebeam_MPa": 31529.0,
+        "Edeck_MPa": 27806.0,
+    }
+    deck = composite_deck_input_from_parameters(deck_params, member_type="beam_girder")
+    composite = calculate_composite_transformed_section_from_geometry(geometry, deck)
+    return [
+        boolean_validation_result(
+            case_id="COMP.IGIRDER.ACTIVE",
+            category=CATEGORY,
+            title="I-Girder composite metadata activates only with explicit valid deck/topping input",
+            passed=deck.enabled and composite.active,
+            expected=True,
+            actual={"deck_enabled": deck.enabled, "composite_active": composite.active},
+        ),
+        boolean_validation_result(
+            case_id="COMP.IGIRDER.AREA_INCREASE",
+            category=CATEGORY,
+            title="I-Girder transformed composite area exceeds precast gross area",
+            passed=composite.area_mm2 > composite.precast_area_mm2,
+            expected="A_tr > A_precast",
+            actual={"A_tr": composite.area_mm2, "A_precast": composite.precast_area_mm2},
+            units="mm^2",
+        ),
+        numeric_validation_result(
+            case_id="COMP.IGIRDER.TOP_FIBER",
+            category=CATEGORY,
+            title="I-Girder composite top fiber includes deck/topping thickness",
+            expected=700.0 + deck_params["Tslab_mm"],
+            actual=composite.top_fiber_y_mm,
+            abs_tolerance=1.0e-9,
+            units="mm",
+            engineering_note="Default I-Girder D1=1400 has precast top fiber at +700 mm.",
+        ),
+        numeric_validation_result(
+            case_id="COMP.IGIRDER.BTR",
+            category=CATEGORY,
+            title="I-Girder transformed width equals n x Be",
+            expected=deck_params["Be_mm"] * deck_params["Edeck_MPa"] / deck_params["Ebeam_MPa"],
+            actual=composite.transformed_width_mm,
+            abs_tolerance=1.0e-9,
+            units="mm",
+        ),
+    ]
+
+
 def validate_composite_section_properties() -> list[ValidationResult]:
     return [
         *validate_rectangle_composite_hand_check(),
         *validate_activation_guards(),
         *validate_modular_ratio_and_width(),
+        *validate_i_girder_composite_display_kernel(),
     ]

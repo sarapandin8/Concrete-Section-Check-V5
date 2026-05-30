@@ -290,3 +290,7 @@ This reduces duplicate PASS / governing / D/C messaging and clarifies that the c
 ## SECTION.PRESET1A — Parametric I-Girder Geometry
 
 A parametric bridge I-Girder section preset has been added as an analysis-ready geometry generator. The first version supports symmetric solid I-Girder sections using B1/B2 flange widths, D1 total depth, D2/D5 flange thicknesses, D3/D6 haunch depths, T1/T2 web widths, and optional C1 outside chamfer. The preset validates basic geometric compatibility before storing the section for downstream analysis.
+
+## UI.SECTION.PRESET1.1 — Simplified section preset selection
+
+The section preset UI was simplified so users choose the actual section type directly. Category remains metadata for organization only; this reduces confusion when selecting parametric girder presets and does not change geometry generation, solver equations, or PMM analysis behavior.

@@ -595,3 +595,7 @@ The Analysis workspace decision area now avoids duplicate status storytelling be
 ### SECTION.PRESET1A — Parametric I-Girder Geometry
 
 Adds a bridge-oriented parametric I-Girder preset under the Girder category. The preset uses mm units and the following user-facing variables: B1, B2, D1, D2, D3, D5, D6, T1, T2, and C1. The generated geometry is a symmetric analysis-ready concrete polygon with validation checks for web/flange/haunch dimensions before downstream PMM or future girder analysis.
+
+### UI.SECTION.PRESET1.1 — Simplified section preset selection
+
+The Section Builder now uses a direct **Section Type / Preset** selector so parametric girder presets such as **Parametric I-Girder** are visible without first selecting a category. Geometry family/category is still shown as metadata and is available in an optional browse expander.

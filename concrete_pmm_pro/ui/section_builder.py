@@ -300,21 +300,44 @@ def _render_section_definition_panel(
 
         st.markdown("##### Section Type")
         loaded_preset_key = st.session_state.get("section_preset_key")
-        loaded_category = next((preset.get("category") for preset in presets if preset.get("key") == loaded_preset_key), None)
-        category_index = categories.index(loaded_category) if loaded_category in categories else 0
-        selected_category = st.selectbox("Category", categories, index=category_index)
-        category_presets = [preset for preset in presets if preset.get("category") == selected_category]
-        if not category_presets:
-            st.info("No section presets are available in this category yet.")
-            return None
 
-        labels = [preset["display_name"] for preset in category_presets]
-        loaded_label = next((preset["display_name"] for preset in category_presets if preset.get("key") == loaded_preset_key), None)
-        label_index = labels.index(loaded_label) if loaded_label in labels else 0
-        st.markdown("##### Preset / Labeling")
-        selected_label = st.selectbox("Section preset", labels, index=label_index)
-        preset = category_presets[labels.index(selected_label)]
+        preset_options = [
+            f"{preset['display_name']}  ·  {preset.get('category', 'General')}"
+            for preset in presets
+        ]
+        preset_keys = [str(preset.get("key", "")) for preset in presets]
+        preset_index = preset_keys.index(str(loaded_preset_key)) if str(loaded_preset_key) in preset_keys else 0
 
+        selected_option = st.selectbox(
+            "Section Type / Preset",
+            preset_options,
+            index=preset_index,
+            help=(
+                "Select the actual section geometry directly. The geometry family/category is shown "
+                "after the dot for reference only."
+            ),
+        )
+        preset = presets[preset_options.index(selected_option)]
+        selected_category = str(preset.get("category", "General"))
+
+        st.caption(
+            f"Geometry family: {selected_category} · "
+            "Select a parametric preset, then edit the dimensions below."
+        )
+
+        with st.expander("Browse by geometry family", expanded=False):
+            st.caption("Optional helper for filtering presets by family. The direct selector above is the primary control.")
+            loaded_category = preset.get("category")
+            category_index = categories.index(loaded_category) if loaded_category in categories else 0
+            browse_category = st.selectbox("Section Category", categories, index=category_index)
+            family_presets = [item for item in presets if item.get("category") == browse_category]
+            if family_presets:
+                family_labels = [item["display_name"] for item in family_presets]
+                st.caption("Available in this family: " + ", ".join(family_labels))
+            else:
+                st.caption("No presets are available in this family yet.")
+
+        st.markdown("##### Dimension Labels")
         label_mode_label = st.selectbox("Dimension label mode", ["Symbol + Value", "Symbol only", "Value only"], index=0)
         label_mode = {"Symbol + Value": "symbol_value", "Symbol only": "symbol", "Value only": "value"}[label_mode_label]
 

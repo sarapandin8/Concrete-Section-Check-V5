@@ -67,6 +67,20 @@ def test_hole_outside_polygon() -> None:
     assert any("inside" in error.lower() for error in result.errors)
 
 
+def test_geometry_summary_fiber_distance_convention_accessors() -> None:
+    geometry = rectangle(width_mm=400, height_mm=600)
+    summary = summarize_geometry(geometry)
+
+    assert summary.depth_mm == 600
+    assert summary.width_mm == 400
+    assert summary.centroid_y_from_bottom_mm == 300
+    assert summary.centroid_y_from_top_mm == 300
+    assert summary.top_fiber_distance_mm == 300
+    assert summary.bottom_fiber_distance_mm == 300
+    assert summary.centroid_y_offset_from_mid_depth_mm == 0
+
+
+
 def pytest_approx(value: float, rel: float) -> object:
     import pytest
 

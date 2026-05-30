@@ -237,6 +237,18 @@ def _format_float(value: float, decimals: int = 1) -> str:
     return f"{value:,.{decimals}f}"
 
 
+def _format_optional_mm(value: float | None, decimals: int = 1) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,.{decimals}f} mm"
+
+
+def _signed_mm(value: float | None, decimals: int = 1) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+,.{decimals}f} mm"
+
+
 def _format_parameter_value(value: Any) -> str:
     if isinstance(value, float):
         return _format_float(value, 2).rstrip("0").rstrip(".")
@@ -565,14 +577,20 @@ def _render_section_properties_summary(
     geometry: Any | None,
     validation: ValidationResult,
 ) -> None:
-    st.subheader("Section Properties")
+    st.subheader("Precast Gross Section Properties")
+    st.markdown(
+        '<div class="cpmm-section-note">A, centroid, Ix, Iy, fiber distances, and section modulus shown here are based on the '
+        'generated gross concrete polygon only. Composite slab/topping properties are metadata at this stage and are not included '
+        'in the section properties below.</div>',
+        unsafe_allow_html=True,
+    )
 
     if geometry is None or not validation.is_valid:
         st.markdown(
             _property_strip_html(
                 [
-                    SectionMetric("Gross Area", "N/A"),
-                    SectionMetric("Centroid", "N/A"),
+                    SectionMetric("Gross Area", "N/A", "Gross concrete polygon only"),
+                    SectionMetric("Centroid", "N/A", "yb is measured upward from bottom fiber"),
                     SectionMetric("Ix", "Not calculated"),
                     SectionMetric("Iy", "Not calculated"),
                     SectionMetric("Holes / Voids", "N/A"),
@@ -588,22 +606,40 @@ def _render_section_properties_summary(
         return
 
     summary = summarize_geometry(geometry)
+    c_top = summary.top_fiber_distance_mm
+    c_bottom = summary.bottom_fiber_distance_mm
+    yb = summary.centroid_y_from_bottom_mm
+    y_mid_offset = summary.centroid_y_offset_from_mid_depth_mm
+    x_mid_offset = summary.centroid_x_offset_from_mid_width_mm
+    composite_detail = (
+        "Tslab/Be/n/Btransformed excluded from gross A/I/Z"
+        if _is_parametric_plank_girder(preset)
+        else "Concrete polygon only; no transformed deck/slab included"
+    )
+
     st.markdown(
         _property_strip_html(
             [
-                SectionMetric("Gross Area", f"{summary.area_mm2:,.1f} mm^2"),
+                SectionMetric("Gross Area", f"{summary.area_mm2:,.1f} mm^2", "Precast/gross concrete polygon only"),
                 SectionMetric(
-                    "Centroid",
-                    f"x {_format_float(summary.centroid_x_mm, 2)} / y {_format_float(summary.centroid_y_mm, 2)} mm",
+                    "Centroid x",
+                    _format_optional_mm(summary.centroid_x_mm, 2),
+                    f"offset from mid-width = {_signed_mm(x_mid_offset, 2)}",
                 ),
-                SectionMetric("Ix", _inertia_display(summary.ix_display)),
-                SectionMetric("Iy", _inertia_display(summary.iy_display)),
+                SectionMetric(
+                    "Centroid yb",
+                    _format_optional_mm(yb, 2),
+                    f"from bottom fiber; mid-depth offset = {_signed_mm(y_mid_offset, 2)}",
+                ),
+                SectionMetric("Ix", _inertia_display(summary.ix_display), "about centroidal x-axis"),
+                SectionMetric("Iy", _inertia_display(summary.iy_display), "about centroidal y-axis"),
                 SectionMetric(
                     "Fiber distances",
-                    f"top {_format_float((summary.y_max_mm or 0.0) - summary.centroid_y_mm, 1)} / "
-                    f"bottom {_format_float(summary.centroid_y_mm - (summary.y_min_mm or 0.0), 1)} mm",
+                    f"ctop {_format_optional_mm(c_top, 1)} / cbottom {_format_optional_mm(c_bottom, 1)}",
+                    "Used directly for S = I / c stress checks",
                 ),
-                SectionMetric("Z top / bottom", f"{summary.z_top_display} / {summary.z_bottom_display}"),
+                SectionMetric("Z top / bottom", f"{summary.z_top_display} / {summary.z_bottom_display}", "gross section modulus"),
+                SectionMetric("Composite slab", "Excluded", composite_detail, "info"),
                 SectionMetric("Holes / Voids", f"{len(geometry.holes):,}"),
                 SectionMetric("Active Preset", preset["display_name"]),
                 SectionMetric("Category", str(preset.get("category", "N/A"))),
@@ -619,6 +655,26 @@ def _render_section_properties_summary(
         ),
         unsafe_allow_html=True,
     )
+
+    with st.expander("Section property convention", expanded=False):
+        st.markdown(
+            _kv_panel_html(
+                [
+                    ("Property basis", "Gross concrete / precast polygon only"),
+                    ("Composite status", "Tslab, Be, n, and Btransformed are not merged into A, centroid, Ix, Iy, or Z"),
+                    ("Coordinate y", "Positive upward in generated section coordinates"),
+                    ("Centroid yb", f"{_format_optional_mm(yb, 2)} measured from bottom fiber"),
+                    ("Mid-depth offset", _signed_mm(y_mid_offset, 2)),
+                    ("Top fiber distance ctop", _format_optional_mm(c_top, 2)),
+                    ("Bottom fiber distance cbottom", _format_optional_mm(c_bottom, 2)),
+                    ("Section modulus", "Ztop = Ix / ctop; Zbottom = Ix / cbottom"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+
+    if summary.warnings:
+        st.markdown(_message_list_html([f"PROPERTY WARNING: {warning}" for warning in summary.warnings]), unsafe_allow_html=True)
 
     with st.expander("Geometry Inputs", expanded=False):
         st.markdown(

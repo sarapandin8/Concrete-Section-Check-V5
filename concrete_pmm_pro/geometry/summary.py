@@ -60,6 +60,50 @@ class GeometrySummary:
     def z_bottom_display(self) -> str:
         return _engineering_display(self.z_bottom_mm3, "mm^3")
 
+    @property
+    def depth_mm(self) -> float | None:
+        if self.y_min_mm is None or self.y_max_mm is None:
+            return None
+        return self.y_max_mm - self.y_min_mm
+
+    @property
+    def width_mm(self) -> float | None:
+        if self.x_min_mm is None or self.x_max_mm is None:
+            return None
+        return self.x_max_mm - self.x_min_mm
+
+    @property
+    def centroid_y_from_bottom_mm(self) -> float | None:
+        if self.y_min_mm is None:
+            return None
+        return self.centroid_y_mm - self.y_min_mm
+
+    @property
+    def centroid_y_from_top_mm(self) -> float | None:
+        if self.y_max_mm is None:
+            return None
+        return self.y_max_mm - self.centroid_y_mm
+
+    @property
+    def centroid_y_offset_from_mid_depth_mm(self) -> float | None:
+        if self.y_min_mm is None or self.y_max_mm is None:
+            return None
+        return self.centroid_y_mm - 0.5 * (self.y_min_mm + self.y_max_mm)
+
+    @property
+    def top_fiber_distance_mm(self) -> float | None:
+        return self.centroid_y_from_top_mm
+
+    @property
+    def bottom_fiber_distance_mm(self) -> float | None:
+        return self.centroid_y_from_bottom_mm
+
+    @property
+    def centroid_x_offset_from_mid_width_mm(self) -> float | None:
+        if self.x_min_mm is None or self.x_max_mm is None:
+            return None
+        return self.centroid_x_mm - 0.5 * (self.x_min_mm + self.x_max_mm)
+
 
 def _engineering_display(value: float | None, unit: str) -> str:
     if value is None or not math.isfinite(value):

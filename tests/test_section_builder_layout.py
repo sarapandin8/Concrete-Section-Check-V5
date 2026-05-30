@@ -78,3 +78,17 @@ def test_section_builder_validation_summary_is_compact_source() -> None:
     assert "No validation errors" not in source
     assert "WARNING: none" not in source
     assert "_status_panel_html" in source
+
+
+def test_section_property_clarity_labels_are_present() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Precast Gross Section Properties" in source
+    assert "Composite slab/topping properties are metadata" in source
+    assert "Centroid yb" in source
+    assert "from bottom fiber" in source
+    assert "ctop" in source
+    assert "cbottom" in source
+    assert "Section property convention" in source
+    assert "Tslab, Be, n, and Btransformed are not merged" in source
+

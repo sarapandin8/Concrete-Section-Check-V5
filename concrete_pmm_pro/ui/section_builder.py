@@ -426,6 +426,68 @@ def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
 
+_COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
+_BEAM_GIRDER_SECTION_CATEGORIES = frozenset({"Girder", "Box Girder", "Custom"})
+
+
+def _section_categories_for_member_type(settings: AnalysisModeSettings) -> set[str] | None:
+    """Return the section preset categories allowed by the active member workflow.
+
+    General Section mode intentionally returns ``None`` so it can keep all
+    presets visible for advanced/custom engineering interpretation. Column/Pier
+    mode should not offer girder presets by default, and Beam/Girder mode
+    should not offer column-only presets by default. This is a UI-routing guard
+    only; it does not change geometry generation or solver behavior.
+    """
+
+    if settings.member_type == "column_pier_pmm":
+        return set(_COLUMN_PIER_SECTION_CATEGORIES)
+    if settings.member_type == "beam_girder":
+        return set(_BEAM_GIRDER_SECTION_CATEGORIES)
+    return None
+
+
+def _preset_matches_member_type(preset: dict[str, Any], settings: AnalysisModeSettings) -> bool:
+    """Return whether a section preset should be shown for the active workflow."""
+
+    allowed_categories = _section_categories_for_member_type(settings)
+    if allowed_categories is None:
+        return True
+    return str(preset.get("category", "General")) in allowed_categories
+
+
+def _filter_presets_for_member_type(
+    presets: list[dict[str, Any]], settings: AnalysisModeSettings
+) -> list[dict[str, Any]]:
+    """Filter section presets by active member workflow without changing presets."""
+
+    filtered = [preset for preset in presets if _preset_matches_member_type(preset, settings)]
+    return filtered or list(presets)
+
+
+def _categories_for_filtered_presets(
+    configured_categories: list[str], filtered_presets: list[dict[str, Any]]
+) -> list[str]:
+    """Keep the Section Category browser consistent with filtered presets."""
+
+    visible_preset_categories = {str(preset.get("category", "General")) for preset in filtered_presets}
+    categories = [category for category in configured_categories if category in visible_preset_categories]
+    for category in visible_preset_categories:
+        if category not in categories:
+            categories.append(category)
+    return categories or list(configured_categories)
+
+
+def _member_type_filter_description(settings: AnalysisModeSettings) -> str:
+    """Human-readable description of the active Section Type / Preset filter."""
+
+    allowed_categories = _section_categories_for_member_type(settings)
+    if allowed_categories is None:
+        return "All section presets are visible in General Section mode."
+    category_text = ", ".join(sorted(allowed_categories))
+    return f"Section Type / Preset is filtered to: {category_text}."
+
+
 
 def _analysis_mode_from_session_state() -> AnalysisModeSettings:
     value = st.session_state.get("analysis_mode_settings")
@@ -627,6 +689,10 @@ def _render_section_definition_panel(
     presets: list[dict[str, Any]],
     categories: list[str],
 ) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+    analysis_mode_settings = _analysis_mode_from_session_state()
+    available_presets = _filter_presets_for_member_type(presets, analysis_mode_settings)
+    available_categories = _categories_for_filtered_presets(categories, available_presets)
+
     with st.container(border=True):
         st.markdown("#### Section Definition")
         st.markdown(
@@ -635,10 +701,15 @@ def _render_section_definition_panel(
         )
 
         st.markdown("##### Section Type")
-        preset_keys, preset_map, label_map = _preset_maps(presets)
+        preset_keys, preset_map, label_map = _preset_maps(available_presets)
         if not preset_keys:
             st.error("No section presets are available.")
             return None
+
+        st.caption(
+            f"Active workflow: {analysis_mode_label(analysis_mode_settings)} · "
+            f"{_member_type_filter_description(analysis_mode_settings)}"
+        )
 
         selector_state_key = "section_preset_selector_key"
         selector_initial_key = _initial_preset_selector_key(preset_keys)
@@ -673,11 +744,14 @@ def _render_section_definition_panel(
         _render_member_type_section_guidance(preset)
 
         with st.expander("Browse by geometry family", expanded=False):
-            st.caption("Optional helper for filtering presets by family. The direct selector above is the primary control.")
+            st.caption(
+                "Optional helper for reviewing the section families available under the active member workflow. "
+                "The direct selector above is the primary control."
+            )
             loaded_category = preset.get("category")
-            category_index = categories.index(loaded_category) if loaded_category in categories else 0
-            browse_category = st.selectbox("Section Category", categories, index=category_index)
-            family_presets = [item for item in presets if item.get("category") == browse_category]
+            category_index = available_categories.index(loaded_category) if loaded_category in available_categories else 0
+            browse_category = st.selectbox("Section Category", available_categories, index=category_index)
+            family_presets = [item for item in available_presets if item.get("category") == browse_category]
             if family_presets:
                 family_labels = [item["display_name"] for item in family_presets]
                 st.caption("Available in this family: " + ", ".join(family_labels))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from concrete_pmm_pro.core.analysis import AnalysisModeSettings
 from concrete_pmm_pro.geometry.presets import preset_by_key
 from concrete_pmm_pro.ui import section_builder
 
@@ -153,3 +154,82 @@ def test_member_type_guidance_source_is_present_in_section_builder() -> None:
     assert "Beam/Girder mode is active" in source
     assert "Column / Pier / Wall / Pylon PMM" in source
     assert "MEMBER.TYPE1 routes the workflow only" in source
+
+
+def test_column_pier_member_type_filters_out_girder_presets() -> None:
+    rectangle = preset_by_key("rectangle")
+    circular_hollow = preset_by_key("circular_hollow")
+    i_girder = preset_by_key("parametric_i_girder")
+    box_girder = preset_by_key("single_cell_box_girder")
+    custom_preset = {"key": "custom_polygon", "display_name": "Custom Polygon", "category": "Custom"}
+
+    filtered = section_builder._filter_presets_for_member_type(
+        [rectangle, circular_hollow, i_girder, box_girder, custom_preset],
+        AnalysisModeSettings(member_type="column_pier_pmm"),
+    )
+    keys = {preset["key"] for preset in filtered}
+
+    assert "rectangle" in keys
+    assert "circular_hollow" in keys
+    assert "custom_polygon" in keys
+    assert "parametric_i_girder" not in keys
+    assert "single_cell_box_girder" not in keys
+
+
+def test_beam_girder_member_type_filters_out_column_basic_presets() -> None:
+    rectangle = preset_by_key("rectangle")
+    circular_hollow = preset_by_key("circular_hollow")
+    i_girder = preset_by_key("parametric_i_girder")
+    box_girder = preset_by_key("single_cell_box_girder")
+    custom_preset = {"key": "custom_polygon", "display_name": "Custom Polygon", "category": "Custom"}
+
+    filtered = section_builder._filter_presets_for_member_type(
+        [rectangle, circular_hollow, i_girder, box_girder, custom_preset],
+        AnalysisModeSettings(member_type="beam_girder"),
+    )
+    keys = {preset["key"] for preset in filtered}
+
+    assert "parametric_i_girder" in keys
+    assert "single_cell_box_girder" in keys
+    assert "custom_polygon" in keys
+    assert "rectangle" not in keys
+    assert "circular_hollow" not in keys
+
+
+def test_general_section_member_type_keeps_all_presets_visible() -> None:
+    rectangle = preset_by_key("rectangle")
+    i_girder = preset_by_key("parametric_i_girder")
+
+    filtered = section_builder._filter_presets_for_member_type(
+        [rectangle, i_girder],
+        AnalysisModeSettings(member_type="general_section"),
+    )
+
+    assert [preset["key"] for preset in filtered] == ["rectangle", "parametric_i_girder"]
+
+
+def test_section_category_browser_uses_filtered_categories() -> None:
+    rectangle = preset_by_key("rectangle")
+    i_girder = preset_by_key("parametric_i_girder")
+
+    categories = section_builder._categories_for_filtered_presets(
+        ["Basic Solid", "Girder", "Box Girder", "Custom"],
+        [rectangle],
+    )
+
+    assert categories == ["Basic Solid"]
+
+    categories = section_builder._categories_for_filtered_presets(
+        ["Basic Solid", "Girder", "Box Girder", "Custom"],
+        [i_girder],
+    )
+
+    assert categories == ["Girder"]
+
+
+def test_section_builder_source_contains_member_type_preset_filter_notice() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Section Type / Preset is filtered" in source
+    assert "_filter_presets_for_member_type" in source
+    assert "available_presets" in source

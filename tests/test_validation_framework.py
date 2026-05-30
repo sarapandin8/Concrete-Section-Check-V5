@@ -5,6 +5,18 @@ from concrete_pmm_pro.verification.validation_framework import (
     run_pmm_solver_validation_report,
     validation_matrix_to_dataframe,
 )
+from concrete_pmm_pro.validation import run_all_validations
+from concrete_pmm_pro.validation.models import (
+    FAIL,
+    PASS,
+    SKIPPED,
+    WARNING,
+    ValidationReport,
+    ValidationResult,
+    boolean_validation_result,
+    numeric_validation_result,
+    validation_summary,
+)
 
 
 def test_validation_matrix_contains_core_solver_risk_areas() -> None:
@@ -69,3 +81,83 @@ def test_pmm_solver_validation_report_runs_current_suites() -> None:
     assert report.pmm_checks.checks
     assert report.po_axial_cap.checks
     assert report.overall_execution_status in {"PASS", "WARNING"}
+
+
+def test_validation_result_structure_is_export_friendly() -> None:
+    result = ValidationResult(
+        case_id="QA.TEST.1",
+        category="Framework",
+        title="Result structure",
+        status=PASS,
+        expected=1.0,
+        actual=1.0,
+        tolerance=0.0,
+        difference=0.0,
+        units="unit",
+        engineering_note="note",
+    )
+
+    data = result.to_dict()
+
+    assert data["case_id"] == "QA.TEST.1"
+    assert data["status"] == PASS
+    assert data["expected"] == 1.0
+    assert data["engineering_note"] == "note"
+
+
+def test_validation_summary_counts_statuses() -> None:
+    results = [
+        ValidationResult("QA.PASS", "Framework", "Pass", PASS),
+        ValidationResult("QA.FAIL", "Framework", "Fail", FAIL),
+        ValidationResult("QA.WARNING", "Framework", "Warning", WARNING),
+        ValidationResult("QA.SKIP", "Framework", "Skip", SKIPPED),
+    ]
+
+    summary = validation_summary(results)
+
+    assert summary["total"] == 4
+    assert summary["passed"] == 1
+    assert summary["failed"] == 1
+    assert summary["warnings"] == 1
+    assert summary["skipped"] == 1
+    assert summary["overall_status"] == "FAIL"
+    assert summary["failed_case_ids"] == ["QA.FAIL"]
+    assert summary["warning_case_ids"] == ["QA.WARNING"]
+
+
+def test_numeric_and_boolean_helpers_set_expected_statuses() -> None:
+    numeric_pass = numeric_validation_result(
+        case_id="QA.NUM.PASS",
+        category="Framework",
+        title="Numeric pass",
+        expected=100.0,
+        actual=100.5,
+        abs_tolerance=1.0,
+    )
+    numeric_fail = numeric_validation_result(
+        case_id="QA.NUM.FAIL",
+        category="Framework",
+        title="Numeric fail",
+        expected=100.0,
+        actual=102.0,
+        abs_tolerance=1.0,
+    )
+    boolean_pass = boolean_validation_result(
+        case_id="QA.BOOL.PASS",
+        category="Framework",
+        title="Boolean pass",
+        passed=True,
+    )
+
+    assert numeric_pass.status == PASS
+    assert numeric_fail.status == FAIL
+    assert boolean_pass.status == PASS
+
+
+def test_run_all_validations_returns_structured_report() -> None:
+    report = run_all_validations()
+
+    assert isinstance(report, ValidationReport)
+    assert report.results
+    assert report.summary()["total"] == len(report.results)
+    assert report.summary()["overall_status"] in {"PASS", "PASS_WITH_WARNINGS", "PASS_WITH_SKIPS", "FAIL"}

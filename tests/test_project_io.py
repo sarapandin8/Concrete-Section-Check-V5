@@ -426,3 +426,37 @@ def test_project_session_round_trip_preserves_workflow_load_tables_metadata() ->
     assert restored["beam_sls_loads_table"].iloc[0]["Stage"] == "Final service"
     assert restored["beam_sls_loads_table"].iloc[0]["Load Component"] == "Total SLS resultant"
     assert restored["column_uls_loads_table"].iloc[0]["Vuy"] == "20"
+
+
+def test_project_session_round_trip_preserves_girder_prestress_force_states_metadata() -> None:
+    session_state = {
+        "girder_prestress_force_states_table": [
+            {
+                "Check Stage": "Transfer stage",
+                "Prestress State": "Pe_transfer / P_release",
+                "Pe_kN": 3500.0,
+                "yps_mm_from_bottom": 250.0,
+                "Note": "transfer force",
+            },
+            {
+                "Check Stage": "Service stage",
+                "Prestress State": "Pe_eff_final",
+                "Pe_kN": 2800.0,
+                "yps_mm_from_bottom": 260.0,
+                "Note": "final force",
+            },
+        ]
+    }
+
+    project = project_from_session_state(session_state)
+    assert "girder_prestress_force_states_table" in project.metadata
+    assert project.metadata["girder_prestress_force_states_table"][0]["Pe_kN"] == pytest.approx(3500.0)
+
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert "girder_prestress_force_states_table" in restored
+    table = restored["girder_prestress_force_states_table"]
+    assert table.iloc[0]["Prestress State"] == "Pe_transfer / P_release"
+    assert table.iloc[0]["Pe_kN"] == pytest.approx(3500.0)
+    assert table.iloc[1]["Prestress State"] == "Pe_eff_final"

@@ -3388,6 +3388,64 @@ def _analysis_float_or_zero(value: object) -> float:
         return 0.0
 
 
+_GIRDER_PRESTRESS_FORCE_STATE_COLUMNS = ("Check Stage", "Prestress State", "Pe_kN", "yps_mm_from_bottom", "Note")
+
+
+def _girder_prestress_force_state_rows_from_session_state() -> list[dict[str, object]]:
+    """Return engineer-controlled stage prestress force states from Prestress page.
+
+    GIRDER.PS2A keeps stage prestress force input separate from external Loads.
+    Analysis consumes Pe_transfer/P_release, Pe_construction, or Pe_eff_final
+    as internal prestress stress effects only.
+    """
+
+    raw_table = st.session_state.get("girder_prestress_force_states_table")
+    if raw_table is None:
+        return []
+    df = pd.DataFrame(raw_table)
+    if df.empty:
+        return []
+    rows: list[dict[str, object]] = []
+    for _, raw_row in df.iterrows():
+        row = {column: raw_row.get(column, "") for column in _GIRDER_PRESTRESS_FORCE_STATE_COLUMNS}
+        if _analysis_value_is_blank(row.get("Check Stage")):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _girder_prestress_force_state_for_stage(stage_label: str) -> dict[str, object] | None:
+    """Return the Prestress-page force state row matching an SLS Analysis stage."""
+
+    target = _beam_sls_stage_label_for_analysis(stage_label)
+    for row in _girder_prestress_force_state_rows_from_session_state():
+        if _beam_sls_stage_label_for_analysis(row.get("Check Stage")) == target:
+            return row
+    return None
+
+
+def _girder_prestress_force_state_is_ready(row: Mapping[str, object] | None) -> bool:
+    if row is None:
+        return False
+    pe_kN = _analysis_float_or_zero(row.get("Pe_kN"))
+    yps = _analysis_float_or_zero(row.get("yps_mm_from_bottom"))
+    return pe_kN > 0.0 and math.isfinite(yps)
+
+
+def _girder_prestress_force_state_label(row: Mapping[str, object] | None, stage_label: str) -> str:
+    if row is None:
+        return "No stage prestress force state"
+    label = str(row.get("Prestress State") or "Stage prestress force").strip() or "Stage prestress force"
+    stage = _beam_sls_stage_label_for_analysis(stage_label)
+    if stage == "Transfer stage" and "transfer" not in label.casefold() and "release" not in label.casefold():
+        return f"Pe_transfer / P_release from Prestress force state ({label})"
+    if stage == "Construction stage" and "construction" not in label.casefold():
+        return f"Pe_construction from Prestress force state ({label})"
+    if stage == "Service stage" and "eff" not in label.casefold() and "final" not in label.casefold():
+        return f"Pe_eff_final from Prestress force state ({label})"
+    return label
+
+
 def _beam_sls_stage_label_for_analysis(value: object) -> str:
     """Normalize Loads-page Beam/Girder SLS stages for Analysis display."""
 
@@ -3639,8 +3697,18 @@ def _render_girder_sls_check_case_panel(
     result = run_basic_girder_service_stress(basis, N_kN=float(axial_n), M_kNm=float(moment_m))
     result_df = _clean_girder_stress_dataframe(pd.DataFrame(girder_service_stress_result_rows(result)))
     has_service_action = abs(float(axial_n)) > 1.0e-9 or abs(float(moment_m)) > 1.0e-9
+    stage_force_state_row = _girder_prestress_force_state_for_stage(stage_label)
+    stage_force_state_ready = _girder_prestress_force_state_is_ready(stage_force_state_row)
     include_prestress_key = f"girder_service_include_prestress_{case_key}"
+    if include_prestress_key not in st.session_state:
+        st.session_state[include_prestress_key] = bool(stage_force_state_ready)
     include_prestress_default = bool(st.session_state.get(include_prestress_key, False))
+    stage_force_detail = "No positive stage Pe set in Prestress"
+    if stage_force_state_ready and stage_force_state_row is not None:
+        stage_force_detail = (
+            f"{_girder_prestress_force_state_label(stage_force_state_row, stage_label)} · "
+            f"Pe={_analysis_float_or_zero(stage_force_state_row.get('Pe_kN')):,.3f} kN"
+        )
 
     _render_analysis_summary_strip(
         [
@@ -3665,8 +3733,8 @@ def _render_girder_sls_check_case_panel(
             {
                 "title": "Prestress component",
                 "value": "Enabled" if include_prestress_default else "Optional",
-                "detail": "Stage-specific Pe preview" if include_prestress_default else "Use checkbox below when this stage includes prestress effect",
-                "status": "info" if include_prestress_default else "neutral",
+                "detail": stage_force_detail if include_prestress_default else "Set stage Pe in Prestress, or enable manually below",
+                "status": "ready" if include_prestress_default and stage_force_state_ready else ("info" if include_prestress_default else "neutral"),
             },
         ],
         columns=4,
@@ -3681,15 +3749,32 @@ def _render_girder_sls_check_case_panel(
 
     code_title = f"{case_title} SLS check case"
     _initialize_girder_code_limit_stage_for_case(code_title, stage_label)
-    _render_girder_code_limit_preview(
-        title=code_title,
-        stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
-        section_basis_label=basis_options.labels.get(basis_name, basis_name),
-        load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or stage_label),
-        load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
-        stress_includes_prestress=False,
-        prestress_force_state_label=None,
-    )
+    if include_prestress_default:
+        st.caption(
+            "Stage prestress is enabled. The main code-limit preview for this stage uses the combined service + prestress stress below."
+        )
+        with st.expander(f"Service-only code-limit preview — {case_title}", expanded=False):
+            service_only_title = f"{case_title} service-only SLS check case"
+            _initialize_girder_code_limit_stage_for_case(service_only_title, stage_label)
+            _render_girder_code_limit_preview(
+                title=service_only_title,
+                stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
+                section_basis_label=basis_options.labels.get(basis_name, basis_name),
+                load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or stage_label),
+                load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
+                stress_includes_prestress=False,
+                prestress_force_state_label=None,
+            )
+    else:
+        _render_girder_code_limit_preview(
+            title=code_title,
+            stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
+            section_basis_label=basis_options.labels.get(basis_name, basis_name),
+            load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or stage_label),
+            load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
+            stress_includes_prestress=False,
+            prestress_force_state_label=None,
+        )
 
     with st.expander(f"{case_title} stress table", expanded=False):
         st.dataframe(result_df, use_container_width=True, hide_index=True)
@@ -3724,25 +3809,50 @@ def _render_girder_sls_check_case_panel(
 
     if include_prestress:
         st.info(
-            "Current preview uses the available Pe_eff/manual effective prestress state. For Transfer / Release, confirm Pe_transfer / initial prestress separately until the loss-state workflow is implemented."
+            "Stage prestress is an internal section action. Define Pe_transfer, Pe_construction, or Pe_eff_final in Prestress; do not duplicate this force in Loads."
         )
-        mode_options = ["From Prestress table", "Manual Pe_eff and yps"]
+        mode_options = ["From Prestress force state", "From Prestress table", "Manual Pe_eff and yps"]
         prestress_mode_key = f"girder_prestress_input_mode_{case_key}"
         if st.session_state.get(prestress_mode_key) not in mode_options:
-            st.session_state[prestress_mode_key] = "From Prestress table" if prestress_elements else "Manual Pe_eff and yps"
+            if stage_force_state_ready:
+                st.session_state[prestress_mode_key] = "From Prestress force state"
+            elif prestress_elements:
+                st.session_state[prestress_mode_key] = "From Prestress table"
+            else:
+                st.session_state[prestress_mode_key] = "Manual Pe_eff and yps"
         prestress_mode = st.radio(
             "Prestress source",
             mode_options,
             horizontal=True,
             key=prestress_mode_key,
-            help="Use the normalized Prestress table Pe_eff values, or enter a manual equivalent effective prestress and centroid for this stage trial check.",
+            help="Use the stage force state from Prestress for commercial stage checks, or use legacy table/manual preview for audit cases.",
         )
 
         pe_eff_kN = 0.0
         tendon_y_from_bottom_mm = basis.centroid_y_from_bottom_mm
         source_ready = False
+        prestress_force_state_label_for_preview = ""
 
-        if prestress_mode == "From Prestress table":
+        if prestress_mode == "From Prestress force state":
+            if stage_force_state_ready and stage_force_state_row is not None:
+                pe_eff_kN = _analysis_float_or_zero(stage_force_state_row.get("Pe_kN"))
+                tendon_y_from_bottom_mm = _analysis_float_or_zero(stage_force_state_row.get("yps_mm_from_bottom"))
+                prestress_force_state_label_for_preview = _girder_prestress_force_state_label(stage_force_state_row, stage_label)
+                source_ready = True
+                state_cols = st.columns(4)
+                state_cols[0].metric("Prestress state", prestress_force_state_label_for_preview)
+                state_cols[1].metric("Stage Pe", f"{pe_eff_kN:,.3f} kN")
+                state_cols[2].metric("yps from bottom", f"{tendon_y_from_bottom_mm:,.3f} mm")
+                state_cols[3].metric("Source", "Prestress page")
+                with st.expander(f"Prestress force-state note — {case_title}", expanded=False):
+                    note = str(stage_force_state_row.get("Note") or "").strip()
+                    st.write(note or "No note entered for this stage force state.")
+            else:
+                st.warning(
+                    "No positive stage prestress force is set for this SLS stage. Enter Pe and yps in Prestress → Girder SLS Prestress Force States."
+                )
+
+        elif prestress_mode == "From Prestress table":
             summary = summarize_girder_prestress_elements(
                 prestress_elements,
                 section_bottom_y_mm=section_bottom_y_mm,
@@ -3802,6 +3912,17 @@ def _render_girder_sls_check_case_panel(
         if not source_ready and prestress_mode == "From Prestress table":
             st.info("No positive Pe_eff is available for this check case; prestress stress remains excluded from the summary result.")
 
+        if source_ready and not prestress_force_state_label_for_preview:
+            if prestress_mode == "From Prestress table":
+                prestress_force_state_label_for_preview = "Pe_eff after losses / Prestress table effective force"
+            elif prestress_mode == "Manual Pe_eff and yps":
+                if stage_label == "Transfer stage":
+                    prestress_force_state_label_for_preview = "Manual Pe_transfer / stage-equivalent prestress"
+                elif stage_label == "Construction stage":
+                    prestress_force_state_label_for_preview = "Manual Pe_construction / stage-equivalent prestress"
+                else:
+                    prestress_force_state_label_for_preview = "Manual Pe_eff_final / stage-equivalent prestress"
+
         if source_ready:
             ps_result = run_girder_prestress_stress_effect(
                 basis,
@@ -3809,7 +3930,7 @@ def _render_girder_sls_check_case_panel(
                 tendon_y_from_bottom_mm=tendon_y_from_bottom_mm,
             )
             ps_cols = st.columns(4)
-            ps_cols[0].metric("Pe_eff", f"{ps_result.Pe_eff_kN:,.3f} kN")
+            ps_cols[0].metric("Stage Pe", f"{ps_result.Pe_eff_kN:,.3f} kN")
             ps_cols[1].metric("e = yps - yc", f"{ps_result.eccentricity_mm:,.2f} mm")
             ps_cols[2].metric("Mps", f"{ps_result.equivalent_moment_kNm:,.3f} kN-m")
             ps_cols[3].metric("PS max compression", _format_girder_stress_mpa(ps_result.max_compression_MPa))
@@ -3835,7 +3956,7 @@ def _render_girder_sls_check_case_panel(
                 load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or stage_label),
                 load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
                 stress_includes_prestress=True,
-                prestress_force_state_label="Pe_eff after losses / current stage-equivalent prestress preview force",
+                prestress_force_state_label=prestress_force_state_label_for_preview,
             )
 
 

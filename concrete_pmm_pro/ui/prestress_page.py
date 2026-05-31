@@ -85,6 +85,32 @@ PRESTRESS_REFERENCE_DETAIL_COLUMNS = [
     "Duct ID_mm",
 ]
 
+GIRDER_PRESTRESS_FORCE_STATE_COLUMNS = [
+    "Check Stage",
+    "Prestress State",
+    "Pe_kN",
+    "yps_mm_from_bottom",
+    "Note",
+]
+
+GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
+    (
+        "Transfer stage",
+        "Pe_transfer / P_release",
+        "Initial prestress at transfer/release. Use with precast self-weight and precast gross section.",
+    ),
+    (
+        "Construction stage",
+        "Pe_construction",
+        "Engineer-controlled prestress force during deck casting/construction stage; no automatic loss calculation.",
+    ),
+    (
+        "Service stage",
+        "Pe_eff_final",
+        "Effective prestress after losses for final service. Do not also include prestress in Loads resultant.",
+    ),
+]
+
 
 @dataclass(frozen=True)
 class PrestressParseResult:
@@ -748,6 +774,164 @@ def _prestress_reference_detail_dataframe(table: pd.DataFrame) -> pd.DataFrame:
         return detail
     columns = [column for column in PRESTRESS_REFERENCE_DETAIL_COLUMNS if column in detail.columns]
     return detail.loc[:, columns]
+
+
+def _section_bottom_y_from_geometry(geometry: SectionGeometry | None) -> float:
+    """Return section bottom y-coordinate in the geometry coordinate system."""
+
+    if geometry is None:
+        return 0.0
+    try:
+        polygon = to_shapely_polygon(geometry)
+        return float(polygon.bounds[1])
+    except Exception:
+        return 0.0
+
+
+def _area_weighted_prestress_y_from_bottom(elements: list[PrestressElement], geometry: SectionGeometry | None) -> float | None:
+    """Return tendon centroid by steel area for stage-force state defaults.
+
+    This helper intentionally uses tendon geometry/area only. It does not infer
+    transfer or effective prestress force from product breaking load, duct ID,
+    or strand-count metadata.
+    """
+
+    bottom_y = _section_bottom_y_from_geometry(geometry)
+    total_area = 0.0
+    weighted_y = 0.0
+    for element in elements:
+        if not element.bonded:
+            continue
+        try:
+            area = float(element.total_area_mm2)
+            y_from_bottom = float(element.y_mm) - bottom_y
+        except (TypeError, ValueError):
+            continue
+        if area <= 0.0:
+            continue
+        total_area += area
+        weighted_y += area * y_from_bottom
+    if total_area <= 0.0:
+        return None
+    return weighted_y / total_area
+
+
+def _total_effective_prestress_from_elements_kN(elements: list[PrestressElement]) -> float:
+    """Return total final effective prestress from valid elements only."""
+
+    total_pe_n = 0.0
+    for element in elements:
+        if not element.bonded:
+            continue
+        try:
+            pe_n = float(element.pe_eff_n or 0.0) * int(element.count or 1)
+        except (TypeError, ValueError):
+            continue
+        if pe_n > 0.0:
+            total_pe_n += pe_n
+    return total_pe_n / 1000.0
+
+
+def _force_state_existing_rows_by_stage(table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    if table is None:
+        return {}
+    df = pd.DataFrame(table)
+    if df.empty or "Check Stage" not in df.columns:
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        stage = "" if _is_blank(row.get("Check Stage")) else str(row.get("Check Stage")).strip()
+        if stage:
+            rows[stage] = row.to_dict()
+    return rows
+
+
+def _normalize_girder_prestress_force_state_table(
+    table: pd.DataFrame | None,
+    elements: list[PrestressElement],
+    geometry: SectionGeometry | None,
+) -> pd.DataFrame:
+    """Return the fixed three-stage girder prestress force-state table.
+
+    GIRDER.PS2A keeps these values as engineer-controlled stage forces. It
+    does not perform prestress-loss calculation and does not modify PMM
+    prestress elements.
+    """
+
+    existing = _force_state_existing_rows_by_stage(table)
+    y_default = _area_weighted_prestress_y_from_bottom(elements, geometry)
+    if y_default is None:
+        y_default = 0.0
+    final_pe_default = _total_effective_prestress_from_elements_kN(elements)
+    rows: list[dict[str, Any]] = []
+    for stage, force_state, note in GIRDER_PRESTRESS_FORCE_STATE_SPECS:
+        current = existing.get(stage, {})
+        pe_default = final_pe_default if stage == "Service stage" else 0.0
+        pe_value = _to_float(current.get("Pe_kN"))
+        y_value = _to_float(current.get("yps_mm_from_bottom"))
+        rows.append(
+            {
+                "Check Stage": stage,
+                "Prestress State": force_state,
+                "Pe_kN": pe_default if pe_value is None else pe_value,
+                "yps_mm_from_bottom": y_default if y_value is None else y_value,
+                "Note": note if _is_blank(current.get("Note")) else str(current.get("Note")).strip(),
+            }
+        )
+    return pd.DataFrame(rows, columns=GIRDER_PRESTRESS_FORCE_STATE_COLUMNS)
+
+
+def _render_girder_prestress_force_state_inputs(
+    elements: list[PrestressElement],
+    geometry: SectionGeometry | None,
+) -> None:
+    """Render engineer-controlled prestress force states for girder SLS stages."""
+
+    st.markdown("#### Girder SLS Prestress Force States")
+    st.markdown(
+        '<div class="cpmm-prestress-table-note">'
+        "Define the internal prestress force to use for each girder SLS stage. "
+        "These values are not external loads and must not be entered again in Loads. "
+        "No automatic loss calculation is performed in this milestone; Pe values are engineer-controlled."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    current = st.session_state.get("girder_prestress_force_states_table")
+    table = _normalize_girder_prestress_force_state_table(pd.DataFrame(current) if current is not None else None, elements, geometry)
+    edited = st.data_editor(
+        table,
+        num_rows="fixed",
+        use_container_width=True,
+        hide_index=True,
+        column_order=GIRDER_PRESTRESS_FORCE_STATE_COLUMNS,
+        column_config={
+            "Check Stage": st.column_config.TextColumn("Check Stage", disabled=True),
+            "Prestress State": st.column_config.TextColumn("Prestress State", disabled=True),
+            "Pe_kN": st.column_config.NumberColumn(
+                "Pe_kN (compression +)",
+                min_value=0.0,
+                step=100.0,
+                format="%.3f",
+                help="Stage prestress force to use in Analysis. Use Pe_transfer/P_release for transfer, Pe_construction for construction, and Pe_eff_final for final service.",
+            ),
+            "yps_mm_from_bottom": st.column_config.NumberColumn(
+                "yps from bottom (mm)",
+                step=10.0,
+                format="%.3f",
+                help="Prestress centroid measured upward from the selected section-basis bottom fiber.",
+            ),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="girder_prestress_force_states_editor",
+    )
+    normalized = _normalize_girder_prestress_force_state_table(edited, elements, geometry)
+    st.session_state["girder_prestress_force_states_table"] = normalized
+    positive_states = normalized.loc[pd.to_numeric(normalized["Pe_kN"], errors="coerce").fillna(0.0).gt(0.0)]
+    ready_count = len(positive_states)
+    st.caption(
+        f"{ready_count} stage prestress force state(s) have positive Pe. Analysis will auto-enable prestress for stages with positive Pe."
+    )
+
 
 def _dataframes_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
     left_norm = pd.DataFrame(left).reset_index(drop=True).astype("object")
@@ -1527,6 +1711,9 @@ def render_prestress_page() -> None:
     valid_for_analysis = prestress_valid_for_analysis(result, geometry_errors)
     st.session_state["prestress_elements"] = result.elements
     st.session_state["prestress_valid_for_analysis"] = valid_for_analysis
+
+    with main_col:
+        _render_girder_prestress_force_state_inputs(result.elements, geometry)
 
     active_rebar_count = len(st.session_state.get("rebars", []) or [])
 

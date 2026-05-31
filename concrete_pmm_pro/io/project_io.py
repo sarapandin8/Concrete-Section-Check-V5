@@ -82,6 +82,24 @@ def _workflow_load_table_metadata_from_session(session_state: Any) -> dict[str, 
     return tables
 
 
+def _girder_prestress_force_states_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
+    """Serialize GIRDER.PS2A stage prestress force states as project metadata."""
+
+    table = _get_session_value(session_state, "girder_prestress_force_states_table", None)
+    if table is None:
+        return []
+    df = pd.DataFrame(table)
+    if df.empty:
+        return []
+    columns = ["Check Stage", "Prestress State", "Pe_kN", "yps_mm_from_bottom", "Note"]
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        entry = {column: _clean_table_value(row.get(column)) for column in columns if column in df.columns}
+        if any(not _is_blank(value) for value in entry.values()):
+            rows.append(entry)
+    return rows
+
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -131,6 +149,9 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     workflow_load_tables = _workflow_load_table_metadata_from_session(session_state)
     if workflow_load_tables:
         metadata["workflow_load_tables"] = workflow_load_tables
+    girder_prestress_force_states = _girder_prestress_force_states_metadata_from_session(session_state)
+    if girder_prestress_force_states:
+        metadata["girder_prestress_force_states_table"] = girder_prestress_force_states
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -439,6 +460,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
         for key in WORKFLOW_LOAD_TABLE_METADATA_KEYS:
             if key in workflow_load_tables:
                 session_state[key] = pd.DataFrame(workflow_load_tables.get(key) or [])
+    girder_prestress_force_states = project.metadata.get("girder_prestress_force_states_table")
+    if isinstance(girder_prestress_force_states, list):
+        session_state["girder_prestress_force_states_table"] = pd.DataFrame(girder_prestress_force_states)
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

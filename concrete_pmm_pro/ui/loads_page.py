@@ -165,6 +165,41 @@ def _stringify_table(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return normalized
 
 
+
+def _dataframes_equal_for_editor(left: pd.DataFrame, right: pd.DataFrame, columns: list[str]) -> bool:
+    """Return True when two editor tables are identical after normalization.
+
+    Streamlit's data_editor keeps an internal widget state.  For SelectboxColumn
+    cells, persisting the edited dataframe and immediately rerunning avoids the
+    confusing behaviour where a dropdown change appears to require a second
+    selection before the backing workflow table reflects the new value.
+    """
+
+    left_norm = _stringify_table(pd.DataFrame(left), columns).reset_index(drop=True)
+    right_norm = _stringify_table(pd.DataFrame(right), columns).reset_index(drop=True)
+    return left_norm.equals(right_norm)
+
+
+def _store_editor_table_and_rerun_on_change(
+    state_key: str,
+    edited_table: pd.DataFrame,
+    previous_table: pd.DataFrame,
+    columns: list[str],
+) -> None:
+    """Persist edited load-table data and rerun once when it changed.
+
+    This is deliberately small and UI-local. It does not change the load schema
+    or solver mapping; it only makes dropdown edits in workflow-specific tables
+    feel single-click by rebuilding the editor from the updated session state on
+    the next run.
+    """
+
+    normalized = _stringify_table(pd.DataFrame(edited_table), columns)
+    st.session_state[state_key] = normalized
+    if not _dataframes_equal_for_editor(previous_table, normalized, columns):
+        _sync_workflow_load_tables_metadata()
+        st.rerun()
+
 def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
     """Return the current Beam/Girder SLS table schema.
 
@@ -993,6 +1028,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         "Avoid double counting: if an SLS row is a total service resultant that already includes LL+IM, do not add a separate live-load action elsewhere in Analysis."
     )
     sls_df = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+    beam_sls_before_edit = sls_df.copy()
     edited_sls = st.data_editor(
         sls_df,
         num_rows="dynamic",
@@ -1015,8 +1051,12 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         key="beam_sls_loads_editor",
     )
     edited_sls = _normalize_beam_sls_load_table(edited_sls)
-    st.session_state["beam_sls_loads_table"] = edited_sls
-    _sync_workflow_load_tables_metadata()
+    _store_editor_table_and_rerun_on_change(
+        "beam_sls_loads_table",
+        edited_sls,
+        beam_sls_before_edit,
+        BEAM_SLS_LOAD_COLUMNS,
+    )
 
     uls_result = _workflow_table_result(edited_uls, table_name="Beam/Girder ULS", numeric_columns=["Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"])
     sls_result = _workflow_table_result(edited_sls, table_name="Beam/Girder SLS", numeric_columns=["N", "Mx", "My", "Vy", "Vx", "T"])

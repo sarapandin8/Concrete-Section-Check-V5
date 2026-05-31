@@ -367,3 +367,17 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "Use Stage for timing/basis logic" in source
     assert "Mux is main vertical bending" in source
     assert "Vuy is vertical shear" in source
+
+
+def test_beam_sls_dropdown_edits_are_persisted_with_single_rerun_guard() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
+
+    assert "_store_editor_table_and_rerun_on_change" in source
+    assert "beam_sls_before_edit = sls_df.copy()" in source
+    assert "st.rerun()" in source
+    assert 'SelectboxColumn("Stage"' in source
+    assert 'SelectboxColumn("Load Component"' in source
+    assert 'SelectboxColumn("Section Basis"' in source

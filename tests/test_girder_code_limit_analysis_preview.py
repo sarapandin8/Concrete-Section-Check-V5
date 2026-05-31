@@ -55,3 +55,12 @@ def test_analysis_page_shows_limit_formulas_and_consistency_warnings() -> None:
     assert "section_basis_label" in SOURCE
     assert "load_stage" in SOURCE
     assert "load_component" in SOURCE
+
+
+def test_analysis_page_compares_actual_stress_against_matching_limits() -> None:
+    assert "_girder_stress_vs_limit_cards" in SOURCE
+    assert "Compression actual / limit" in SOURCE
+    assert "Tension actual / limit" in SOURCE
+    assert "compression demand uses compression limit" in SOURCE
+    assert "tension demand uses tension limit" in SOURCE
+    assert "matching stress type" in SOURCE

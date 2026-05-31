@@ -100,6 +100,8 @@ from concrete_pmm_pro.serviceability import (
     DEFAULT_GIRDER_SLS_STAGES,
     DEFAULT_TENSION_LIMIT_MODES,
     GirderServiceStageCase,
+    GirderServiceStressLimitCheckResult,
+    GirderStressLimitPointResult,
     StressLimitInputRow,
     build_girder_sls_limit_profile,
     default_girder_service_stage_templates,
@@ -3493,6 +3495,117 @@ def _girder_stress_limit_input_rows_from_dataframe(df: pd.DataFrame, stress_colu
     return rows
 
 
+def _format_girder_limit_demand_mpa(value: float) -> str:
+    """Format a nonnegative demand/limit stress value for SLS decision cards."""
+
+    if abs(float(value)) <= _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+        return "0.000 MPa"
+    return f"{float(value):,.3f} MPa"
+
+
+def _format_girder_limit_utilization(value: float | None) -> str:
+    """Format utilization while keeping no-tension cases explicit."""
+
+    if value is None:
+        return "—"
+    if not math.isfinite(float(value)):
+        return "—"
+    return f"D/C {float(value):.3f}"
+
+
+def _girder_limit_point_status_style(point: GirderStressLimitPointResult | None, *, context_warnings: bool = False) -> str:
+    """Return the compact card style for one stress-vs-limit comparison."""
+
+    if context_warnings:
+        return "warning"
+    if point is None:
+        return "neutral"
+    if point.status == "FAIL":
+        return "danger"
+    return "ready"
+
+
+def _governing_limit_point(
+    points: tuple[GirderStressLimitPointResult, ...],
+    *,
+    stress_type: str,
+) -> GirderStressLimitPointResult | None:
+    """Return the governing compression or tension point by actual demand."""
+
+    candidates = [point for point in points if point.stress_type == stress_type]
+    if not candidates:
+        return None
+    if stress_type == "compression":
+        return max(candidates, key=lambda point: abs(float(point.stress_MPa)))
+    return max(candidates, key=lambda point: float(point.stress_MPa))
+
+
+def _girder_stress_vs_limit_cards(
+    limit_result: GirderServiceStressLimitCheckResult,
+    *,
+    context_warnings: bool = False,
+) -> list[dict[str, object]]:
+    """Return decision cards comparing actual stress with the matching stress limit.
+
+    GIRDER.SLS3.2 keeps the default SLS view as a decision screen: compression
+    demand is compared only with the compression limit, and tension demand is
+    compared only with the tension limit.  Detailed top/bottom rows remain in
+    the audit table.
+    """
+
+    compression_point = _governing_limit_point(limit_result.points, stress_type="compression")
+    tension_point = _governing_limit_point(limit_result.points, stress_type="tension")
+
+    if compression_point is None:
+        compression_limit = limit_result.profile.compression_limit_MPa(limit_result.fc_MPa)
+        compression_card = {
+            "title": "Compression actual / limit",
+            "value": f"0.000 / {compression_limit:,.3f} MPa",
+            "detail": "No compressive fiber stress in this check case",
+            "status": "neutral",
+        }
+    else:
+        compression_card = {
+            "title": "Compression actual / limit",
+            "value": (
+                f"{_format_girder_limit_demand_mpa(abs(float(compression_point.stress_MPa))).replace(' MPa', '')} / "
+                f"{compression_point.compression_limit_MPa:,.3f} MPa"
+            ),
+            "detail": (
+                f"{compression_point.fiber}: compression demand uses compression limit · "
+                f"{_format_girder_limit_utilization(compression_point.utilization)}"
+            ),
+            "status": _girder_limit_point_status_style(compression_point, context_warnings=context_warnings),
+        }
+
+    if tension_point is None:
+        tension_limit = limit_result.profile.tension_allowable_MPa(limit_result.fc_MPa)
+        tension_value = "No tension" if tension_limit <= limit_result.profile.stress_zero_tolerance_MPa else f"{tension_limit:,.3f} MPa"
+        tension_card = {
+            "title": "Tension actual / limit",
+            "value": f"0.000 MPa / {tension_value}",
+            "detail": "No tensile fiber stress in this check case",
+            "status": "neutral",
+        }
+    else:
+        tension_limit_value = (
+            "No tension"
+            if tension_point.tension_limit_MPa <= limit_result.profile.stress_zero_tolerance_MPa
+            else f"{tension_point.tension_limit_MPa:,.3f} MPa"
+        )
+        tension_card = {
+            "title": "Tension actual / limit",
+            "value": f"{_format_girder_limit_demand_mpa(float(tension_point.stress_MPa))} / {tension_limit_value}",
+            "detail": (
+                f"{tension_point.fiber}: tension demand uses tension limit · "
+                f"{_format_girder_limit_utilization(tension_point.utilization)}"
+            ),
+            "status": _girder_limit_point_status_style(tension_point, context_warnings=context_warnings),
+        }
+
+    return [compression_card, tension_card]
+
+
 def _render_girder_code_limit_preview(
     *,
     title: str,
@@ -3825,22 +3938,11 @@ def _render_girder_code_limit_preview(
             "detail": display_status_detail,
             "status": display_status_style,
         },
-        {
-            "title": "Compression limit",
-            "value": f"{compression_limit:,.3f} MPa",
-            "detail": profile.limit_profile_label,
-            "status": "info",
-        },
-        {
-            "title": "Tension limit",
-            "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
-            "detail": profile.limit_profile_label,
-            "status": "info" if tension_allowable > 0 else "warning",
-        },
+        *_girder_stress_vs_limit_cards(limit_result, context_warnings=bool(context_warnings)),
         {
             "title": "Max utilization",
             "value": "—" if limit_result.max_utilization is None else f"{limit_result.max_utilization:.3f}",
-            "detail": "Preview D/C only",
+            "detail": "Governing actual/allowable ratio from matching stress type",
             "status": "warning" if context_warnings else ("ready" if (limit_result.max_utilization or 0.0) <= 1.0 and limit_result.overall_status == "PASS" else "danger"),
         },
     ]

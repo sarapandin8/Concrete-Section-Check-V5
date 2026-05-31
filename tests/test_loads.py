@@ -16,6 +16,7 @@ from concrete_pmm_pro.ui.loads_page import (
     _default_beam_uls_load_table,
     _excel_template_bytes,
     _normalize_editor_dataframe,
+    _normalize_beam_sls_load_table,
     _preview_dataframe,
     _split_mixed_editor_table_to_column_tables,
     _workflow_table_result,
@@ -296,16 +297,47 @@ def test_split_mixed_load_table_to_column_uls_sls_tables() -> None:
     assert sls.loc[0, "My"] == "6"
 
 
-def test_beam_girder_workflow_default_tables_use_mux_vuy_tu_and_sls_stage_basis() -> None:
+def test_beam_girder_workflow_default_tables_use_mux_vuy_tu_and_split_sls_stage_component() -> None:
     uls = _default_beam_uls_load_table()
     sls = _default_beam_sls_load_table()
 
     assert list(uls.columns) == BEAM_ULS_LOAD_COLUMNS
     assert ["Mux", "Vuy", "Tu"] == list(uls.columns[2:5])
     assert list(sls.columns) == BEAM_SLS_LOAD_COLUMNS
-    assert "Stage / Component" in sls.columns
+    assert "Stage" in sls.columns
+    assert "Load Component" in sls.columns
+    assert "Stage / Component" not in sls.columns
+    assert sls.loc[0, "Stage"] == "Final service"
+    assert sls.loc[0, "Load Component"] == "Total SLS resultant"
     assert "Section Basis" in sls.columns
     assert "live-load effects" in sls.loc[0, "Note"]
+
+
+def test_loads_workflow1b_migrates_old_stage_component_column() -> None:
+    old = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Case Name": "SLS-OLD",
+                "Stage / Component": "Final service",
+                "Section Basis": "Composite transformed",
+                "N": "0",
+                "Mx": "500",
+                "My": "0",
+                "Vy": "0",
+                "Vx": "0",
+                "T": "0",
+                "Note": "legacy workflow1a row",
+            }
+        ]
+    )
+
+    migrated = _normalize_beam_sls_load_table(old)
+
+    assert list(migrated.columns) == BEAM_SLS_LOAD_COLUMNS
+    assert migrated.loc[0, "Stage"] == "Final service"
+    assert migrated.loc[0, "Load Component"] == "Total SLS resultant"
+    assert "Stage / Component" not in migrated.columns
 
 
 def test_beam_girder_workflow_table_validation_rejects_non_numeric_actions() -> None:
@@ -331,5 +363,7 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "ULS Girder Design Loads" in source
     assert "SLS Girder Service Loads" in source
     assert "Avoid double counting" in source
+    assert "Load Component" in source
+    assert "Use Stage for timing/basis logic" in source
     assert "Mux is main vertical bending" in source
     assert "Vuy is vertical shear" in source

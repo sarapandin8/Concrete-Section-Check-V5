@@ -24,14 +24,14 @@ FORCE_UNIT_OPTIONS = ["kN", "N", "tonf"]
 MOMENT_UNIT_OPTIONS = ["kN-m", "N-mm", "tonf-m"]
 EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Note"]
 
-# LOADS.WORKFLOW1A — workflow-specific table schemas.
+# LOADS.WORKFLOW1B — workflow-specific table schemas.
 # These tables intentionally remain separate from the existing LoadCase PMM
 # solver contract.  Column/Pier tables are mapped back to Pu/Mux/Muy for the
 # existing PMM workflow; Beam/Girder tables are stored as future-ready data only.
 COLUMN_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vuy", "Tu", "Note"]
 COLUMN_SLS_LOAD_COLUMNS = ["Active", "Case Name", "P", "Mx", "My", "Note"]
 BEAM_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
-BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage / Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 BEAM_STAGE_OPTIONS = [
     "",
     "Transfer / release",
@@ -40,7 +40,17 @@ BEAM_STAGE_OPTIONS = [
     "Post-composite service action",
     "User-defined",
 ]
-BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "User-defined"]
+BEAM_LOAD_COMPONENT_OPTIONS = [
+    "",
+    "Prestress / release",
+    "Girder self-weight",
+    "Wet deck / topping",
+    "SDL after composite",
+    "LL+IM",
+    "Total SLS resultant",
+    "User-defined",
+]
+BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "Staged / mixed basis", "User-defined"]
 WORKFLOW_LOAD_TABLE_KEYS = (
     "column_uls_loads_table",
     "column_sls_loads_table",
@@ -135,7 +145,7 @@ def _axis_convention_rows() -> list[tuple[str, str]]:
 def _render_axis_convention_panel() -> None:
     st.markdown("**Axis Convention for Load Tables**")
     st.caption(
-        "LOADS.WORKFLOW1A uses explicit x/y/z-axis action names instead of major/minor labels so users do not "
+        "LOADS.WORKFLOW1 uses explicit x/y/z-axis action names instead of major/minor labels so users do not "
         "have to reinterpret the design axes. Confirm these axes against the section preview before entering loads."
     )
     st.dataframe(pd.DataFrame(_axis_convention_rows(), columns=["Item", "Meaning"]), use_container_width=True, hide_index=True)
@@ -153,6 +163,28 @@ def _stringify_table(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
             continue
         normalized[column] = normalized[column].map(lambda value: "" if _is_blank(value) else str(value))
     return normalized
+
+
+def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Return the current Beam/Girder SLS table schema.
+
+    LOADS.WORKFLOW1B splits the old ambiguous ``Stage / Component`` field
+    into separate ``Stage`` and ``Load Component`` fields.  Older session or
+    project metadata is migrated conservatively so existing rows are preserved
+    instead of being silently cleared.
+    """
+
+    raw = pd.DataFrame(df).copy() if df is not None else pd.DataFrame(columns=BEAM_SLS_LOAD_COLUMNS)
+    if "Stage" not in raw.columns and "Stage / Component" in raw.columns:
+        raw["Stage"] = raw["Stage / Component"]
+    if "Load Component" not in raw.columns:
+        raw["Load Component"] = raw.get("Component", "")
+        if "Stage / Component" in raw.columns:
+            raw["Load Component"] = raw["Load Component"].where(
+                ~raw["Load Component"].map(_is_blank),
+                "Total SLS resultant",
+            )
+    return _stringify_table(raw, BEAM_SLS_LOAD_COLUMNS)
 
 
 def _default_column_uls_load_table() -> pd.DataFrame:
@@ -189,7 +221,8 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
             {
                 "Active": True,
                 "Case Name": "SLS-G1",
-                "Stage / Component": "Final service",
+                "Stage": "Final service",
+                "Load Component": "Total SLS resultant",
                 "Section Basis": "Composite transformed",
                 "N": 0.0,
                 "Mx": 500.0,
@@ -953,13 +986,13 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
 
     st.markdown("#### SLS Girder Service Loads")
     st.caption(
-        "Use service-level resultants by stage/component. N and Mx are currently the primary elastic stress inputs; "
+        "Use service-level resultants by separate stage and load component. N and Mx are currently the primary elastic stress inputs; "
         "My, Vy, Vx, and T are stored for future biaxial stress, principal tension, shear cracking, and torsion checks."
     )
     st.warning(
         "Avoid double counting: if an SLS row is a total service resultant that already includes LL+IM, do not add a separate live-load action elsewhere in Analysis."
     )
-    sls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")), BEAM_SLS_LOAD_COLUMNS)
+    sls_df = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
     edited_sls = st.data_editor(
         sls_df,
         num_rows="dynamic",
@@ -968,8 +1001,9 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         column_config={
             "Active": st.column_config.CheckboxColumn("Active"),
             "Case Name": st.column_config.TextColumn("Case Name"),
-            "Stage / Component": st.column_config.SelectboxColumn("Stage / Component", options=BEAM_STAGE_OPTIONS),
-            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS),
+            "Stage": st.column_config.SelectboxColumn("Stage", options=BEAM_STAGE_OPTIONS, help="When the action is applied during staged construction/service."),
+            "Load Component": st.column_config.SelectboxColumn("Load Component", options=BEAM_LOAD_COMPONENT_OPTIONS, help="What this row represents, e.g. self-weight, wet deck, SDL, LL+IM, or a total SLS resultant."),
+            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS, help="Section basis intended for this row. Total SLS resultants may require staged/mixed basis treatment."),
             "N": st.column_config.TextColumn(f"N ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
             "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis. Sagging positive in girder SLS convention."),
             "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Optional service moment about y-axis."),
@@ -980,7 +1014,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         },
         key="beam_sls_loads_editor",
     )
-    edited_sls = _stringify_table(edited_sls, BEAM_SLS_LOAD_COLUMNS)
+    edited_sls = _normalize_beam_sls_load_table(edited_sls)
     st.session_state["beam_sls_loads_table"] = edited_sls
     _sync_workflow_load_tables_metadata()
 
@@ -1002,7 +1036,8 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
 
     with st.expander("Beam/Girder load table scope", expanded=False):
         st.write("- ULS table prepares actions for future flexure, shear, and torsion design.")
-        st.write("- SLS table prepares service actions for future staged stress checks.")
+        st.write("- SLS table prepares service actions for future staged stress checks using separate Stage and Load Component fields.")
+        st.write("- Use Stage for timing/basis logic and Load Component for what the action represents; do not combine the two meanings in one field.")
         st.write("- These Beam/Girder tables are not yet auto-connected to PMM or final code-certified girder design.")
         st.write("- Use the Analysis SLS workspace manual preview until load-table-to-analysis integration is added.")
 

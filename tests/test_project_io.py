@@ -410,7 +410,7 @@ def test_project_session_round_trip_preserves_workflow_load_tables_metadata() ->
             {"Active": True, "Case Name": "ULS-G", "Mux": "1000", "Vuy": "250", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": "girder"}
         ],
         "beam_sls_loads_table": [
-            {"Active": True, "Case Name": "SLS-G", "Stage / Component": "Final service", "Section Basis": "Composite transformed", "N": "0", "Mx": "500", "My": "0", "Vy": "0", "Vx": "0", "T": "0", "Note": "girder sls"}
+            {"Active": True, "Case Name": "SLS-G", "Stage": "Final service", "Load Component": "Total SLS resultant", "Section Basis": "Composite transformed", "N": "0", "Mx": "500", "My": "0", "Vy": "0", "Vx": "0", "T": "0", "Note": "girder sls"}
         ],
     }
 
@@ -423,4 +423,6 @@ def test_project_session_round_trip_preserves_workflow_load_tables_metadata() ->
 
     assert "beam_sls_loads_table" in restored
     assert restored["beam_sls_loads_table"].iloc[0]["Case Name"] == "SLS-G"
+    assert restored["beam_sls_loads_table"].iloc[0]["Stage"] == "Final service"
+    assert restored["beam_sls_loads_table"].iloc[0]["Load Component"] == "Total SLS resultant"
     assert restored["column_uls_loads_table"].iloc[0]["Vuy"] == "20"

@@ -96,13 +96,20 @@ from concrete_pmm_pro.serviceability import (
     crack_classification_to_dataframe,
     custom_stress_check_points_from_dataframe,
     dataframe_to_stress_check_points,
+    DEFAULT_GIRDER_SLS_CODES,
+    DEFAULT_GIRDER_SLS_STAGES,
+    DEFAULT_TENSION_LIMIT_MODES,
     GirderServiceStageCase,
+    StressLimitInputRow,
+    build_girder_sls_limit_profile,
     default_girder_service_stage_templates,
     girder_prestress_stress_result_rows,
+    girder_service_limit_check_rows,
     girder_service_stage_result_rows,
     girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
     run_girder_service_stage_stress,
+    run_girder_service_stress_limit_check,
     run_basic_girder_service_stress,
     run_girder_prestress_stress_effect,
     summarize_girder_prestress_elements,
@@ -3331,6 +3338,193 @@ def _clean_girder_stress_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+
+def _girder_fc_for_sls_limit_preview() -> float:
+    """Return the primary concrete f'c for Beam/Girder SLS limit preview."""
+
+    concrete_material = st.session_state.get("concrete_material")
+    try:
+        fc = float(getattr(concrete_material, "fc_MPa"))
+    except (TypeError, ValueError):
+        fc = 45.0
+    if not math.isfinite(fc) or fc <= 0.0:
+        fc = 45.0
+    return fc
+
+
+def _girder_stress_limit_input_rows_from_dataframe(df: pd.DataFrame, stress_column: str) -> list[StressLimitInputRow]:
+    """Build pure limit-check rows from a display/result dataframe."""
+
+    if df.empty or stress_column not in df.columns:
+        return []
+    rows: list[StressLimitInputRow] = []
+    for _, row in df.iterrows():
+        fiber = str(row.get("Fiber", row.get("location", "Fiber")))
+        try:
+            stress = float(row[stress_column])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(stress):
+            rows.append(StressLimitInputRow(fiber=fiber, stress_MPa=stress))
+    return rows
+
+
+def _render_girder_code_limit_preview(
+    *,
+    title: str,
+    stresses: list[StressLimitInputRow],
+    default_expanded: bool = False,
+) -> None:
+    """Render CODE.SLS.LIMIT1 preview checks for a set of fiber stresses.
+
+    This is a UI/reporting foundation only.  It does not change any stress
+    kernel, PMM solver, prestress input, load table, or report workflow.
+    """
+
+    if not stresses:
+        st.info("No stress rows are available for code-limit preview.")
+        return
+
+    enabled = st.checkbox(
+        f"Enable code stress-limit preview — {title}",
+        value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
+        key=f"girder_code_limit_enabled_{title}",
+        help="Preview top/bottom stress against editable AASHTO/ACI limit profiles. This is not a final code-certified check.",
+    )
+    if not enabled:
+        st.caption("CODE.SLS.LIMIT1 available: enable this preview to compare current stresses with editable AASHTO/ACI service-stress limits.")
+        return
+
+    fc_default = _girder_fc_for_sls_limit_preview()
+    controls = st.columns(4)
+    with controls[0]:
+        code = st.selectbox(
+            "Girder SLS code profile",
+            list(DEFAULT_GIRDER_SLS_CODES),
+            key=f"girder_code_limit_code_{title}",
+            help="AASHTO is generally the bridge-girder default; ACI is available for building/general prestressed members.",
+        )
+    with controls[1]:
+        stage = st.selectbox(
+            "Stress limit stage",
+            list(DEFAULT_GIRDER_SLS_STAGES),
+            key=f"girder_code_limit_stage_{title}",
+            help="Stage controls the default compression/tension preview profile. Verify against the governing code clauses before final design.",
+        )
+    with controls[2]:
+        fc = st.number_input(
+            "f'c for limit check (MPa)",
+            min_value=1.0,
+            value=float(st.session_state.get(f"girder_code_limit_fc_{title}", fc_default)),
+            step=1.0,
+            format="%.3f",
+            key=f"girder_code_limit_fc_{title}",
+            help="Use the concrete strength applicable to the selected stage. For transfer, use stage concrete strength if different.",
+        )
+    with controls[3]:
+        zero_tol = st.number_input(
+            "Zero stress tolerance (MPa)",
+            min_value=0.0,
+            value=float(st.session_state.get(f"girder_code_limit_zero_tol_{title}", _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA)),
+            step=0.0001,
+            format="%.6f",
+            key=f"girder_code_limit_zero_tol_{title}",
+        )
+
+    default_profile = build_girder_sls_limit_profile(code=code, stage=stage, stress_zero_tolerance_MPa=float(zero_tol))
+    with st.expander(f"Advanced code-limit profile override — {title}", expanded=default_expanded):
+        st.caption("Preview defaults are centralized and editable. Confirm final values against the selected project code edition and authority requirements.")
+        override_cols = st.columns(3)
+        with override_cols[0]:
+            comp_ratio = st.number_input(
+                "Compression limit ratio × f'c",
+                min_value=0.01,
+                value=float(st.session_state.get(f"girder_code_limit_comp_ratio_{title}", default_profile.compression_limit_ratio)),
+                step=0.01,
+                format="%.3f",
+                key=f"girder_code_limit_comp_ratio_{title}",
+            )
+        with override_cols[1]:
+            tension_mode = st.selectbox(
+                "Tension limit mode",
+                list(DEFAULT_TENSION_LIMIT_MODES),
+                index=list(DEFAULT_TENSION_LIMIT_MODES).index(default_profile.tension_limit_mode),
+                key=f"girder_code_limit_tension_mode_{title}",
+            )
+        with override_cols[2]:
+            if tension_mode == "sqrt(fc) ratio":
+                tension_sqrt_ratio = st.number_input(
+                    "Tension limit ratio × √f'c",
+                    min_value=0.0,
+                    value=float(st.session_state.get(f"girder_code_limit_sqrt_ratio_{title}", default_profile.tension_sqrt_fc_ratio)),
+                    step=0.05,
+                    format="%.3f",
+                    key=f"girder_code_limit_sqrt_ratio_{title}",
+                )
+                tension_limit = default_profile.tension_limit_MPa
+            elif tension_mode == "User-defined":
+                tension_sqrt_ratio = default_profile.tension_sqrt_fc_ratio
+                tension_limit = st.number_input(
+                    "User tension limit (MPa)",
+                    min_value=0.0,
+                    value=float(st.session_state.get(f"girder_code_limit_tension_mpa_{title}", default_profile.tension_limit_MPa)),
+                    step=0.1,
+                    format="%.3f",
+                    key=f"girder_code_limit_tension_mpa_{title}",
+                )
+            else:
+                st.markdown("**No tension permitted**")
+                tension_sqrt_ratio = 0.0
+                tension_limit = 0.0
+
+    profile = build_girder_sls_limit_profile(
+        code=code,
+        stage=stage,
+        compression_limit_ratio=float(comp_ratio),
+        tension_limit_mode=tension_mode,
+        tension_sqrt_fc_ratio=float(tension_sqrt_ratio),
+        tension_limit_MPa=float(tension_limit),
+        stress_zero_tolerance_MPa=float(zero_tol),
+    )
+    limit_result = run_girder_service_stress_limit_check(stresses=stresses, fc_MPa=float(fc), profile=profile)
+    compression_limit = profile.compression_limit_MPa(float(fc))
+    tension_allowable = profile.tension_allowable_MPa(float(fc))
+
+    limit_cards = [
+        {
+            "title": "Limit status",
+            "value": limit_result.overall_status,
+            "detail": f"{code} · {stage}",
+            "status": "ready" if limit_result.overall_status == "PASS" else "danger",
+        },
+        {
+            "title": "Compression limit",
+            "value": f"{compression_limit:,.3f} MPa",
+            "detail": f"{profile.compression_limit_ratio:.3f} × f'c",
+            "status": "info",
+        },
+        {
+            "title": "Tension limit",
+            "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
+            "detail": profile.tension_limit_mode,
+            "status": "info" if tension_allowable > 0 else "warning",
+        },
+        {
+            "title": "Max utilization",
+            "value": "—" if limit_result.max_utilization is None else f"{limit_result.max_utilization:.3f}",
+            "detail": "Preview D/C only",
+            "status": "ready" if (limit_result.max_utilization or 0.0) <= 1.0 and limit_result.overall_status == "PASS" else "danger",
+        },
+    ]
+    _render_analysis_summary_strip(limit_cards, columns=4)
+    st.dataframe(_clean_girder_stress_dataframe(pd.DataFrame(girder_service_limit_check_rows(limit_result))), use_container_width=True, hide_index=True)
+    with st.expander(f"Code-limit preview notes — {title}", expanded=False):
+        st.write(f"- {profile.clause_note}")
+        st.write(f"- {profile.limitation_note}")
+        for warning in limit_result.warnings:
+            st.write(f"- {warning}")
+        st.write("- This preview does not generate loads, select code clauses automatically, calculate losses, or update report/PMM/prestress solvers.")
+
 def _girder_combined_service_prestress_rows(service_result, prestress_result) -> list[dict[str, object]]:
     """Return top/bottom total stress rows for GIRDER.PS1B preview display."""
 
@@ -3403,9 +3597,9 @@ def _render_beam_girder_service_stress_preview() -> None:
             },
             {
                 "title": "Code stress limits",
-                "value": "Not checked",
-                "detail": "AASHTO + ACI limit framework is a future milestone",
-                "status": "neutral",
+                "value": "Optional preview",
+                "detail": "AASHTO + ACI editable limit profiles",
+                "status": "info",
             },
         ],
         columns=4,
@@ -3420,7 +3614,7 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write("- Pe_eff is positive for compressive effective prestress after losses.")
         st.write(
             "- This preview is not a staged prestressed girder design check yet. It does not include transfer/final stage automation, "
-            "creep/shrinkage, AASHTO stress limits, ACI stress limits, shear, or report integration."
+            "creep/shrinkage, final AASHTO/ACI clause calibration, shear, or report integration."
         )
         st.write("- It is not used by PMM, rebar, prestress, or report solvers.")
 
@@ -3520,6 +3714,11 @@ def _render_beam_girder_service_stress_preview() -> None:
 
     with st.expander("Quick elastic stress result table", expanded=has_service_action):
         st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+    _render_girder_code_limit_preview(
+        title="Quick trial service stress",
+        stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
+    )
 
     prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
     section_bottom_y_mm = 0.0
@@ -3643,6 +3842,10 @@ def _render_beam_girder_service_stress_preview() -> None:
             combined_cols[0].metric("Combined max compression", _format_girder_stress_mpa(combined_df['Combined total (MPa)'].min()))
             combined_cols[1].metric("Combined max tension", _format_girder_stress_mpa(combined_df['Combined total (MPa)'].max()))
             st.dataframe(combined_df, use_container_width=True, hide_index=True)
+            _render_girder_code_limit_preview(
+                title="Combined service plus prestress stress",
+                stresses=_girder_stress_limit_input_rows_from_dataframe(combined_df, "Combined total (MPa)"),
+            )
 
     st.markdown("#### Manual Service Stage Stress Preview")
     with st.expander("Manual stage preview scope", expanded=False):
@@ -3652,7 +3855,7 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write(
             "- Stage templates are guidance only; the app does not auto-generate self-weight, deck weight, live load, losses, or code limits in this milestone."
         )
-        st.write("- Use this panel as the future staged SLS workflow foundation; it is not yet a final code-check workflow.")
+        st.write("- Use this panel as the future staged SLS workflow foundation; it is not yet a final final code-check workflow.")
     enable_stage_preview = st.checkbox(
         "Enable manual service-stage stress preview",
         value=bool(st.session_state.get("girder_stage_preview_enabled", False)),
@@ -3801,7 +4004,12 @@ def _render_beam_girder_service_stress_preview() -> None:
             stage_metrics[3].metric("Pe_eff included", "Yes" if stage_result.prestress_result is not None else "No")
             for warning in stage_result.warnings:
                 st.warning(f"Service stage preview warning: {warning}")
-            st.dataframe(_clean_girder_stress_dataframe(_girder_stage_dataframe(stage_result)), use_container_width=True, hide_index=True)
+            stage_df = _clean_girder_stress_dataframe(_girder_stage_dataframe(stage_result))
+            st.dataframe(stage_df, use_container_width=True, hide_index=True)
+            _render_girder_code_limit_preview(
+                title="Manual service stage stress",
+                stresses=_girder_stress_limit_input_rows_from_dataframe(stage_df, "Total stress (MPa)"),
+            )
 
         with st.expander("Manual stage preview limitations", expanded=False):
             st.write("- Stage templates are labels and basis guidance only; they do not calculate construction-stage loads.")

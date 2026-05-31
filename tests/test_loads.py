@@ -7,11 +7,14 @@ from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
 from concrete_pmm_pro.ui.loads_page import (
     BEAM_SLS_LOAD_COLUMNS,
+    BEAM_SLS_STAGE_EDITOR_COLUMNS,
     BEAM_ULS_LOAD_COLUMNS,
     COLUMN_SLS_LOAD_COLUMNS,
     COLUMN_ULS_LOAD_COLUMNS,
     _axis_convention_rows,
     _beam_sls_stage_basis_warnings,
+    _beam_sls_stage_editor_rows,
+    _beam_sls_table_after_stage_edit,
     _column_workflow_tables_to_legacy_editor_table,
     _default_beam_sls_load_table,
     _default_beam_uls_load_table,
@@ -341,6 +344,28 @@ def test_loads_workflow1b_migrates_old_stage_component_column() -> None:
     assert "Stage / Component" not in migrated.columns
 
 
+def test_loads_sls2c_stage_editor_hides_stage_and_component_but_preserves_backend_schema() -> None:
+    table = _default_beam_sls_load_table()
+
+    service_editor = _beam_sls_stage_editor_rows(table, "Service stage")
+
+    assert list(service_editor.columns) == BEAM_SLS_STAGE_EDITOR_COLUMNS
+    assert "Stage" not in service_editor.columns
+    assert "Load Component" not in service_editor.columns
+    assert service_editor.loc[0, "Case Name"] == "SLS-SERV"
+
+    edited_service = service_editor.copy()
+    edited_service.loc[0, "Mx"] = "1234.5"
+    merged = _beam_sls_table_after_stage_edit(table, "Service stage", edited_service)
+
+    assert list(merged.columns) == BEAM_SLS_LOAD_COLUMNS
+    service_row = merged[merged["Stage"] == "Service stage"].iloc[0]
+    assert service_row["Load Component"] == "Total SLS resultant"
+    assert service_row["Section Basis"] == "Composite transformed"
+    assert service_row["Mx"] == "1234.5"
+    assert set(merged["Stage"]) == {"Transfer stage", "Construction stage", "Service stage"}
+
+
 def test_beam_girder_workflow_table_validation_rejects_non_numeric_actions() -> None:
     table = pd.DataFrame(
         [{"Active": True, "Case Name": "BG-1", "Mux": "bad", "Vuy": "10", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": ""}],
@@ -365,23 +390,26 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "SLS Girder Service Loads" in source
     assert "Do not include prestress in the Loads resultant" in source
     assert "Load Component" in source
-    assert "three practical girder SLS stages" in source
+    assert "enter service actions by stage" in source
     assert "Mux is main vertical bending" in source
     assert "Vuy is vertical shear" in source
 
 
-def test_beam_sls_dropdown_edits_are_persisted_with_single_rerun_guard() -> None:
+def test_beam_sls_stage_tab_edits_are_persisted_with_single_rerun_guard() -> None:
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[1]
     source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
 
+    assert "LOADS.SLS2C" in source
     assert "_store_editor_table_and_rerun_on_change" in source
-    assert "beam_sls_before_edit = sls_df.copy()" in source
     assert "st.rerun()" in source
-    assert 'SelectboxColumn("Check Stage"' in source
+    assert "stage_tabs = st.tabs" in source
+    assert "beam_sls_{stage_key}_loads_editor" in source
+    assert 'SelectboxColumn("Check Stage"' not in source
     assert 'SelectboxColumn("Load Component"' not in source
-    assert 'SelectboxColumn("Section Basis"' in source
+    assert 'SelectboxColumn(' in source and '"Section Basis"' in source
+    assert "Combined SLS backend table used by Analysis" in source
 
 
 def test_beam_sls_stage_basis_warnings_accept_service_total_but_flag_mismatched_basis() -> None:
@@ -449,5 +477,6 @@ def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guida
 
     assert "SLS rows can be selected in Analysis for quick preview checks" in source
     assert "SLS stage / section-basis guidance" in source
-    assert "detailed Load Component dropdown" in source
+    assert "detailed load-component dropdown" in source
+    assert "Combined SLS backend table used by Analysis" in source
     assert "full staged summation" in source

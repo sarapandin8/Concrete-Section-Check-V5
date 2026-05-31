@@ -36,6 +36,9 @@ BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage", "Load Component", "Sect
 # compatibility, but the commercial Beam/Girder SLS editor exposes only the
 # check stage.  The component meaning is derived from the selected stage.
 BEAM_SLS_EDITOR_COLUMNS = ["Active", "Case Name", "Stage", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+# LOADS.SLS2C presents the SLS inputs as stage sub-tabs while keeping one
+# backend/project table.  Each tab edits only its own stage rows.
+BEAM_SLS_STAGE_EDITOR_COLUMNS = ["Active", "Case Name", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 BEAM_STAGE_OPTIONS = [
     "",
     "Transfer stage",
@@ -281,6 +284,141 @@ def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
         for stage, basis in zip(raw["Stage"], raw["Section Basis"], strict=False)
     ]
     return _stringify_table(raw, BEAM_SLS_LOAD_COLUMNS)
+
+
+def _beam_sls_stage_key(stage_label: str) -> str:
+    """Return a stable Streamlit key suffix for one Beam/Girder SLS stage tab."""
+
+    label = _beam_sls_stage_label(stage_label)
+    if label == "Transfer stage":
+        return "transfer"
+    if label == "Construction stage":
+        return "construction"
+    if label == "Service stage":
+        return "service"
+    return "user_defined"
+
+
+def _beam_sls_stage_input_specs() -> list[dict[str, str]]:
+    """Commercial three-stage Beam/Girder SLS load-input tabs.
+
+    LOADS.SLS2C aligns Loads with Analysis: engineers input by design stage,
+    while the project data remains one normalized SLS load table.
+    """
+
+    return [
+        {
+            "stage": "Transfer stage",
+            "title": "Transfer stage",
+            "case_name": "SLS-TR",
+            "basis": "Precast gross",
+            "action": "Precast girder self-weight only",
+            "note": "Transfer external action: precast girder self-weight only; include Pe_transfer/initial prestress in Analysis.",
+        },
+        {
+            "stage": "Construction stage",
+            "title": "Construction stage",
+            "case_name": "SLS-CONST",
+            "basis": "Precast gross",
+            "action": "Precast girder self-weight + wet deck/topping",
+            "note": "Construction action: precast girder self-weight plus wet deck/topping before composite action.",
+        },
+        {
+            "stage": "Service stage",
+            "title": "Service stage",
+            "case_name": "SLS-SERV",
+            "basis": "Composite transformed",
+            "action": "Total SLS resultant including SDL and LL+IM",
+            "note": "Final service action: total SLS resultant including SDL and LL+IM. Do not include prestress again here.",
+        },
+    ]
+
+
+def _beam_sls_stage_spec(stage_label: str) -> dict[str, str]:
+    """Return stage-tab metadata, falling back to an engineer-defined stage."""
+
+    normalized = _beam_sls_stage_label(stage_label)
+    for spec in _beam_sls_stage_input_specs():
+        if spec["stage"] == normalized:
+            return spec
+    return {
+        "stage": normalized or "User-defined",
+        "title": normalized or "User-defined",
+        "case_name": "SLS-USER",
+        "basis": "User-defined",
+        "action": "Engineer-defined service action",
+        "note": "Engineer-defined SLS action; confirm stage, section basis, and prestress state before relying on preview status.",
+    }
+
+
+def _beam_sls_default_row_for_stage(stage_label: str) -> dict[str, object]:
+    """Return one default backend row for a Beam/Girder SLS stage."""
+
+    spec = _beam_sls_stage_spec(stage_label)
+    stage = spec["stage"]
+    return {
+        "Active": True,
+        "Case Name": spec["case_name"],
+        "Stage": stage,
+        "Load Component": _beam_sls_component_for_stage(stage),
+        "Section Basis": _beam_sls_basis_for_stage(stage, spec["basis"]),
+        "N": 0.0,
+        "Mx": 0.0,
+        "My": 0.0,
+        "Vy": 0.0,
+        "Vx": 0.0,
+        "T": 0.0,
+        "Note": spec["note"],
+    }
+
+
+def _beam_sls_stage_editor_rows(table: pd.DataFrame, stage_label: str) -> pd.DataFrame:
+    """Return the editor-visible rows for one Beam/Girder SLS stage tab."""
+
+    normalized = _normalize_beam_sls_load_table(table)
+    stage = _beam_sls_stage_label(stage_label)
+    stage_rows = normalized[normalized["Stage"].map(_beam_sls_stage_label) == stage].copy()
+    if stage_rows.empty:
+        stage_rows = pd.DataFrame([_beam_sls_default_row_for_stage(stage)], columns=BEAM_SLS_LOAD_COLUMNS)
+    return _stringify_table(stage_rows, BEAM_SLS_STAGE_EDITOR_COLUMNS).reset_index(drop=True)
+
+
+def _beam_sls_table_after_stage_edit(table: pd.DataFrame, stage_label: str, edited_stage_rows: pd.DataFrame) -> pd.DataFrame:
+    """Merge one stage-tab edit back into the single Beam/Girder SLS table.
+
+    The UI is split by stage for clarity, but project storage intentionally
+    remains the existing single-table schema so Analysis, save/load, and older
+    tests do not need a risky data-model migration.
+    """
+
+    stage = _beam_sls_stage_label(stage_label)
+    normalized = _normalize_beam_sls_load_table(table)
+    keep_rows = normalized[normalized["Stage"].map(_beam_sls_stage_label) != stage].copy()
+    edited = _stringify_table(pd.DataFrame(edited_stage_rows), BEAM_SLS_STAGE_EDITOR_COLUMNS)
+
+    new_rows: list[dict[str, object]] = []
+    for _, raw_row in edited.iterrows():
+        has_case = not _is_blank(raw_row.get("Case Name"))
+        has_action = any(not _is_blank(raw_row.get(column)) for column in ("N", "Mx", "My", "Vy", "Vx", "T"))
+        has_note = not _is_blank(raw_row.get("Note"))
+        if not has_case and not has_action and not has_note:
+            continue
+        row = {column: raw_row.get(column, "") for column in BEAM_SLS_STAGE_EDITOR_COLUMNS}
+        row["Stage"] = stage
+        row["Load Component"] = _beam_sls_component_for_stage(stage)
+        row["Section Basis"] = _beam_sls_basis_for_stage(stage, row.get("Section Basis"))
+        new_rows.append({column: row.get(column, "") for column in BEAM_SLS_LOAD_COLUMNS})
+
+    if not new_rows:
+        new_rows.append(_beam_sls_default_row_for_stage(stage))
+
+    merged = pd.concat([keep_rows, pd.DataFrame(new_rows, columns=BEAM_SLS_LOAD_COLUMNS)], ignore_index=True)
+    order = {"Transfer stage": 0, "Construction stage": 1, "Service stage": 2, "User-defined": 3}
+    merged["__stage_order"] = merged["Stage"].map(lambda value: order.get(_beam_sls_stage_label(value), 99))
+    merged = merged.sort_values(["__stage_order", "Case Name"], kind="stable").drop(columns=["__stage_order"])
+    return _normalize_beam_sls_load_table(merged)
+
+
 
 
 def _default_column_uls_load_table() -> pd.DataFrame:
@@ -1160,7 +1298,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
 
     st.markdown("#### SLS Girder Service Loads")
     st.caption(
-        "Use the three practical girder SLS stages: Transfer, Construction, and Service. "
+        "LOADS.SLS2C aligns this input area with Analysis: enter service actions by stage, not by detailed load-component dropdown. "
         "N and Mx are currently the primary elastic stress inputs; My, Vy, Vx, and T are stored for future checks."
     )
     st.info(
@@ -1168,36 +1306,60 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         "Construction = precast girder + wet deck/topping; Service = total SLS resultant including SDL and LL+IM. "
         "Do not include prestress in the Loads resultant when Pe is added separately in Analysis."
     )
-    sls_df = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
-    beam_sls_before_edit = sls_df.copy()
-    sls_editor_df = _stringify_table(sls_df, BEAM_SLS_EDITOR_COLUMNS)
-    edited_sls = st.data_editor(
-        sls_editor_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Active": st.column_config.CheckboxColumn("Active"),
-            "Case Name": st.column_config.TextColumn("Case Name"),
-            "Stage": st.column_config.SelectboxColumn("Check Stage", options=BEAM_STAGE_OPTIONS, help="Three-stage girder SLS model: Transfer, Construction, or Service."),
-            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS, help="Recommended: Precast gross for Transfer/Construction; Composite transformed for Service."),
-            "N": st.column_config.TextColumn(f"N ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
-            "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis. Sagging positive in girder SLS convention."),
-            "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Optional service moment about y-axis."),
-            "Vy": st.column_config.TextColumn(f"Vy ({force_unit})", help="Optional vertical shear for future service shear/principal stress checks."),
-            "Vx": st.column_config.TextColumn(f"Vx ({force_unit})", help="Optional lateral shear for future service checks."),
-            "T": st.column_config.TextColumn(f"T ({moment_unit})", help="Optional service torsion for future torsion cracking checks."),
-            "Note": st.column_config.TextColumn("Note"),
-        },
-        key="beam_sls_loads_editor",
-    )
-    edited_sls = _normalize_beam_sls_load_table(edited_sls)
-    _store_editor_table_and_rerun_on_change(
-        "beam_sls_loads_table",
-        edited_sls,
-        beam_sls_before_edit,
-        BEAM_SLS_LOAD_COLUMNS,
-    )
+
+    stage_tabs = st.tabs([spec["title"] for spec in _beam_sls_stage_input_specs()])
+    for spec, tab in zip(_beam_sls_stage_input_specs(), stage_tabs, strict=False):
+        stage_label = spec["stage"]
+        stage_key = _beam_sls_stage_key(stage_label)
+        with tab:
+            stage_cols = st.columns(3)
+            stage_cols[0].metric("Check stage", spec["title"])
+            stage_cols[0].caption(spec["action"])
+            stage_cols[1].metric("Recommended section basis", spec["basis"])
+            stage_cols[1].caption("Analysis tab uses the same stage routing.")
+            stage_cols[2].metric("Prestress handling", "Added in Analysis")
+            stage_cols[2].caption("Do not include prestress in the external load resultant when Pe is added separately.")
+            st.caption(spec["note"])
+            current_sls_table = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+            stage_editor_df = _beam_sls_stage_editor_rows(current_sls_table, stage_label)
+            edited_stage = st.data_editor(
+                stage_editor_df,
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Active": st.column_config.CheckboxColumn("Active"),
+                    "Case Name": st.column_config.TextColumn("Case Name"),
+                    "Section Basis": st.column_config.SelectboxColumn(
+                        "Section Basis",
+                        options=BEAM_SECTION_BASIS_OPTIONS,
+                        help="Recommended: Precast gross for Transfer/Construction; Composite transformed for Service.",
+                    ),
+                    "N": st.column_config.TextColumn(f"N ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
+                    "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis. Sagging positive in girder SLS convention."),
+                    "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Optional service moment about y-axis."),
+                    "Vy": st.column_config.TextColumn(f"Vy ({force_unit})", help="Optional vertical shear for future service shear/principal stress checks."),
+                    "Vx": st.column_config.TextColumn(f"Vx ({force_unit})", help="Optional lateral shear in x-direction for future checks."),
+                    "T": st.column_config.TextColumn(f"T ({moment_unit})", help="Optional service torsion for future torsion cracking checks."),
+                    "Note": st.column_config.TextColumn("Note"),
+                },
+                key=f"beam_sls_{stage_key}_loads_editor",
+            )
+            merged_sls_table = _beam_sls_table_after_stage_edit(current_sls_table, stage_label, edited_stage)
+            _store_editor_table_and_rerun_on_change(
+                "beam_sls_loads_table",
+                merged_sls_table,
+                current_sls_table,
+                BEAM_SLS_LOAD_COLUMNS,
+            )
+
+    edited_sls = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+
+    with st.expander("Combined SLS backend table used by Analysis", expanded=False):
+        st.caption(
+            "The UI is split into Transfer, Construction, and Service tabs, but Analysis and project save/load still use one normalized backend table."
+        )
+        st.dataframe(edited_sls, use_container_width=True, hide_index=True)
 
     stage_basis_warnings = _beam_sls_stage_basis_warnings(edited_sls)
     if stage_basis_warnings:

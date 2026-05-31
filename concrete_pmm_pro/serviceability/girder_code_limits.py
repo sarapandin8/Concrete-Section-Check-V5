@@ -121,6 +121,27 @@ class GirderServiceStressLimitCheckResult:
         return sum(1 for point in self.points if point.status == "FAIL")
 
 
+
+
+@dataclass(frozen=True)
+class GirderStressLimitFormulaSummary:
+    """Readable formula text for one editable stress-limit profile.
+
+    Formula text is deliberately kept as preview metadata so UI, validation,
+    and future reports can show how a displayed limit was produced without
+    turning this milestone into a final code-clause engine.
+    """
+
+    compression_formula: str
+    compression_substitution: str
+    compression_limit_MPa: float
+    tension_formula: str
+    tension_substitution: str
+    tension_limit_MPa: float
+    strength_label: str
+    profile_note: str
+
+
 @dataclass(frozen=True)
 class StressLimitInputRow:
     """Simple stress row accepted by the pure limit checker."""
@@ -303,6 +324,114 @@ def build_girder_sls_limit_profile(
     if profile.stress_zero_tolerance_MPa < 0.0:
         raise ValueError("stress_zero_tolerance_MPa must not be negative.")
     return profile
+
+
+def girder_sls_limit_formula_summary(
+    *,
+    profile: GirderServiceStressLimitProfile,
+    fc_MPa: float,
+) -> GirderStressLimitFormulaSummary:
+    """Return formula strings for the displayed compression/tension limits."""
+
+    _require_positive("fc_MPa", fc_MPa)
+    strength_label = profile.concrete_strength_label or "f'c"
+    compression_limit = profile.compression_limit_MPa(fc_MPa)
+    compression_formula = f"f_c,allow = {profile.compression_limit_ratio:.3f} × {strength_label}"
+    compression_substitution = f"{profile.compression_limit_ratio:.3f} × {float(fc_MPa):.3f} = {compression_limit:.3f} MPa"
+
+    tension_limit = profile.tension_allowable_MPa(fc_MPa)
+    if profile.tension_limit_mode == "No tension":
+        tension_formula = "f_t,allow = 0.000 MPa (no tension)"
+        tension_substitution = "No positive tensile stress is permitted in this preview profile."
+    elif profile.tension_limit_mode == "User-defined":
+        tension_formula = "f_t,allow = user-defined tension limit"
+        tension_substitution = f"{tension_limit:.3f} MPa"
+    else:
+        tension_formula = f"f_t,allow = {profile.tension_sqrt_fc_ratio:.3f} × √({strength_label})"
+        tension_substitution = f"{profile.tension_sqrt_fc_ratio:.3f} × √{float(fc_MPa):.3f} = {tension_limit:.3f} MPa"
+
+    return GirderStressLimitFormulaSummary(
+        compression_formula=compression_formula,
+        compression_substitution=compression_substitution,
+        compression_limit_MPa=compression_limit,
+        tension_formula=tension_formula,
+        tension_substitution=tension_substitution,
+        tension_limit_MPa=tension_limit,
+        strength_label=strength_label,
+        profile_note=f"{profile.code} · {profile.stage} · editable preview formula",
+    )
+
+
+def girder_sls_stage_basis_consistency_warnings(
+    *,
+    profile_stage: str,
+    section_basis_label: str | None = None,
+    load_stage: str | None = None,
+    load_component: str | None = None,
+) -> tuple[str, ...]:
+    """Return engineering warnings for inconsistent stage/load/basis selections.
+
+    These are guidance warnings only.  They do not change stress values or
+    pass/fail calculations, but they prevent a preview result from appearing
+    more authoritative than its stage/load context supports.
+    """
+
+    warnings: list[str] = []
+    stage = normalize_girder_sls_stage(profile_stage)
+    basis = str(section_basis_label or "").strip().casefold()
+    row_stage_text = str(load_stage or "").strip()
+    row_stage_cf = row_stage_text.casefold()
+    component_text = str(load_component or "").strip()
+    component_cf = component_text.casefold()
+
+    def row_stage_family() -> str | None:
+        if not row_stage_cf:
+            return None
+        if "transfer" in row_stage_cf or "release" in row_stage_cf:
+            return STAGE_TRANSFER
+        if "deck" in row_stage_cf or "pre-composite" in row_stage_cf or "pre composite" in row_stage_cf:
+            return STAGE_DECK_CASTING
+        if "final" in row_stage_cf or "service" in row_stage_cf or "composite" in row_stage_cf:
+            return STAGE_FINAL_SERVICE
+        return None
+
+    load_family = row_stage_family()
+    if load_family is not None and stage != STAGE_USER_DEFINED and load_family != stage:
+        warnings.append(
+            f"Stage mismatch: selected Loads row is {row_stage_text!r}, but the code-limit stage is {stage!r}. "
+            "Use matching stage actions for transfer, deck-casting, or final-service checks."
+        )
+
+    if stage in {STAGE_TRANSFER, STAGE_DECK_CASTING} and "composite" in basis:
+        warnings.append(
+            f"Section basis warning: {stage} checks should normally use precast gross section properties, "
+            "not composite transformed properties."
+        )
+
+    if stage == STAGE_TRANSFER and "total" in component_cf:
+        warnings.append(
+            "Load component warning: a Total SLS resultant is not appropriate for a transfer/release check. "
+            "Use transfer-stage prestress and self-weight actions with f'ci and precast gross section."
+        )
+
+    if "total sls" in component_cf and ("precast" in basis or "composite" in basis):
+        warnings.append(
+            "Staged-effect warning: Total SLS resultant on a single section basis is suitable for quick preview only. "
+            "For final prestressed-girder SLS, split self-weight, wet deck, SDL, and LL+IM into staged rows."
+        )
+
+    if stage == STAGE_FINAL_SERVICE and ("wet deck" in component_cf or "girder self" in component_cf) and "composite" in basis:
+        warnings.append(
+            "Stage/basis warning: girder self-weight or wet deck/topping effects usually act before composite action; "
+            "check those components on the precast gross section before assembling final service stress."
+        )
+
+    if stage == STAGE_FINAL_SERVICE and ("sdl" in component_cf or "ll" in component_cf or "live" in component_cf) and "precast" in basis:
+        warnings.append(
+            "Stage/basis warning: post-composite SDL or LL+IM effects usually use the composite transformed section basis."
+        )
+
+    return tuple(dict.fromkeys(warnings))
 
 
 def _stress_type(stress_MPa: float, *, zero_tolerance_MPa: float) -> str:

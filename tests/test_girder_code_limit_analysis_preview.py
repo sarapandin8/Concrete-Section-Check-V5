@@ -5,7 +5,7 @@ SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(
 
 
 def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> None:
-    assert "CODE.SLS.LIMIT2.1" in SOURCE
+    assert "CODE.SLS.LIMIT2.2" in SOURCE
     assert "Enable PASS/FAIL preview" in SOURCE
     assert "Design code profile" in SOURCE
     assert "Visible code/stage selector" in SOURCE
@@ -14,7 +14,7 @@ def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> N
     assert "Code Stress Limit Preview" in SOURCE
     assert "Code check status" in SOURCE
     assert "NOT CHECKED" in SOURCE
-    assert "does not change any stress" in SOURCE
+    assert "does not alter stress values" in SOURCE
 
 
 def test_analysis_page_code_limit_preview_checks_quick_combined_and_stage_results() -> None:
@@ -38,3 +38,14 @@ def test_analysis_page_exposes_stage_aware_code_limit_controls() -> None:
     assert "f'ci" in SOURCE
     assert "Pe_eff" in SOURCE
     assert "losses are not calculated automatically" in SOURCE.lower()
+
+
+def test_analysis_page_shows_limit_formulas_and_consistency_warnings() -> None:
+    assert "Compression limit formula" in SOURCE
+    assert "Tension limit formula" in SOURCE
+    assert "Engineering consistency warnings" in SOURCE
+    assert "girder_sls_stage_basis_consistency_warnings" in SOURCE
+    assert "girder_sls_limit_formula_summary" in SOURCE
+    assert "section_basis_label" in SOURCE
+    assert "load_stage" in SOURCE
+    assert "load_component" in SOURCE

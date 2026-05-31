@@ -8,6 +8,8 @@ from concrete_pmm_pro.serviceability.girder_code_limits import (
     StressLimitInputRow,
     build_girder_sls_limit_profile,
     default_girder_sls_limit_profile,
+    girder_sls_limit_formula_summary,
+    girder_sls_stage_basis_consistency_warnings,
     run_girder_service_stress_limit_check,
 )
 from concrete_pmm_pro.validation.models import ValidationResult, boolean_validation_result, numeric_validation_result
@@ -62,6 +64,41 @@ def validate_girder_code_limits() -> list[ValidationResult]:
                 "ACI tension MPa": aci_final.tension_allowable_MPa(fc),
             },
             engineering_note="Profiles remain editable previews, but they should not look identical when switching code families.",
+        )
+    )
+
+    formula = girder_sls_limit_formula_summary(profile=aci_transfer, fc_MPa=fc)
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT2_2.FORMULA_DISPLAY",
+            category=CATEGORY,
+            title="Limit formula summary exposes formula and substitution text",
+            passed="0.600" in formula.compression_formula and "27.000 MPa" in formula.compression_substitution and "0.250" in formula.tension_formula,
+            expected="compression and tension formula text",
+            actual={
+                "compression": formula.compression_formula,
+                "compression substitution": formula.compression_substitution,
+                "tension": formula.tension_formula,
+                "tension substitution": formula.tension_substitution,
+            },
+            engineering_note="Commercial-grade SLS checks must show how preview limits were calculated, not just the resulting number.",
+        )
+    )
+    consistency_warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Transfer / Release",
+        section_basis_label="Composite transformed section",
+        load_stage="Final service",
+        load_component="Total SLS resultant",
+    )
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT2_2.STAGE_BASIS_GUARD",
+            category=CATEGORY,
+            title="Stage/load/basis consistency guard flags misleading transfer check",
+            passed=len(consistency_warnings) >= 3,
+            expected="stage mismatch, composite-basis, and total-resultant warnings",
+            actual=list(consistency_warnings),
+            engineering_note="A PASS/FAIL preview is not meaningful if a final-service total resultant is checked as a transfer-stage composite result.",
         )
     )
 

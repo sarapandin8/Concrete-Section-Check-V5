@@ -27,7 +27,7 @@ def test_girder_sls_workspace_formats_zero_stress_without_negative_zero() -> Non
 
 def test_girder_sls_workspace_keeps_design_limits_as_future_work() -> None:
     assert "AASHTO/ACI clause calibration" in SOURCE
-    assert "CODE.SLS.LIMIT2.1" in SOURCE
+    assert "CODE.SLS.LIMIT2.2" in SOURCE
     assert "It is not used by PMM, rebar, prestress, or report solvers" in SOURCE
     assert "manual stage actions" in SOURCE
     assert "code-check workflow" in SOURCE

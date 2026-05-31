@@ -9,6 +9,8 @@ from concrete_pmm_pro.serviceability import (
     girder_service_limit_check_rows,
     run_girder_service_stress_limit_check,
     normalize_girder_sls_stage,
+    girder_sls_limit_formula_summary,
+    girder_sls_stage_basis_consistency_warnings,
 )
 from concrete_pmm_pro.validation.girder_code_limits import validate_girder_code_limits
 
@@ -119,3 +121,39 @@ def test_girder_code_limit_validation_suite_passes() -> None:
 
     assert results
     assert {result.status for result in results} == {"PASS"}
+
+
+def test_limit_formula_summary_shows_code_stage_formula_text() -> None:
+    profile = default_girder_sls_limit_profile("ACI 318", "Transfer / Release")
+    formula = girder_sls_limit_formula_summary(profile=profile, fc_MPa=45.0)
+
+    assert "0.600" in formula.compression_formula
+    assert "f'ci" in formula.compression_formula
+    assert "27.000 MPa" in formula.compression_substitution
+    assert "0.250" in formula.tension_formula
+    assert "1.677 MPa" in formula.tension_substitution
+    assert formula.profile_note.startswith("ACI 318")
+
+
+def test_stage_basis_consistency_warns_for_transfer_with_final_composite_row() -> None:
+    warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Transfer / Release",
+        section_basis_label="Composite transformed section",
+        load_stage="Final service",
+        load_component="Total SLS resultant",
+    )
+
+    assert any("Stage mismatch" in warning for warning in warnings)
+    assert any("precast gross" in warning.lower() for warning in warnings)
+    assert any("Total SLS resultant" in warning for warning in warnings)
+
+
+def test_stage_basis_consistency_accepts_final_service_composite_live_load() -> None:
+    warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Final service / Composite",
+        section_basis_label="Composite transformed section",
+        load_stage="Final service",
+        load_component="LL+IM",
+    )
+
+    assert warnings == ()

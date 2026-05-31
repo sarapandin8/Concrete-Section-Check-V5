@@ -105,6 +105,8 @@ from concrete_pmm_pro.serviceability import (
     default_girder_service_stage_templates,
     girder_prestress_stress_result_rows,
     girder_service_limit_check_rows,
+    girder_sls_limit_formula_summary,
+    girder_sls_stage_basis_consistency_warnings,
     normalize_girder_sls_stage,
     girder_service_stage_result_rows,
     girder_service_stress_result_rows,
@@ -3495,15 +3497,17 @@ def _render_girder_code_limit_preview(
     title: str,
     stresses: list[StressLimitInputRow],
     default_expanded: bool = False,
+    section_basis_label: str | None = None,
+    load_stage: str | None = None,
+    load_component: str | None = None,
 ) -> None:
     """Render compact CODE.SLS.LIMIT2 preview checks for a set of fiber stresses.
 
     This is a UI/reporting foundation only.  It does not change any stress
     kernel, PMM solver, prestress input, load table, or report workflow.
-    CODE.SLS.LIMIT2.1 keeps only the essential code/stage/result summary in
-    the default view and moves advanced engineering overrides/details into
-    collapsed expanders so the SLS workspace reads like commercial software,
-    not a debug screen.
+    CODE.SLS.LIMIT2.2 also displays the governing preview-limit formulas and
+    warns when the selected load row, code-limit stage, and section basis are
+    inconsistent.  It remains guidance-only and does not alter stress values.
     """
 
     if not stresses:
@@ -3590,7 +3594,7 @@ def _render_girder_code_limit_preview(
         override_cols = st.columns(4)
         with override_cols[0]:
             comp_ratio = st.number_input(
-                "Compression limit ratio × f'c",
+                "Compression limit ratio × selected strength",
                 min_value=0.01,
                 value=float(st.session_state.get(f"girder_code_limit_comp_ratio_{title}", default_profile.compression_limit_ratio)),
                 step=0.01,
@@ -3607,7 +3611,7 @@ def _render_girder_code_limit_preview(
         with override_cols[2]:
             if tension_mode == "sqrt(fc) ratio":
                 tension_sqrt_ratio = st.number_input(
-                    "Tension limit ratio × √f'c",
+                    "Tension limit ratio × √selected strength",
                     min_value=0.0,
                     value=float(st.session_state.get(f"girder_code_limit_sqrt_ratio_{title}", default_profile.tension_sqrt_fc_ratio)),
                     step=0.05,
@@ -3650,6 +3654,36 @@ def _render_girder_code_limit_preview(
     )
     compression_limit = profile.compression_limit_MPa(float(fc))
     tension_allowable = profile.tension_allowable_MPa(float(fc))
+    formula_summary = girder_sls_limit_formula_summary(profile=profile, fc_MPa=float(fc))
+    context_warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage=profile.stage,
+        section_basis_label=section_basis_label,
+        load_stage=load_stage,
+        load_component=load_component,
+    )
+
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Compression limit formula",
+                "value": formula_summary.compression_formula,
+                "detail": formula_summary.compression_substitution,
+                "status": "info",
+            },
+            {
+                "title": "Tension limit formula",
+                "value": formula_summary.tension_formula,
+                "detail": formula_summary.tension_substitution,
+                "status": "info" if tension_allowable > 0 else "warning",
+            },
+        ],
+        columns=2,
+    )
+
+    if context_warnings:
+        with st.expander(f"Engineering consistency warnings — {title}", expanded=True):
+            for warning in context_warnings:
+                st.warning(warning)
 
     if not enabled:
         _render_analysis_summary_strip(
@@ -3669,13 +3703,13 @@ def _render_girder_code_limit_preview(
                 {
                     "title": "Preview compression limit",
                     "value": f"{compression_limit:,.3f} MPa",
-                    "detail": f"{profile.compression_limit_ratio:.3f} × selected strength",
+                    "detail": formula_summary.compression_substitution,
                     "status": "info",
                 },
                 {
                     "title": "Preview tension limit",
                     "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
-                    "detail": profile.tension_limit_mode,
+                    "detail": formula_summary.tension_substitution,
                     "status": "info" if tension_allowable > 0 else "warning",
                 },
             ],
@@ -3694,13 +3728,13 @@ def _render_girder_code_limit_preview(
         {
             "title": "Compression limit",
             "value": f"{compression_limit:,.3f} MPa",
-            "detail": f"{profile.compression_limit_ratio:.3f} × selected strength",
+            "detail": formula_summary.compression_substitution,
             "status": "info",
         },
         {
             "title": "Tension limit",
             "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
-            "detail": profile.tension_limit_mode,
+            "detail": formula_summary.tension_substitution,
             "status": "info" if tension_allowable > 0 else "warning",
         },
         {
@@ -3714,6 +3748,8 @@ def _render_girder_code_limit_preview(
     with st.expander(f"Detailed code-limit stress table — {title}", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(pd.DataFrame(girder_service_limit_check_rows(limit_result))), use_container_width=True, hide_index=True)
     with st.expander(f"Code-limit preview notes — {title}", expanded=False):
+        st.write(f"- Compression formula: {formula_summary.compression_formula}; {formula_summary.compression_substitution}")
+        st.write(f"- Tension formula: {formula_summary.tension_formula}; {formula_summary.tension_substitution}")
         st.write(f"- {profile.clause_note}")
         st.write(f"- {profile.limitation_note}")
         for warning in limit_result.warnings:
@@ -3964,6 +4000,9 @@ def _render_beam_girder_service_stress_preview() -> None:
     _render_girder_code_limit_preview(
         title="Quick trial service stress",
         stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
+        section_basis_label=basis_options.labels.get(basis_name, basis_name),
+        load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or ""),
+        load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
     )
 
     with st.expander("Quick elastic stress result table", expanded=has_service_action):
@@ -4094,6 +4133,9 @@ def _render_beam_girder_service_stress_preview() -> None:
             _render_girder_code_limit_preview(
                 title="Combined service plus prestress stress",
                 stresses=_girder_stress_limit_input_rows_from_dataframe(combined_df, "Combined total (MPa)"),
+                section_basis_label=basis_options.labels.get(basis_name, basis_name),
+                load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or ""),
+                load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
             )
 
     st.markdown("#### Manual Service Stage Stress Preview")
@@ -4258,6 +4300,9 @@ def _render_beam_girder_service_stress_preview() -> None:
             _render_girder_code_limit_preview(
                 title="Manual service stage stress",
                 stresses=_girder_stress_limit_input_rows_from_dataframe(stage_df, "Total stress (MPa)"),
+                section_basis_label=basis_options.labels.get(stage_basis_name, stage_basis_name),
+                load_stage=stage_template.title,
+                load_component=stage_template.title,
             )
 
         with st.expander("Manual stage preview limitations", expanded=False):

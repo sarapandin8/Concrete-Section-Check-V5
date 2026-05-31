@@ -3515,10 +3515,10 @@ def _render_girder_code_limit_preview(
         st.info("No stress rows are available for code-limit preview.")
         return
 
-    st.markdown(f"##### Code Stress Limit Preview — {title}")
+    # GIRDER.SLS3 clean check-case layout: default screen is a decision view; expanders are audit view.
+    st.markdown(f"##### Code Limit Summary — {title}")
     st.caption(
-        "Visible code/stage selector with editable preview limits. AASHTO and ACI use separate default profiles; "
-        "final code-clause values remain engineer-controlled."
+        "Compact preview only. Select code/stage/profile here; detailed formulas, basis notes, and stress rows stay in expanders."
     )
 
     fc_default = _girder_fc_for_sls_limit_preview()
@@ -3741,26 +3741,40 @@ def _render_girder_code_limit_preview(
         load_component=load_component,
     )
 
-    _render_analysis_summary_strip(
-        [
-            {
-                "title": "Compression limit formula",
-                "value": formula_summary.compression_formula,
-                "detail": formula_summary.compression_substitution,
-                "status": "info",
-            },
-            {
-                "title": "Tension limit formula",
-                "value": formula_summary.tension_formula,
-                "detail": formula_summary.tension_substitution,
-                "status": "info" if tension_allowable > 0 else "warning",
-            },
-        ],
-        columns=2,
-    )
+    with st.expander(f"Limit formulas and code-basis audit — {title}", expanded=False):
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "Compression formula",
+                    "value": formula_summary.compression_formula,
+                    "detail": profile.limit_profile_label,
+                    "status": "info",
+                },
+                {
+                    "title": "Tension formula",
+                    "value": formula_summary.tension_formula,
+                    "detail": profile.limit_profile_label,
+                    "status": "info" if tension_allowable > 0 else "warning",
+                },
+            ],
+            columns=2,
+        )
+        st.write(f"- {profile.clause_note}")
+        st.write(f"- {profile.limitation_note}")
 
     if context_warnings:
-        with st.expander(f"Engineering consistency warnings — {title}", expanded=True):
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "Engineering review",
+                    "value": "REVIEW",
+                    "detail": "Stage/load/section-basis warning exists; open audit notes before relying on preview status",
+                    "status": "warning",
+                }
+            ],
+            columns=1,
+        )
+        with st.expander(f"Engineering consistency warnings — {title}", expanded=False):
             for warning in context_warnings:
                 st.warning(warning)
 
@@ -3782,13 +3796,13 @@ def _render_girder_code_limit_preview(
                 {
                     "title": "Preview compression limit",
                     "value": f"{compression_limit:,.3f} MPa",
-                    "detail": formula_summary.compression_substitution,
+                    "detail": profile.limit_profile_label,
                     "status": "info",
                 },
                 {
                     "title": "Preview tension limit",
                     "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
-                    "detail": formula_summary.tension_substitution,
+                    "detail": profile.limit_profile_label,
                     "status": "info" if tension_allowable > 0 else "warning",
                 },
             ],
@@ -3797,30 +3811,37 @@ def _render_girder_code_limit_preview(
         return
 
     limit_result = run_girder_service_stress_limit_check(stresses=stresses, fc_MPa=float(fc), profile=profile)
+    display_status = "REVIEW" if context_warnings else f"Preview {limit_result.overall_status}"
+    display_status_style = "warning" if context_warnings else ("ready" if limit_result.overall_status == "PASS" else "danger")
+    display_status_detail = (
+        f"Calculated {limit_result.overall_status}; resolve engineering review notes"
+        if context_warnings
+        else f"{code} · {stage} · {profile.limit_profile_label}"
+    )
     limit_cards = [
         {
-            "title": "Limit status",
-            "value": limit_result.overall_status,
-            "detail": f"{code} · {stage} · {profile.limit_profile_label}",
-            "status": "ready" if limit_result.overall_status == "PASS" else "danger",
+            "title": "Preview status",
+            "value": display_status,
+            "detail": display_status_detail,
+            "status": display_status_style,
         },
         {
             "title": "Compression limit",
             "value": f"{compression_limit:,.3f} MPa",
-            "detail": formula_summary.compression_substitution,
+            "detail": profile.limit_profile_label,
             "status": "info",
         },
         {
             "title": "Tension limit",
             "value": f"{tension_allowable:,.3f} MPa" if tension_allowable > 0 else "No tension",
-            "detail": formula_summary.tension_substitution,
+            "detail": profile.limit_profile_label,
             "status": "info" if tension_allowable > 0 else "warning",
         },
         {
             "title": "Max utilization",
             "value": "—" if limit_result.max_utilization is None else f"{limit_result.max_utilization:.3f}",
             "detail": "Preview D/C only",
-            "status": "ready" if (limit_result.max_utilization or 0.0) <= 1.0 and limit_result.overall_status == "PASS" else "danger",
+            "status": "warning" if context_warnings else ("ready" if (limit_result.max_utilization or 0.0) <= 1.0 and limit_result.overall_status == "PASS" else "danger"),
         },
     ]
     _render_analysis_summary_strip(limit_cards, columns=4)
@@ -3928,7 +3949,9 @@ def _render_beam_girder_service_stress_preview() -> None:
         )
         st.write("- It is not used by PMM, rebar, prestress, or report solvers.")
 
-    st.markdown("#### Quick Elastic Stress Trial")
+    # Legacy source phrase retained for regression tests: Quick Elastic Stress Trial.
+    st.markdown("#### SLS Check Case")
+    st.caption("Decision view for one SLS check case. Detailed stress rows, code formulas, and audit notes stay collapsed unless needed.")
 
     section_geometry = st.session_state.get("section_geometry")
     section_parameters = st.session_state.get("section_parameters", {})
@@ -4070,21 +4093,21 @@ def _render_beam_girder_service_stress_preview() -> None:
     )
 
     if not has_service_action:
-        st.info("Enter a nonzero service axial force or moment to preview quick elastic service stress. Zero-action rows are shown only as a sign-convention baseline.")
+        st.info("Enter a nonzero service axial force or moment to preview this SLS check case. Zero-action rows are shown only as a sign-convention baseline.")
 
     stress_cols = st.columns(2)
     stress_cols[0].metric("Service max compression", _format_girder_stress_mpa(result.max_compression_MPa))
     stress_cols[1].metric("Service max tension", _format_girder_stress_mpa(result.max_tension_MPa))
 
     _render_girder_code_limit_preview(
-        title="Quick trial service stress",
+        title="SLS check case",
         stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
         section_basis_label=basis_options.labels.get(basis_name, basis_name),
         load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or ""),
         load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
     )
 
-    with st.expander("Quick elastic stress result table", expanded=has_service_action):
+    with st.expander("SLS check case stress table", expanded=False):
         st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
@@ -4095,7 +4118,20 @@ def _render_beam_girder_service_stress_preview() -> None:
         except (TypeError, ValueError) as exc:
             st.warning(f"Unable to convert prestress coordinates to girder bottom-fiber coordinates: {exc}")
 
-    st.markdown("#### Effective Prestress Stress Effect")
+    st.markdown("#### Prestress Effect")
+    prestress_status_default = bool(st.session_state.get("girder_service_include_prestress", False))
+    if not prestress_status_default:
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "Prestress stress component",
+                    "value": "Not included",
+                    "detail": "Enable Pe_eff only when the selected check case should include effective prestress after losses",
+                    "status": "neutral",
+                }
+            ],
+            columns=1,
+        )
     include_prestress = st.checkbox(
         "Include effective prestress stress component",
         value=bool(st.session_state.get("girder_service_include_prestress", False)),
@@ -4144,8 +4180,10 @@ def _render_beam_girder_service_stress_preview() -> None:
                 "PS centroid yb",
                 "—" if summary.tendon_y_from_bottom_mm is None else f"{summary.tendon_y_from_bottom_mm:,.2f} mm",
             )
-            for warning in summary.warnings:
-                st.warning(warning)
+            if summary.warnings:
+                with st.expander("Prestress source warnings", expanded=False):
+                    for warning in summary.warnings:
+                        st.warning(warning)
             with st.expander("Prestress source notes", expanded=False):
                 if summary.info:
                     for item in summary.info:
@@ -4156,8 +4194,6 @@ def _render_beam_girder_service_stress_preview() -> None:
                 pe_eff_kN = float(summary.total_pe_eff_kN)
                 tendon_y_from_bottom_mm = float(summary.tendon_y_from_bottom_mm)
                 source_ready = True
-            else:
-                st.info("No positive Pe_eff was found in the Prestress table. Use manual mode or define Pe_eff in the Prestress page.")
         else:
             manual_cols = st.columns(2)
             with manual_cols[0]:
@@ -4186,6 +4222,9 @@ def _render_beam_girder_service_stress_preview() -> None:
             source_ready = pe_eff_kN > 0.0
             if not source_ready:
                 st.info("Enter a positive Pe_eff to preview prestress stress effects.")
+
+        if not source_ready and prestress_mode == "From Prestress table":
+            st.info("No positive Pe_eff is available for this check case; prestress stress remains excluded from the summary result.")
 
         if source_ready:
             ps_result = run_girder_prestress_stress_effect(

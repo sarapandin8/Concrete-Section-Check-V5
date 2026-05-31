@@ -11,17 +11,19 @@ def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> N
     assert "Limit profile" in SOURCE
     assert "Use manual override values" in SOURCE
     assert "girder_sls_limit_profile_options" in SOURCE
-    assert "Visible code/stage selector" in SOURCE
+    assert "Compact preview only" in SOURCE
     assert "DEFAULT_GIRDER_SLS_CODES" in SOURCE
     assert "This is not a final code-certified check" in SOURCE
-    assert "Code Stress Limit Preview" in SOURCE
+    assert "Code Limit Summary" in SOURCE
     assert "Code check status" in SOURCE
+    assert "Preview status" in SOURCE
+    assert "REVIEW" in SOURCE
     assert "NOT CHECKED" in SOURCE
     assert "does not alter stress values" in SOURCE
 
 
 def test_analysis_page_code_limit_preview_checks_quick_combined_and_stage_results() -> None:
-    assert "Quick trial service stress" in SOURCE
+    assert "SLS check case" in SOURCE
     assert "Combined service plus prestress stress" in SOURCE
     assert "Manual service stage stress" in SOURCE
     assert "_girder_stress_limit_input_rows_from_dataframe" in SOURCE
@@ -44,8 +46,9 @@ def test_analysis_page_exposes_stage_aware_code_limit_controls() -> None:
 
 
 def test_analysis_page_shows_limit_formulas_and_consistency_warnings() -> None:
-    assert "Compression limit formula" in SOURCE
-    assert "Tension limit formula" in SOURCE
+    assert "Compression formula" in SOURCE
+    assert "Tension formula" in SOURCE
+    assert "Limit formulas and code-basis audit" in SOURCE
     assert "Engineering consistency warnings" in SOURCE
     assert "girder_sls_stage_basis_consistency_warnings" in SOURCE
     assert "girder_sls_limit_formula_summary" in SOURCE

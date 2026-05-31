@@ -7,7 +7,7 @@ def test_analysis_page_includes_prestress_preview_without_solver_coupling() -> N
     source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(encoding="utf-8")
 
     assert "GIRDER.SLS1B/PS1B previews" in source
-    assert "Effective Prestress Stress Effect" in source
+    assert "Prestress Effect" in source
     assert "girder_service_include_prestress" in source
     assert "From Prestress table" in source
     assert "Manual Pe_eff and yps" in source

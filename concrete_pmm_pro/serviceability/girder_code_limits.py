@@ -1,9 +1,9 @@
 """Beam/Girder service-stress code-limit preview helpers.
 
-CODE.SLS.LIMIT2 keeps this as an editable preview framework while making
-stage meaning explicit.  The helpers are intentionally pure Python so the UI,
-validation suite, and future reports can all use the same stage-aware profile
-metadata without changing stress or solver logic.
+CODE.SLS.LIMIT3 keeps this as an editable preview framework while making
+stage and code-profile meaning explicit.  The helpers are intentionally pure
+Python so the UI, validation suite, and future reports can all use the same
+stage-aware profile metadata without changing stress or solver logic.
 
 Important scope guard:
 - This module does not generate loads or stages.
@@ -52,6 +52,26 @@ DEFAULT_TENSION_LIMIT_MODES: tuple[TensionLimitMode, ...] = ("No tension", "sqrt
 
 
 @dataclass(frozen=True)
+class GirderStressLimitProfileOption:
+    """Selectable code/stage limit-profile default for CODE.SLS.LIMIT3.
+
+    Values are still preview defaults.  This object exists so the UI can show
+    a clear AASHTO/ACI code-profile selector instead of hiding a single generic
+    ratio in the advanced override panel.
+    """
+
+    key: str
+    label: str
+    description: str
+    compression_limit_ratio: float
+    tension_limit_mode: TensionLimitMode
+    tension_sqrt_fc_ratio: float = 0.0
+    tension_limit_MPa: float = 0.0
+    tension_limit_cap_MPa: float | None = None
+    clause_note: str = ""
+
+
+@dataclass(frozen=True)
 class GirderServiceStressLimitProfile:
     """Concrete service-stress limit profile for one Beam/Girder preview check."""
 
@@ -61,6 +81,7 @@ class GirderServiceStressLimitProfile:
     tension_limit_mode: TensionLimitMode
     tension_sqrt_fc_ratio: float = 0.0
     tension_limit_MPa: float = 0.0
+    tension_limit_cap_MPa: float | None = None
     stress_zero_tolerance_MPa: float = 5.0e-4
     clause_note: str = ""
     limitation_note: str = ""
@@ -68,6 +89,9 @@ class GirderServiceStressLimitProfile:
     prestress_force_basis: str = "Pe_eff after losses"
     recommended_section_basis: str = "Engineer-selected"
     stage_guidance: str = ""
+    limit_profile_key: str = "default"
+    limit_profile_label: str = "Default editable preview profile"
+    limit_profile_description: str = "Engineer-controlled preview default; confirm final code clauses."
 
     def compression_limit_MPa(self, fc_MPa: float) -> float:
         _require_positive("fc_MPa", fc_MPa)
@@ -81,10 +105,14 @@ class GirderServiceStressLimitProfile:
         if self.tension_limit_mode == "User-defined":
             if float(self.tension_limit_MPa) < 0.0:
                 raise ValueError("tension_limit_MPa must not be negative.")
-            return float(self.tension_limit_MPa)
-        if float(self.tension_sqrt_fc_ratio) < 0.0:
-            raise ValueError("tension_sqrt_fc_ratio must not be negative.")
-        return float(self.tension_sqrt_fc_ratio) * math.sqrt(float(fc_MPa))
+            value = float(self.tension_limit_MPa)
+        else:
+            if float(self.tension_sqrt_fc_ratio) < 0.0:
+                raise ValueError("tension_sqrt_fc_ratio must not be negative.")
+            value = float(self.tension_sqrt_fc_ratio) * math.sqrt(float(fc_MPa))
+        if self.tension_limit_cap_MPa is not None:
+            value = min(value, float(self.tension_limit_cap_MPa))
+        return value
 
 
 @dataclass(frozen=True)
@@ -121,16 +149,9 @@ class GirderServiceStressLimitCheckResult:
         return sum(1 for point in self.points if point.status == "FAIL")
 
 
-
-
 @dataclass(frozen=True)
 class GirderStressLimitFormulaSummary:
-    """Readable formula text for one editable stress-limit profile.
-
-    Formula text is deliberately kept as preview metadata so UI, validation,
-    and future reports can show how a displayed limit was produced without
-    turning this milestone into a final code-clause engine.
-    """
+    """Readable formula text for one editable stress-limit profile."""
 
     compression_formula: str
     compression_substitution: str
@@ -202,15 +223,15 @@ def girder_sls_stage_metadata(stage: str) -> dict[str, str]:
     }
 
 
-def default_girder_sls_limit_profile(
+def girder_sls_limit_profile_options(
     code: GirderSLSCode = "AASHTO LRFD Bridge",
     stage: GirderSLSStage = STAGE_FINAL_SERVICE,
-) -> GirderServiceStressLimitProfile:
-    """Return an editable default profile for one code/stage combination.
+) -> tuple[GirderStressLimitProfileOption, ...]:
+    """Return selectable preview-limit profiles for one code/stage.
 
-    The values remain conservative preview defaults, not final locked clauses.
-    Stage metadata makes it harder to accidentally use final f'c for transfer
-    or Pe_eff-after-losses for release-stage checking.
+    The coefficients are in MPa form when used as ``ratio × sqrt(fc_MPa)``.
+    AASHTO ksi-form square-root coefficients are converted to MPa-form
+    coefficients here (for example 0.19 ksi√ksi ≈ 0.50 MPa√MPa).
     """
 
     if code not in DEFAULT_GIRDER_SLS_CODES:
@@ -219,72 +240,249 @@ def default_girder_sls_limit_profile(
     if stage not in DEFAULT_GIRDER_SLS_STAGES:
         raise ValueError(f"Unsupported girder SLS stage: {stage!r}")
 
+    if code == "AASHTO LRFD Bridge":
+        if stage == STAGE_TRANSFER:
+            return (
+                GirderStressLimitProfileOption(
+                    key="aashto_transfer_no_aux",
+                    label="Temporary release — no bonded auxiliary tension reinforcement",
+                    description="0.60 f'ci compression; 0.25√f'ci tension capped at 1.38 MPa. Use for conservative temporary release preview where the project permits this profile.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.25,
+                    tension_limit_cap_MPa=1.38,
+                    clause_note="AASHTO-style temporary stress preview: release-stage compression and tensile stress profile. Confirm member type, reinforcement condition, and project edition before final design.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_transfer_bonded_aux",
+                    label="Temporary release — bonded auxiliary reinforcement condition",
+                    description="0.60 f'ci compression; 0.58√f'ci tension preview where bonded reinforcement condition is satisfied.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.58,
+                    clause_note="AASHTO-style temporary stress preview with bonded auxiliary reinforcement assumption. Confirm reinforcement condition before use.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_transfer_no_tension",
+                    label="Temporary release — no tension permitted",
+                    description="Conservative no-tension release preview.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="No tension",
+                    clause_note="Conservative release preview with no positive tensile stress permitted.",
+                ),
+            )
+        if stage == STAGE_DECK_CASTING:
+            return (
+                GirderStressLimitProfileOption(
+                    key="aashto_deck_precomp_user",
+                    label="Pre-composite construction stage — engineer-controlled",
+                    description="0.55 f'c_stage compression; 0.25√f'c_stage tension capped at 1.38 MPa. Use as editable construction-stage preview until project stage limits are defined.",
+                    compression_limit_ratio=0.55,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.25,
+                    tension_limit_cap_MPa=1.38,
+                    clause_note="Construction-stage preview. Wet deck generally acts on precast gross section. Confirm project-specific temporary stress limits.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_deck_no_tension",
+                    label="Pre-composite construction stage — no tension permitted",
+                    description="Conservative no-tension pre-composite construction-stage preview.",
+                    compression_limit_ratio=0.55,
+                    tension_limit_mode="No tension",
+                    clause_note="Conservative pre-composite preview with no positive tensile stress permitted.",
+                ),
+            )
+        if stage == STAGE_FINAL_SERVICE:
+            return (
+                GirderStressLimitProfileOption(
+                    key="aashto_service_bonded_moderate_full",
+                    label="Service III — bonded, moderate exposure / full-service compression",
+                    description="0.60 f'c compression for full service preview; 0.50√f'c tensile stress profile for bonded tendon/reinforcement under moderate exposure.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.50,
+                    clause_note="AASHTO bridge service preview. Use Service III-type tension profile as applicable; final clause selection remains engineer-controlled.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_service_bonded_severe_full",
+                    label="Service III — bonded, severe exposure / full-service compression",
+                    description="0.60 f'c compression for full service preview; 0.25√f'c tensile stress profile for severe exposure.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.25,
+                    clause_note="AASHTO bridge service preview for severe exposure bonded condition. Confirm exposure and tendon/reinforcement condition.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_service_unbonded_no_tension",
+                    label="Service III — unbonded / no tension",
+                    description="0.60 f'c compression for full service preview; no positive tension permitted.",
+                    compression_limit_ratio=0.60,
+                    tension_limit_mode="No tension",
+                    clause_note="AASHTO bridge service preview for unbonded/no-tension condition.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_service_sustained_bonded_moderate",
+                    label="Service sustained/permanent — bonded, moderate exposure",
+                    description="0.45 f'c compression for sustained/permanent load preview; 0.50√f'c tension profile.",
+                    compression_limit_ratio=0.45,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.50,
+                    clause_note="AASHTO/PCI-style sustained compression preview. Use only when the supplied stress rows represent sustained/permanent effects.",
+                ),
+            )
+        return (
+            GirderStressLimitProfileOption(
+                key="aashto_user_defined",
+                label="AASHTO user-defined editable profile",
+                description="Engineer-defined bridge stress-limit profile.",
+                compression_limit_ratio=0.45,
+                tension_limit_mode="User-defined",
+                tension_limit_MPa=0.0,
+                clause_note="User-defined AASHTO bridge preview profile.",
+            ),
+        )
+
+    # ACI 318 preview profiles.
+    if stage == STAGE_TRANSFER:
+        return (
+            GirderStressLimitProfileOption(
+                key="aci_transfer_basic",
+                label="Initial transfer — basic prestressed member preview",
+                description="0.60 f'ci compression; 0.25√f'ci tension capped at 1.38 MPa as a conservative initial-transfer preview.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=0.25,
+                tension_limit_cap_MPa=1.38,
+                clause_note="ACI prestressed-member initial-transfer preview. Confirm end-region/reinforcement conditions and project edition before final design.",
+            ),
+            GirderStressLimitProfileOption(
+                key="aci_transfer_no_tension",
+                label="Initial transfer — no tension permitted",
+                description="Conservative no-tension initial transfer preview.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="No tension",
+                clause_note="Conservative ACI transfer preview with no positive tensile stress permitted.",
+            ),
+        )
+    if stage == STAGE_DECK_CASTING:
+        return (
+            GirderStressLimitProfileOption(
+                key="aci_deck_precomp_user",
+                label="Pre-composite construction stage — engineer-controlled",
+                description="0.55 f'c_stage compression; 0.25√f'c_stage tension capped at 1.38 MPa as editable construction-stage preview.",
+                compression_limit_ratio=0.55,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=0.25,
+                tension_limit_cap_MPa=1.38,
+                clause_note="ACI construction-stage preview. Confirm project-specific temporary stress limits.",
+            ),
+        )
+    if stage == STAGE_FINAL_SERVICE:
+        return (
+            GirderStressLimitProfileOption(
+                key="aci_service_class_u_one_way",
+                label="Service — Class U threshold, one-way beam/slab",
+                description="0.60 f'c compression for total service preview; 0.62√f'c Class U tension threshold.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=0.62,
+                clause_note="ACI 318-style service preview: Class U tension threshold for one-way prestressed flexural members. Confirm system type and code edition.",
+            ),
+            GirderStressLimitProfileOption(
+                key="aci_service_class_t_upper",
+                label="Service — Class T upper threshold",
+                description="0.60 f'c compression for total service preview; 1.00√f'c Class T upper threshold. Use for classification/review, not automatically final acceptance.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=1.00,
+                clause_note="ACI 318-style service classification preview. Class T/C design implications are not automated in this milestone.",
+            ),
+            GirderStressLimitProfileOption(
+                key="aci_service_sustained_class_u",
+                label="Service sustained/permanent — Class U threshold",
+                description="0.45 f'c compression for sustained/permanent effects; 0.62√f'c Class U tension threshold.",
+                compression_limit_ratio=0.45,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=0.62,
+                clause_note="ACI sustained/permanent compression preview. Use only when supplied stress rows represent sustained/permanent effects.",
+            ),
+            GirderStressLimitProfileOption(
+                key="aci_service_no_tension",
+                label="Service — no tension permitted",
+                description="Conservative no-tension service preview.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="No tension",
+                clause_note="Conservative ACI service preview with no positive tensile stress permitted.",
+            ),
+        )
+    return (
+        GirderStressLimitProfileOption(
+            key="aci_user_defined",
+            label="ACI user-defined editable profile",
+            description="Engineer-defined ACI stress-limit profile.",
+            compression_limit_ratio=0.45,
+            tension_limit_mode="User-defined",
+            tension_limit_MPa=0.0,
+            clause_note="User-defined ACI preview profile.",
+        ),
+    )
+
+
+def _profile_option_by_key(
+    *,
+    code: GirderSLSCode,
+    stage: GirderSLSStage,
+    limit_profile_key: str | None,
+) -> GirderStressLimitProfileOption:
+    options = girder_sls_limit_profile_options(code, stage)
+    if limit_profile_key:
+        for option in options:
+            if option.key == str(limit_profile_key):
+                return option
+    return options[0]
+
+
+def default_girder_sls_limit_profile(
+    code: GirderSLSCode = "AASHTO LRFD Bridge",
+    stage: GirderSLSStage = STAGE_FINAL_SERVICE,
+    limit_profile_key: str | None = None,
+) -> GirderServiceStressLimitProfile:
+    """Return an editable default profile for one code/stage/profile combination."""
+
+    if code not in DEFAULT_GIRDER_SLS_CODES:
+        raise ValueError(f"Unsupported girder SLS code profile: {code!r}")
+    stage = normalize_girder_sls_stage(stage)
+    if stage not in DEFAULT_GIRDER_SLS_STAGES:
+        raise ValueError(f"Unsupported girder SLS stage: {stage!r}")
+
     meta = girder_sls_stage_metadata(stage)
+    option = _profile_option_by_key(code=code, stage=stage, limit_profile_key=limit_profile_key)
     base_note = (
         "Editable preview profile only. Confirm code edition, authority/project specifications, prestress class, "
-        "reinforcement/cracking assumptions, concrete strength at stage, and prestress-force state before final design."
+        "reinforcement/cracking assumptions, concrete strength at stage, exposure/tendon condition, and prestress-force state before final design."
     )
     code_note = (
-        "AASHTO bridge-girder preview defaults are intentionally separated from ACI building/member preview defaults."
+        "AASHTO bridge-girder preview defaults use bridge service/temporary stress profiles and MPa-form square-root coefficients."
         if code == "AASHTO LRFD Bridge"
-        else "ACI prestressed-member preview defaults are intentionally separated from AASHTO bridge defaults."
+        else "ACI prestressed-member preview defaults use ACI-style service class / transfer profiles."
     )
-    common = dict(
+    return GirderServiceStressLimitProfile(
         code=code,
         stage=stage,
+        compression_limit_ratio=option.compression_limit_ratio,
+        tension_limit_mode=option.tension_limit_mode,
+        tension_sqrt_fc_ratio=option.tension_sqrt_fc_ratio,
+        tension_limit_MPa=option.tension_limit_MPa,
+        tension_limit_cap_MPa=option.tension_limit_cap_MPa,
+        clause_note=option.clause_note,
+        limitation_note=f"{base_note} {code_note}",
         concrete_strength_label=meta["concrete_strength_label"],
         prestress_force_basis=meta["prestress_force_basis"],
         recommended_section_basis=meta["recommended_section_basis"],
         stage_guidance=meta["stage_guidance"],
-        limitation_note=f"{base_note} {code_note}",
-    )
-
-    # Preview defaults are code-profile-specific but still engineer-editable.
-    # They are not a final locked clause-selection engine.  Transfer values are
-    # intentionally similar because many prestressed-code checks use comparable
-    # release-stage compression/tension concepts; final-service tension defaults
-    # are separated so AASHTO/ACI do not appear identical in the UI.
-    if code == "AASHTO LRFD Bridge":
-        transfer_comp, transfer_tension = 0.60, 0.25
-        deck_comp, deck_tension = 0.55, 0.25
-        final_comp, final_tension = 0.45, 0.19
-        family_note = "AASHTO LRFD Bridge editable preview profile"
-    else:
-        transfer_comp, transfer_tension = 0.60, 0.25
-        deck_comp, deck_tension = 0.55, 0.25
-        final_comp, final_tension = 0.45, 0.50
-        family_note = "ACI 318 editable prestressed-member preview profile"
-
-    if stage == STAGE_TRANSFER:
-        return GirderServiceStressLimitProfile(
-            **common,
-            compression_limit_ratio=transfer_comp,
-            tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=transfer_tension,
-            clause_note=f"{family_note}: transfer/release stage. Use f'ci and transfer-stage prestress force.",
-        )
-    if stage == STAGE_DECK_CASTING:
-        return GirderServiceStressLimitProfile(
-            **common,
-            compression_limit_ratio=deck_comp,
-            tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=deck_tension,
-            clause_note=f"{family_note}: deck-casting/pre-composite stage. Wet deck generally acts on precast gross section.",
-        )
-    if stage == STAGE_FINAL_SERVICE:
-        return GirderServiceStressLimitProfile(
-            **common,
-            compression_limit_ratio=final_comp,
-            tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=final_tension,
-            clause_note=f"{family_note}: final-service stage. Use service strength and effective prestress after losses.",
-        )
-    return GirderServiceStressLimitProfile(
-        **common,
-        compression_limit_ratio=0.45,
-        tension_limit_mode="User-defined",
-        tension_limit_MPa=0.0,
-        clause_note=f"{code} user-defined editable stress profile.",
+        limit_profile_key=option.key,
+        limit_profile_label=option.label,
+        limit_profile_description=option.description,
     )
 
 
@@ -292,15 +490,17 @@ def build_girder_sls_limit_profile(
     *,
     code: GirderSLSCode,
     stage: GirderSLSStage,
+    limit_profile_key: str | None = None,
     compression_limit_ratio: float | None = None,
     tension_limit_mode: TensionLimitMode | None = None,
     tension_sqrt_fc_ratio: float | None = None,
     tension_limit_MPa: float | None = None,
+    tension_limit_cap_MPa: float | None = None,
     stress_zero_tolerance_MPa: float | None = None,
 ) -> GirderServiceStressLimitProfile:
-    """Build a profile from defaults plus optional user overrides."""
+    """Build a profile from code/stage defaults plus optional user overrides."""
 
-    base = default_girder_sls_limit_profile(code, stage)
+    base = default_girder_sls_limit_profile(code, stage, limit_profile_key=limit_profile_key)
     profile = GirderServiceStressLimitProfile(
         code=base.code,
         stage=base.stage,
@@ -308,6 +508,7 @@ def build_girder_sls_limit_profile(
         tension_limit_mode=base.tension_limit_mode if tension_limit_mode is None else tension_limit_mode,
         tension_sqrt_fc_ratio=float(base.tension_sqrt_fc_ratio if tension_sqrt_fc_ratio is None else tension_sqrt_fc_ratio),
         tension_limit_MPa=float(base.tension_limit_MPa if tension_limit_MPa is None else tension_limit_MPa),
+        tension_limit_cap_MPa=base.tension_limit_cap_MPa if tension_limit_cap_MPa is None else tension_limit_cap_MPa,
         stress_zero_tolerance_MPa=float(base.stress_zero_tolerance_MPa if stress_zero_tolerance_MPa is None else stress_zero_tolerance_MPa),
         clause_note=base.clause_note,
         limitation_note=base.limitation_note,
@@ -315,12 +516,17 @@ def build_girder_sls_limit_profile(
         prestress_force_basis=base.prestress_force_basis,
         recommended_section_basis=base.recommended_section_basis,
         stage_guidance=base.stage_guidance,
+        limit_profile_key=base.limit_profile_key,
+        limit_profile_label=base.limit_profile_label,
+        limit_profile_description=base.limit_profile_description,
     )
     _require_positive("compression_limit_ratio", profile.compression_limit_ratio)
     if profile.tension_limit_mode == "sqrt(fc) ratio" and profile.tension_sqrt_fc_ratio < 0.0:
         raise ValueError("tension_sqrt_fc_ratio must not be negative.")
     if profile.tension_limit_mode == "User-defined" and profile.tension_limit_MPa < 0.0:
         raise ValueError("tension_limit_MPa must not be negative.")
+    if profile.tension_limit_cap_MPa is not None and profile.tension_limit_cap_MPa < 0.0:
+        raise ValueError("tension_limit_cap_MPa must not be negative.")
     if profile.stress_zero_tolerance_MPa < 0.0:
         raise ValueError("stress_zero_tolerance_MPa must not be negative.")
     return profile
@@ -347,8 +553,17 @@ def girder_sls_limit_formula_summary(
         tension_formula = "f_t,allow = user-defined tension limit"
         tension_substitution = f"{tension_limit:.3f} MPa"
     else:
-        tension_formula = f"f_t,allow = {profile.tension_sqrt_fc_ratio:.3f} × √({strength_label})"
-        tension_substitution = f"{profile.tension_sqrt_fc_ratio:.3f} × √{float(fc_MPa):.3f} = {tension_limit:.3f} MPa"
+        base_formula = f"{profile.tension_sqrt_fc_ratio:.3f} × √({strength_label})"
+        uncapped = float(profile.tension_sqrt_fc_ratio) * math.sqrt(float(fc_MPa))
+        if profile.tension_limit_cap_MPa is not None:
+            tension_formula = f"f_t,allow = min({base_formula}, {profile.tension_limit_cap_MPa:.3f} MPa)"
+            tension_substitution = (
+                f"min({profile.tension_sqrt_fc_ratio:.3f} × √{float(fc_MPa):.3f} = {uncapped:.3f}, "
+                f"{profile.tension_limit_cap_MPa:.3f}) = {tension_limit:.3f} MPa"
+            )
+        else:
+            tension_formula = f"f_t,allow = {base_formula}"
+            tension_substitution = f"{profile.tension_sqrt_fc_ratio:.3f} × √{float(fc_MPa):.3f} = {tension_limit:.3f} MPa"
 
     return GirderStressLimitFormulaSummary(
         compression_formula=compression_formula,
@@ -358,7 +573,7 @@ def girder_sls_limit_formula_summary(
         tension_substitution=tension_substitution,
         tension_limit_MPa=tension_limit,
         strength_label=strength_label,
-        profile_note=f"{profile.code} · {profile.stage} · editable preview formula",
+        profile_note=f"{profile.code} · {profile.stage} · {profile.limit_profile_label} · editable preview formula",
     )
 
 
@@ -369,12 +584,7 @@ def girder_sls_stage_basis_consistency_warnings(
     load_stage: str | None = None,
     load_component: str | None = None,
 ) -> tuple[str, ...]:
-    """Return engineering warnings for inconsistent stage/load/basis selections.
-
-    These are guidance warnings only.  They do not change stress values or
-    pass/fail calculations, but they prevent a preview result from appearing
-    more authoritative than its stage/load context supports.
-    """
+    """Return engineering warnings for inconsistent stage/load/basis selections."""
 
     warnings: list[str] = []
     stage = normalize_girder_sls_stage(profile_stage)
@@ -539,7 +749,7 @@ def run_girder_service_stress_limit_check(
     )
     overall: StressLimitStatus = "FAIL" if any(point.status == "FAIL" for point in points) else "PASS"
     warnings = (
-        "CODE.SLS.LIMIT2 is a stage-aware preview framework only. It does not auto-generate staged loads, compute losses, or certify final code compliance.",
+        "CODE.SLS.LIMIT3 is a code-profile preview framework only. It does not auto-generate staged loads, compute losses, or certify final code compliance.",
         profile.stage_guidance,
     )
     return GirderServiceStressLimitCheckResult(

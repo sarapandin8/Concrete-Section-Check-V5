@@ -9,6 +9,7 @@ from concrete_pmm_pro.serviceability.girder_code_limits import (
     build_girder_sls_limit_profile,
     default_girder_sls_limit_profile,
     girder_sls_limit_formula_summary,
+    girder_sls_limit_profile_options,
     girder_sls_stage_basis_consistency_warnings,
     run_girder_service_stress_limit_check,
 )
@@ -29,8 +30,8 @@ def validate_girder_code_limits() -> list[ValidationResult]:
         numeric_validation_result(
             case_id="CODE.SLS.LIMIT1.AASHTO.SERVICE.COMP",
             category=CATEGORY,
-            title="AASHTO service compression preview limit",
-            expected=0.45 * fc,
+            title="AASHTO full-service compression preview limit",
+            expected=0.60 * fc,
             actual=aashto_service.compression_limit_MPa(fc),
             abs_tolerance=1.0e-9,
             units="MPa",
@@ -41,8 +42,8 @@ def validate_girder_code_limits() -> list[ValidationResult]:
         numeric_validation_result(
             case_id="CODE.SLS.LIMIT1.ACI.TRANSFER.TENSION",
             category=CATEGORY,
-            title="ACI transfer tension preview limit",
-            expected=0.25 * math.sqrt(fc),
+            title="ACI transfer tension preview limit with cap",
+            expected=1.38,
             actual=aci_transfer.tension_allowable_MPa(fc),
             abs_tolerance=1.0e-9,
             units="MPa",
@@ -70,7 +71,7 @@ def validate_girder_code_limits() -> list[ValidationResult]:
     formula = girder_sls_limit_formula_summary(profile=aci_transfer, fc_MPa=fc)
     results.append(
         boolean_validation_result(
-            case_id="CODE.SLS.LIMIT2_2.FORMULA_DISPLAY",
+            case_id="CODE.SLS.LIMIT3.FORMULA_DISPLAY",
             category=CATEGORY,
             title="Limit formula summary exposes formula and substitution text",
             passed="0.600" in formula.compression_formula and "27.000 MPa" in formula.compression_substitution and "0.250" in formula.tension_formula,
@@ -92,13 +93,48 @@ def validate_girder_code_limits() -> list[ValidationResult]:
     )
     results.append(
         boolean_validation_result(
-            case_id="CODE.SLS.LIMIT2_2.STAGE_BASIS_GUARD",
+            case_id="CODE.SLS.LIMIT3.STAGE_BASIS_GUARD",
             category=CATEGORY,
             title="Stage/load/basis consistency guard flags misleading transfer check",
             passed=len(consistency_warnings) >= 3,
             expected="stage mismatch, composite-basis, and total-resultant warnings",
             actual=list(consistency_warnings),
             engineering_note="A PASS/FAIL preview is not meaningful if a final-service total resultant is checked as a transfer-stage composite result.",
+        )
+    )
+
+
+    aashto_options = girder_sls_limit_profile_options("AASHTO LRFD Bridge", "Final service / Composite")
+    aci_options = girder_sls_limit_profile_options("ACI 318", "Final service / Composite")
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT3.PROFILE_OPTIONS.VISIBLE",
+            category=CATEGORY,
+            title="Code-specific limit profile options are available",
+            passed=(
+                any("moderate" in option.label.lower() and option.tension_sqrt_fc_ratio == 0.50 for option in aashto_options)
+                and any("Class U" in option.label and option.tension_sqrt_fc_ratio == 0.62 for option in aci_options)
+                and any(option.tension_limit_mode == "No tension" for option in aashto_options)
+            ),
+            expected="AASHTO moderate/severe/no-tension and ACI Class U/T style profiles",
+            actual={
+                "AASHTO options": [option.label for option in aashto_options],
+                "ACI options": [option.label for option in aci_options],
+            },
+            engineering_note="Commercial-grade preview checks must expose code/stage profile choices instead of one hidden generic ratio.",
+        )
+    )
+    aashto_transfer = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Transfer / Release")
+    results.append(
+        numeric_validation_result(
+            case_id="CODE.SLS.LIMIT3.AASHTO.TRANSFER.TENSION_CAP",
+            category=CATEGORY,
+            title="AASHTO transfer tension profile applies MPa cap",
+            expected=1.38,
+            actual=aashto_transfer.tension_allowable_MPa(fc),
+            abs_tolerance=1.0e-12,
+            units="MPa",
+            engineering_note="Temporary release tension preview uses the smaller of the square-root expression and the explicit MPa cap when applicable.",
         )
     )
 

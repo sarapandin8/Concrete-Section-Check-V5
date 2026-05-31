@@ -106,6 +106,7 @@ from concrete_pmm_pro.serviceability import (
     girder_prestress_stress_result_rows,
     girder_service_limit_check_rows,
     girder_sls_limit_formula_summary,
+    girder_sls_limit_profile_options,
     girder_sls_stage_basis_consistency_warnings,
     normalize_girder_sls_stage,
     girder_service_stage_result_rows,
@@ -3501,11 +3502,11 @@ def _render_girder_code_limit_preview(
     load_stage: str | None = None,
     load_component: str | None = None,
 ) -> None:
-    """Render compact CODE.SLS.LIMIT2 preview checks for a set of fiber stresses.
+    """Render compact CODE.SLS.LIMIT3 preview checks for a set of fiber stresses.
 
     This is a UI/reporting foundation only.  It does not change any stress
     kernel, PMM solver, prestress input, load table, or report workflow.
-    CODE.SLS.LIMIT2.2 also displays the governing preview-limit formulas and
+    CODE.SLS.LIMIT3 displays the governing preview-limit formulas and
     warns when the selected load row, code-limit stage, and section basis are
     inconsistent.  It remains guidance-only and does not alter stress values.
     """
@@ -3527,7 +3528,7 @@ def _render_girder_code_limit_preview(
         if normalized_stage in DEFAULT_GIRDER_SLS_STAGES and normalized_stage != st.session_state.get(stage_key):
             st.session_state[stage_key] = normalized_stage
 
-    controls = st.columns([1.2, 1.25, 1.0, 1.0])
+    controls = st.columns([1.0, 1.05, 1.55, 0.85, 0.85])
     with controls[0]:
         code = st.selectbox(
             "Design code profile",
@@ -3542,8 +3543,23 @@ def _render_girder_code_limit_preview(
             key=stage_key,
             help="Stage controls which concrete strength, prestress-force state, and section basis should be checked.",
         )
-    default_profile = build_girder_sls_limit_profile(code=code, stage=stage)
+
+    profile_options = girder_sls_limit_profile_options(code=code, stage=stage)
+    profile_option_labels = {option.key: option.label for option in profile_options}
+    profile_option_descriptions = {option.key: option.description for option in profile_options}
+    profile_key = f"girder_code_limit_profile_key_{title}"
+    if st.session_state.get(profile_key) not in profile_option_labels:
+        st.session_state[profile_key] = profile_options[0].key
     with controls[2]:
+        limit_profile_key = st.selectbox(
+            "Limit profile",
+            list(profile_option_labels),
+            format_func=lambda key: profile_option_labels.get(str(key), str(key)),
+            key=profile_key,
+            help="Select a code/stage default profile before applying any engineer-controlled overrides.",
+        )
+    default_profile = build_girder_sls_limit_profile(code=code, stage=stage, limit_profile_key=limit_profile_key)
+    with controls[3]:
         fc = st.number_input(
             f"{default_profile.concrete_strength_label} (MPa)",
             min_value=1.0,
@@ -3553,7 +3569,7 @@ def _render_girder_code_limit_preview(
             key=f"girder_code_limit_fc_{title}",
             help="Use f'ci at transfer/release and f'c at service when they differ.",
         )
-    with controls[3]:
+    with controls[4]:
         enabled = st.checkbox(
             "Enable PASS/FAIL preview",
             value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
@@ -3564,6 +3580,12 @@ def _render_girder_code_limit_preview(
     with st.expander(f"Stage and code profile basis — {title}", expanded=False):
         _render_analysis_summary_strip(
             [
+                {
+                    "title": "Selected limit profile",
+                    "value": default_profile.limit_profile_label,
+                    "detail": profile_option_descriptions.get(default_profile.limit_profile_key, default_profile.limit_profile_description),
+                    "status": "info",
+                },
                 {
                     "title": "Stage strength basis",
                     "value": default_profile.concrete_strength_label,
@@ -3583,73 +3605,130 @@ def _render_girder_code_limit_preview(
                     "status": "info",
                 },
             ],
-            columns=3,
+            columns=4,
         )
         st.write(default_profile.stage_guidance)
         st.write(default_profile.clause_note)
         st.write(default_profile.limitation_note)
 
+    manual_override = False
+    comp_ratio = default_profile.compression_limit_ratio
+    tension_mode = default_profile.tension_limit_mode
+    tension_sqrt_ratio = default_profile.tension_sqrt_fc_ratio
+    tension_limit = default_profile.tension_limit_MPa
+    tension_cap = default_profile.tension_limit_cap_MPa
+    zero_tol = _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA
+
     with st.expander(f"Advanced code-limit profile override — {title}", expanded=default_expanded):
-        st.caption("Preview defaults are editable. Keep this collapsed for normal checks; open only when the project specification controls the limit values.")
-        override_cols = st.columns(4)
-        with override_cols[0]:
-            comp_ratio = st.number_input(
-                "Compression limit ratio × selected strength",
-                min_value=0.01,
-                value=float(st.session_state.get(f"girder_code_limit_comp_ratio_{title}", default_profile.compression_limit_ratio)),
-                step=0.01,
-                format="%.3f",
-                key=f"girder_code_limit_comp_ratio_{title}",
+        st.caption("Preview defaults are centralized by code/stage/profile. Use manual override only when the project specification controls the limit values.")
+        manual_override = st.checkbox(
+            "Use manual override values",
+            value=bool(st.session_state.get(f"girder_code_limit_manual_override_{title}", False)),
+            key=f"girder_code_limit_manual_override_{title}",
+            help="When disabled, changing code/stage/profile automatically uses the selected default values instead of stale override ratios.",
+        )
+        if not manual_override:
+            _render_analysis_summary_strip(
+                [
+                    {
+                        "title": "Compression default",
+                        "value": f"{default_profile.compression_limit_ratio:.3f} × strength",
+                        "detail": default_profile.limit_profile_label,
+                        "status": "info",
+                    },
+                    {
+                        "title": "Tension default",
+                        "value": (
+                            "No tension" if default_profile.tension_limit_mode == "No tension"
+                            else f"{default_profile.tension_sqrt_fc_ratio:.3f} × √strength"
+                        ),
+                        "detail": (
+                            f"Cap {default_profile.tension_limit_cap_MPa:.3f} MPa" if default_profile.tension_limit_cap_MPa is not None
+                            else default_profile.tension_limit_mode
+                        ),
+                        "status": "info" if default_profile.tension_limit_mode != "No tension" else "warning",
+                    },
+                    {
+                        "title": "Zero stress tolerance",
+                        "value": f"{_GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:.6f} MPa",
+                        "detail": "Display/check tolerance for near-zero stress",
+                        "status": "neutral",
+                    },
+                ],
+                columns=3,
             )
-        with override_cols[1]:
-            tension_mode = st.selectbox(
-                "Tension limit mode",
-                list(DEFAULT_TENSION_LIMIT_MODES),
-                index=list(DEFAULT_TENSION_LIMIT_MODES).index(default_profile.tension_limit_mode),
-                key=f"girder_code_limit_tension_mode_{title}",
-            )
-        with override_cols[2]:
-            if tension_mode == "sqrt(fc) ratio":
-                tension_sqrt_ratio = st.number_input(
-                    "Tension limit ratio × √selected strength",
-                    min_value=0.0,
-                    value=float(st.session_state.get(f"girder_code_limit_sqrt_ratio_{title}", default_profile.tension_sqrt_fc_ratio)),
-                    step=0.05,
+        else:
+            override_cols = st.columns(5)
+            with override_cols[0]:
+                comp_ratio = st.number_input(
+                    "Compression limit ratio × selected strength",
+                    min_value=0.01,
+                    value=float(st.session_state.get(f"girder_code_limit_comp_ratio_{title}", default_profile.compression_limit_ratio)),
+                    step=0.01,
                     format="%.3f",
-                    key=f"girder_code_limit_sqrt_ratio_{title}",
+                    key=f"girder_code_limit_comp_ratio_{title}",
                 )
-                tension_limit = default_profile.tension_limit_MPa
-            elif tension_mode == "User-defined":
-                tension_sqrt_ratio = default_profile.tension_sqrt_fc_ratio
-                tension_limit = st.number_input(
-                    "User tension limit (MPa)",
-                    min_value=0.0,
-                    value=float(st.session_state.get(f"girder_code_limit_tension_mpa_{title}", default_profile.tension_limit_MPa)),
+            with override_cols[1]:
+                tension_mode = st.selectbox(
+                    "Tension limit mode",
+                    list(DEFAULT_TENSION_LIMIT_MODES),
+                    index=list(DEFAULT_TENSION_LIMIT_MODES).index(default_profile.tension_limit_mode),
+                    key=f"girder_code_limit_tension_mode_{title}",
+                )
+            with override_cols[2]:
+                if tension_mode == "sqrt(fc) ratio":
+                    tension_sqrt_ratio = st.number_input(
+                        "Tension limit ratio × √selected strength",
+                        min_value=0.0,
+                        value=float(st.session_state.get(f"girder_code_limit_sqrt_ratio_{title}", default_profile.tension_sqrt_fc_ratio)),
+                        step=0.05,
+                        format="%.3f",
+                        key=f"girder_code_limit_sqrt_ratio_{title}",
+                    )
+                    tension_limit = default_profile.tension_limit_MPa
+                elif tension_mode == "User-defined":
+                    tension_sqrt_ratio = default_profile.tension_sqrt_fc_ratio
+                    tension_limit = st.number_input(
+                        "User tension limit (MPa)",
+                        min_value=0.0,
+                        value=float(st.session_state.get(f"girder_code_limit_tension_mpa_{title}", default_profile.tension_limit_MPa)),
+                        step=0.1,
+                        format="%.3f",
+                        key=f"girder_code_limit_tension_mpa_{title}",
+                    )
+                else:
+                    st.markdown("**No tension permitted**")
+                    tension_sqrt_ratio = 0.0
+                    tension_limit = 0.0
+            with override_cols[3]:
+                default_cap = -1.0 if default_profile.tension_limit_cap_MPa is None else float(default_profile.tension_limit_cap_MPa)
+                cap_input = st.number_input(
+                    "Tension cap (MPa, -1 = none)",
+                    value=float(st.session_state.get(f"girder_code_limit_tension_cap_{title}", default_cap)),
                     step=0.1,
                     format="%.3f",
-                    key=f"girder_code_limit_tension_mpa_{title}",
+                    key=f"girder_code_limit_tension_cap_{title}",
                 )
-            else:
-                st.markdown("**No tension permitted**")
-                tension_sqrt_ratio = 0.0
-                tension_limit = 0.0
-        with override_cols[3]:
-            zero_tol = st.number_input(
-                "Zero stress tolerance (MPa)",
-                min_value=0.0,
-                value=float(st.session_state.get(f"girder_code_limit_zero_tol_{title}", _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA)),
-                step=0.0001,
-                format="%.6f",
-                key=f"girder_code_limit_zero_tol_{title}",
-            )
+                tension_cap = None if float(cap_input) < 0.0 else float(cap_input)
+            with override_cols[4]:
+                zero_tol = st.number_input(
+                    "Zero stress tolerance (MPa)",
+                    min_value=0.0,
+                    value=float(st.session_state.get(f"girder_code_limit_zero_tol_{title}", _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA)),
+                    step=0.0001,
+                    format="%.6f",
+                    key=f"girder_code_limit_zero_tol_{title}",
+                )
 
     profile = build_girder_sls_limit_profile(
         code=code,
         stage=stage,
+        limit_profile_key=limit_profile_key,
         compression_limit_ratio=float(comp_ratio),
         tension_limit_mode=tension_mode,
         tension_sqrt_fc_ratio=float(tension_sqrt_ratio),
         tension_limit_MPa=float(tension_limit),
+        tension_limit_cap_MPa=tension_cap,
         stress_zero_tolerance_MPa=float(zero_tol),
     )
     compression_limit = profile.compression_limit_MPa(float(fc))
@@ -3697,7 +3776,7 @@ def _render_girder_code_limit_preview(
                 {
                     "title": "Selected profile",
                     "value": str(code),
-                    "detail": f"Stage: {stage}",
+                    "detail": f"{stage} · {profile.limit_profile_label}",
                     "status": "info",
                 },
                 {
@@ -3722,7 +3801,7 @@ def _render_girder_code_limit_preview(
         {
             "title": "Limit status",
             "value": limit_result.overall_status,
-            "detail": f"{code} · {stage}",
+            "detail": f"{code} · {stage} · {profile.limit_profile_label}",
             "status": "ready" if limit_result.overall_status == "PASS" else "danger",
         },
         {

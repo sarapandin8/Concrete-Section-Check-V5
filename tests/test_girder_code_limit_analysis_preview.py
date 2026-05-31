@@ -5,9 +5,12 @@ SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(
 
 
 def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> None:
-    assert "CODE.SLS.LIMIT2.2" in SOURCE
+    assert "CODE.SLS.LIMIT3" in SOURCE
     assert "Enable PASS/FAIL preview" in SOURCE
     assert "Design code profile" in SOURCE
+    assert "Limit profile" in SOURCE
+    assert "Use manual override values" in SOURCE
+    assert "girder_sls_limit_profile_options" in SOURCE
     assert "Visible code/stage selector" in SOURCE
     assert "DEFAULT_GIRDER_SLS_CODES" in SOURCE
     assert "This is not a final code-certified check" in SOURCE

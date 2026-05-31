@@ -10,6 +10,7 @@ from concrete_pmm_pro.serviceability import (
     run_girder_service_stress_limit_check,
     normalize_girder_sls_stage,
     girder_sls_limit_formula_summary,
+    girder_sls_limit_profile_options,
     girder_sls_stage_basis_consistency_warnings,
 )
 from concrete_pmm_pro.validation.girder_code_limits import validate_girder_code_limits
@@ -18,11 +19,11 @@ from concrete_pmm_pro.validation.girder_code_limits import validate_girder_code_
 def test_default_aashto_service_profile_computes_editable_limits() -> None:
     profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Final service / Composite")
 
-    assert profile.compression_limit_MPa(45.0) == pytest.approx(20.25)
-    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.19 * math.sqrt(45.0))
+    assert profile.compression_limit_MPa(45.0) == pytest.approx(27.0)
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.50 * math.sqrt(45.0))
     assert "Confirm" in profile.limitation_note
     aci_service = default_girder_sls_limit_profile("ACI 318", "Final service / Composite")
-    assert aci_service.tension_allowable_MPa(45.0) == pytest.approx(0.50 * math.sqrt(45.0))
+    assert aci_service.tension_allowable_MPa(45.0) == pytest.approx(0.62 * math.sqrt(45.0))
     assert aci_service.tension_allowable_MPa(45.0) > profile.tension_allowable_MPa(45.0)
 
 
@@ -31,7 +32,7 @@ def test_default_aci_transfer_profile_is_distinct_stage_profile() -> None:
 
     assert profile.compression_limit_ratio == pytest.approx(0.60)
     assert profile.tension_sqrt_fc_ratio == pytest.approx(0.25)
-    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.25 * math.sqrt(45.0))
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(1.38)
 
 
 def test_girder_code_limit_check_respects_compression_negative_tension_positive() -> None:
@@ -116,6 +117,42 @@ def test_deck_casting_profile_uses_pre_composite_guidance() -> None:
     assert "wet deck" in profile.stage_guidance.lower()
 
 
+
+def test_code_specific_limit_profile_options_expose_realistic_defaults() -> None:
+    aashto_final_options = girder_sls_limit_profile_options("AASHTO LRFD Bridge", "Final service / Composite")
+    aci_final_options = girder_sls_limit_profile_options("ACI 318", "Final service / Composite")
+
+    assert any("moderate" in option.label.lower() and option.tension_sqrt_fc_ratio == pytest.approx(0.50) for option in aashto_final_options)
+    assert any("Class U" in option.label and option.tension_sqrt_fc_ratio == pytest.approx(0.62) for option in aci_final_options)
+    assert any(option.tension_limit_mode == "No tension" for option in aashto_final_options)
+
+
+def test_limit_profile_key_selects_aashto_severe_and_aci_class_t_profiles() -> None:
+    aashto_severe = default_girder_sls_limit_profile(
+        "AASHTO LRFD Bridge",
+        "Final service / Composite",
+        limit_profile_key="aashto_service_bonded_severe_full",
+    )
+    aci_class_t = default_girder_sls_limit_profile(
+        "ACI 318",
+        "Final service / Composite",
+        limit_profile_key="aci_service_class_t_upper",
+    )
+
+    assert aashto_severe.tension_allowable_MPa(45.0) == pytest.approx(0.25 * math.sqrt(45.0))
+    assert aci_class_t.tension_allowable_MPa(45.0) == pytest.approx(1.00 * math.sqrt(45.0))
+    assert "Class T" in aci_class_t.limit_profile_label
+
+
+def test_transfer_tension_cap_is_visible_in_formula_summary() -> None:
+    profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Transfer / Release")
+    formula = girder_sls_limit_formula_summary(profile=profile, fc_MPa=45.0)
+
+    assert profile.tension_limit_cap_MPa == pytest.approx(1.38)
+    assert formula.tension_limit_MPa == pytest.approx(1.38)
+    assert "min(" in formula.tension_formula
+    assert "1.380" in formula.tension_substitution
+
 def test_girder_code_limit_validation_suite_passes() -> None:
     results = validate_girder_code_limits()
 
@@ -131,7 +168,7 @@ def test_limit_formula_summary_shows_code_stage_formula_text() -> None:
     assert "f'ci" in formula.compression_formula
     assert "27.000 MPa" in formula.compression_substitution
     assert "0.250" in formula.tension_formula
-    assert "1.677 MPa" in formula.tension_substitution
+    assert "1.380 MPa" in formula.tension_substitution
     assert formula.profile_note.startswith("ACI 318")
 
 

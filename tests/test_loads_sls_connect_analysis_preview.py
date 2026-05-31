@@ -26,3 +26,14 @@ def test_loads_to_analysis_preview_respects_direct_section_basis_only() -> None:
     assert '"composite transformed": "composite_transformed"' in SOURCE
     assert "staged/mixed or unsupported section basis" in SOURCE
     assert "Preview section basis for selected Loads row" in SOURCE
+
+
+def test_analysis_preview_groups_beam_girder_sls_rows_into_stage_tabs() -> None:
+    assert "LOADS.SLS2B" in SOURCE
+    assert "_beam_sls_stage_tab_specs" in SOURCE
+    assert "SLS stage check tabs" in SOURCE
+    assert "{stage_label} load case from Loads page" in SOURCE
+    assert "Transfer stage" in SOURCE
+    assert "Construction stage" in SOURCE
+    assert "Service stage" in SOURCE
+    assert "Each stage keeps its own code-limit/profile/prestress UI state" in SOURCE

@@ -1,12 +1,13 @@
 """Beam/Girder service-stress code-limit preview helpers.
 
-CODE.SLS.LIMIT1 adds a deliberately small, pure-Python limit-check framework
-for the Beam/Girder SLS preview workspace.  The helpers are intended to make
-code selection, stress-sign handling, and PASS/FAIL reporting explicit before
-full project-specific AASHTO/ACI clause calibration is implemented.
+CODE.SLS.LIMIT2 keeps this as an editable preview framework while making
+stage meaning explicit.  The helpers are intentionally pure Python so the UI,
+validation suite, and future reports can all use the same stage-aware profile
+metadata without changing stress or solver logic.
 
 Important scope guard:
 - This module does not generate loads or stages.
+- This module does not calculate prestress losses.
 - This module does not change PMM, prestress, rebar, report, or geometry logic.
 - Default profiles are editable preview profiles and must be verified against
   the governing project specification and code edition before final design.
@@ -20,15 +21,33 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
 
 GirderSLSCode = Literal["AASHTO LRFD Bridge", "ACI 318"]
-GirderSLSStage = Literal["Transfer", "Service / Final", "User-defined"]
+GirderSLSStage: TypeAlias = str
 TensionLimitMode = Literal["No tension", "sqrt(fc) ratio", "User-defined"]
 StressLimitStatus = Literal["PASS", "FAIL", "NOT_CHECKED"]
 
+STAGE_TRANSFER = "Transfer / Release"
+STAGE_DECK_CASTING = "Deck casting / Pre-composite"
+STAGE_FINAL_SERVICE = "Final service / Composite"
+STAGE_USER_DEFINED = "User-defined"
+
+_LEGACY_STAGE_ALIASES: dict[str, str] = {
+    "Transfer": STAGE_TRANSFER,
+    "Release": STAGE_TRANSFER,
+    "Service / Final": STAGE_FINAL_SERVICE,
+    "Final service": STAGE_FINAL_SERVICE,
+    "Composite service": STAGE_FINAL_SERVICE,
+}
+
 DEFAULT_GIRDER_SLS_CODES: tuple[GirderSLSCode, ...] = ("AASHTO LRFD Bridge", "ACI 318")
-DEFAULT_GIRDER_SLS_STAGES: tuple[GirderSLSStage, ...] = ("Transfer", "Service / Final", "User-defined")
+DEFAULT_GIRDER_SLS_STAGES: tuple[str, ...] = (
+    STAGE_TRANSFER,
+    STAGE_DECK_CASTING,
+    STAGE_FINAL_SERVICE,
+    STAGE_USER_DEFINED,
+)
 DEFAULT_TENSION_LIMIT_MODES: tuple[TensionLimitMode, ...] = ("No tension", "sqrt(fc) ratio", "User-defined")
 
 
@@ -37,7 +56,7 @@ class GirderServiceStressLimitProfile:
     """Concrete service-stress limit profile for one Beam/Girder preview check."""
 
     code: GirderSLSCode
-    stage: GirderSLSStage
+    stage: str
     compression_limit_ratio: float
     tension_limit_mode: TensionLimitMode
     tension_sqrt_fc_ratio: float = 0.0
@@ -45,6 +64,10 @@ class GirderServiceStressLimitProfile:
     stress_zero_tolerance_MPa: float = 5.0e-4
     clause_note: str = ""
     limitation_note: str = ""
+    concrete_strength_label: str = "f'c"
+    prestress_force_basis: str = "Pe_eff after losses"
+    recommended_section_basis: str = "Engineer-selected"
+    stage_guidance: str = ""
 
     def compression_limit_MPa(self, fc_MPa: float) -> float:
         _require_positive("fc_MPa", fc_MPa)
@@ -116,53 +139,109 @@ def _require_finite(name: str, value: float) -> None:
         raise ValueError(f"{name} must be finite.")
 
 
+def normalize_girder_sls_stage(stage: str | None) -> str:
+    """Normalize legacy CODE.SLS.LIMIT1 labels into stage-aware labels."""
+
+    raw = str(stage or "").strip()
+    if not raw:
+        return STAGE_FINAL_SERVICE
+    return _LEGACY_STAGE_ALIASES.get(raw, raw)
+
+
+def girder_sls_stage_metadata(stage: str) -> dict[str, str]:
+    """Return stage-aware display metadata used by UI and validation."""
+
+    stage = normalize_girder_sls_stage(stage)
+    if stage == STAGE_TRANSFER:
+        return {
+            "concrete_strength_label": "f'ci at transfer / release",
+            "prestress_force_basis": "Pe_transfer / initial effective force before long-term losses",
+            "recommended_section_basis": "Precast gross section",
+            "stage_guidance": "Use concrete strength and prestress force applicable at release. Long-term losses are not calculated in this preview.",
+        }
+    if stage == STAGE_DECK_CASTING:
+        return {
+            "concrete_strength_label": "f'c at deck-casting stage",
+            "prestress_force_basis": "Pe at deck-casting stage, user-defined",
+            "recommended_section_basis": "Precast gross section",
+            "stage_guidance": "Wet deck/topping weight usually acts before composite action; use precast gross basis unless the project stage model says otherwise.",
+        }
+    if stage == STAGE_FINAL_SERVICE:
+        return {
+            "concrete_strength_label": "f'c at service",
+            "prestress_force_basis": "Pe_eff after losses",
+            "recommended_section_basis": "Staged combination; post-composite SDL/LL+IM use composite transformed basis",
+            "stage_guidance": "Final service stress should be assembled from staged effects. This preview checks the stresses currently supplied to it; it does not auto-sum staged loads or losses.",
+        }
+    return {
+        "concrete_strength_label": "f'c for selected user-defined stage",
+        "prestress_force_basis": "User-defined prestress force basis",
+        "recommended_section_basis": "Engineer-selected",
+        "stage_guidance": "User-defined preview stage. Confirm strength, section basis, and prestress force state before final design.",
+    }
+
+
 def default_girder_sls_limit_profile(
     code: GirderSLSCode = "AASHTO LRFD Bridge",
-    stage: GirderSLSStage = "Service / Final",
+    stage: GirderSLSStage = STAGE_FINAL_SERVICE,
 ) -> GirderServiceStressLimitProfile:
     """Return an editable default profile for one code/stage combination.
 
-    The values are intentionally centralized here so future clause-calibrated
-    milestones can update them without touching the UI or stress kernels.
+    The values remain conservative preview defaults, not final locked clauses.
+    Stage metadata makes it harder to accidentally use final f'c for transfer
+    or Pe_eff-after-losses for release-stage checking.
     """
 
     if code not in DEFAULT_GIRDER_SLS_CODES:
         raise ValueError(f"Unsupported girder SLS code profile: {code!r}")
+    stage = normalize_girder_sls_stage(stage)
     if stage not in DEFAULT_GIRDER_SLS_STAGES:
         raise ValueError(f"Unsupported girder SLS stage: {stage!r}")
 
+    meta = girder_sls_stage_metadata(stage)
     base_note = (
-        "Initial editable preview profile. Verify the selected code edition, project specifications, "
-        "concrete age/strength at stage, prestress class, reinforcement conditions, and local authority requirements before final design."
+        "Editable preview profile only. Confirm code edition, authority/project specifications, prestress class, "
+        "reinforcement/cracking assumptions, concrete strength at stage, and prestress-force state before final design."
     )
-    if stage == "Transfer":
+    common = dict(
+        code=code,
+        stage=stage,
+        concrete_strength_label=meta["concrete_strength_label"],
+        prestress_force_basis=meta["prestress_force_basis"],
+        recommended_section_basis=meta["recommended_section_basis"],
+        stage_guidance=meta["stage_guidance"],
+        limitation_note=base_note,
+    )
+    if stage == STAGE_TRANSFER:
         return GirderServiceStressLimitProfile(
-            code=code,
-            stage=stage,
+            **common,
             compression_limit_ratio=0.60,
             tension_limit_mode="sqrt(fc) ratio",
             tension_sqrt_fc_ratio=0.25,
-            clause_note=f"{code} prestressed-concrete transfer stress profile placeholder.",
-            limitation_note=base_note,
+            clause_note=f"{code} transfer/release stress preview profile. Use f'ci and transfer-stage prestress force.",
         )
-    if stage == "Service / Final":
+    if stage == STAGE_DECK_CASTING:
         return GirderServiceStressLimitProfile(
-            code=code,
-            stage=stage,
+            **common,
+            compression_limit_ratio=0.55,
+            tension_limit_mode="sqrt(fc) ratio",
+            tension_sqrt_fc_ratio=0.25,
+            clause_note=f"{code} deck-casting/pre-composite stress preview profile. Wet deck generally acts on precast gross section.",
+        )
+    if stage == STAGE_FINAL_SERVICE:
+        return GirderServiceStressLimitProfile(
+            **common,
             compression_limit_ratio=0.45,
             tension_limit_mode="sqrt(fc) ratio",
             tension_sqrt_fc_ratio=0.50,
-            clause_note=f"{code} prestressed-concrete service stress profile placeholder.",
-            limitation_note=base_note,
+            clause_note=f"{code} final-service stress preview profile. Use service strength and effective prestress after losses.",
         )
     return GirderServiceStressLimitProfile(
-        code=code,
-        stage=stage,
+        **common,
         compression_limit_ratio=0.45,
         tension_limit_mode="User-defined",
         tension_limit_MPa=0.0,
         clause_note=f"{code} user-defined stress profile.",
-        limitation_note=base_note,
     )
 
 
@@ -189,6 +268,10 @@ def build_girder_sls_limit_profile(
         stress_zero_tolerance_MPa=float(base.stress_zero_tolerance_MPa if stress_zero_tolerance_MPa is None else stress_zero_tolerance_MPa),
         clause_note=base.clause_note,
         limitation_note=base.limitation_note,
+        concrete_strength_label=base.concrete_strength_label,
+        prestress_force_basis=base.prestress_force_basis,
+        recommended_section_basis=base.recommended_section_basis,
+        stage_guidance=base.stage_guidance,
     )
     _require_positive("compression_limit_ratio", profile.compression_limit_ratio)
     if profile.tension_limit_mode == "sqrt(fc) ratio" and profile.tension_sqrt_fc_ratio < 0.0:
@@ -305,7 +388,8 @@ def run_girder_service_stress_limit_check(
     )
     overall: StressLimitStatus = "FAIL" if any(point.status == "FAIL" for point in points) else "PASS"
     warnings = (
-        "CODE.SLS.LIMIT1 is a preview framework only. Confirm code edition, project clauses, prestress class, and stage-specific f'c before final design.",
+        "CODE.SLS.LIMIT2 is a stage-aware preview framework only. It does not auto-generate staged loads, compute losses, or certify final code compliance.",
+        profile.stage_guidance,
     )
     return GirderServiceStressLimitCheckResult(
         profile=profile,

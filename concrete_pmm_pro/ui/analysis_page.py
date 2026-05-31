@@ -105,6 +105,7 @@ from concrete_pmm_pro.serviceability import (
     default_girder_service_stage_templates,
     girder_prestress_stress_result_rows,
     girder_service_limit_check_rows,
+    normalize_girder_sls_stage,
     girder_service_stage_result_rows,
     girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
@@ -3512,6 +3513,12 @@ def _render_girder_code_limit_preview(
     )
 
     fc_default = _girder_fc_for_sls_limit_preview()
+    stage_key = f"girder_code_limit_stage_{title}"
+    if stage_key in st.session_state:
+        normalized_stage = normalize_girder_sls_stage(st.session_state.get(stage_key))
+        if normalized_stage in DEFAULT_GIRDER_SLS_STAGES and normalized_stage != st.session_state.get(stage_key):
+            st.session_state[stage_key] = normalized_stage
+
     controls = st.columns(4)
     with controls[0]:
         code = st.selectbox(
@@ -3524,18 +3531,19 @@ def _render_girder_code_limit_preview(
         stage = st.selectbox(
             "Stress limit stage",
             list(DEFAULT_GIRDER_SLS_STAGES),
-            key=f"girder_code_limit_stage_{title}",
-            help="Stage controls the default compression/tension preview profile. Verify against the governing code clauses before final design.",
+            key=stage_key,
+            help="Stage controls the default preview profile and reminds you which concrete strength, prestress force state, and section basis should be used.",
         )
+    default_profile = build_girder_sls_limit_profile(code=code, stage=stage)
     with controls[2]:
         fc = st.number_input(
-            "f'c for limit check (MPa)",
+            f"{default_profile.concrete_strength_label} (MPa)",
             min_value=1.0,
             value=float(st.session_state.get(f"girder_code_limit_fc_{title}", fc_default)),
             step=1.0,
             format="%.3f",
             key=f"girder_code_limit_fc_{title}",
-            help="Use the concrete strength applicable to the selected stage. For transfer, use stage concrete strength if different.",
+            help="Use the concrete strength applicable to the selected stage; transfer/release should use f'ci when different from final f'c.",
         )
     with controls[3]:
         zero_tol = st.number_input(
@@ -3548,6 +3556,31 @@ def _render_girder_code_limit_preview(
         )
 
     default_profile = build_girder_sls_limit_profile(code=code, stage=stage, stress_zero_tolerance_MPa=float(zero_tol))
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Stage strength basis",
+                "value": default_profile.concrete_strength_label,
+                "detail": f"Entered value: {float(fc):.3f} MPa",
+                "status": "info",
+            },
+            {
+                "title": "Prestress force basis",
+                "value": default_profile.prestress_force_basis,
+                "detail": "Losses are not calculated automatically",
+                "status": "warning" if "transfer" in default_profile.prestress_force_basis.lower() or "user" in default_profile.prestress_force_basis.lower() else "info",
+            },
+            {
+                "title": "Recommended section basis",
+                "value": default_profile.recommended_section_basis,
+                "detail": "Use staged effects for final checks",
+                "status": "info",
+            },
+        ],
+        columns=3,
+    )
+    st.caption(default_profile.stage_guidance)
+
     enabled = st.checkbox(
         f"Enable PASS/FAIL code stress-limit preview — {title}",
         value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
@@ -3566,7 +3599,7 @@ def _render_girder_code_limit_preview(
                 {
                     "title": "Selected limit profile",
                     "value": str(code),
-                    "detail": f"Stage: {stage} · f'c={float(fc):.3f} MPa",
+                    "detail": f"Stage: {stage} · {default_profile.concrete_strength_label}={float(fc):.3f} MPa",
                     "status": "info",
                 },
             ],

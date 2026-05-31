@@ -29,3 +29,12 @@ def test_analysis_page_code_limit_preview_checks_quick_combined_and_stage_result
 def test_analysis_page_code_limit_status_card_is_no_longer_future_only() -> None:
     assert '"value": "Optional preview"' in SOURCE
     assert "AASHTO + ACI editable limit profiles" in SOURCE
+
+
+def test_analysis_page_exposes_stage_aware_code_limit_controls() -> None:
+    assert "Stage strength basis" in SOURCE
+    assert "Prestress force basis" in SOURCE
+    assert "Recommended section basis" in SOURCE
+    assert "f'ci" in SOURCE
+    assert "Pe_eff" in SOURCE
+    assert "Losses are not calculated automatically" in SOURCE

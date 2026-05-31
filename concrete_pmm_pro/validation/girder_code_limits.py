@@ -20,8 +20,8 @@ def validate_girder_code_limits() -> list[ValidationResult]:
 
     results: list[ValidationResult] = []
     fc = 45.0
-    aashto_service = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Service / Final")
-    aci_transfer = default_girder_sls_limit_profile("ACI 318", "Transfer")
+    aashto_service = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Final service / Composite")
+    aci_transfer = default_girder_sls_limit_profile("ACI 318", "Transfer / Release")
 
     results.append(
         numeric_validation_result(
@@ -127,6 +127,44 @@ def validate_girder_code_limits() -> list[ValidationResult]:
             abs_tolerance=1.0e-12,
             units="D/C",
             engineering_note="User-defined profiles are needed until final code/clause calibration is locked by project requirements.",
+        )
+    )
+
+    transfer_profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Transfer / Release")
+    final_profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Final service / Composite")
+    deck_profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Deck casting / Pre-composite")
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT2.TRANSFER.STRENGTH_LABEL",
+            category=CATEGORY,
+            title="Transfer stage exposes f'ci strength basis",
+            passed="f'ci" in transfer_profile.concrete_strength_label and "precast gross" in transfer_profile.recommended_section_basis.lower(),
+            expected="f'ci + precast gross",
+            actual=f"{transfer_profile.concrete_strength_label} / {transfer_profile.recommended_section_basis}",
+            engineering_note="Transfer/release checks must not quietly use final service strength or composite section basis.",
+        )
+    )
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT2.FINAL.SERVICE.LOSSES",
+            category=CATEGORY,
+            title="Final service profile exposes Pe_eff after losses basis",
+            passed="losses" in final_profile.prestress_force_basis.lower() and "staged" in final_profile.recommended_section_basis.lower(),
+            expected="Pe_eff after losses + staged basis",
+            actual=f"{final_profile.prestress_force_basis} / {final_profile.recommended_section_basis}",
+            engineering_note="Final service stress checks must acknowledge prestress losses and staged section-basis effects.",
+        )
+    )
+    results.append(
+        numeric_validation_result(
+            case_id="CODE.SLS.LIMIT2.DECK_CASTING.COMP",
+            category=CATEGORY,
+            title="Deck casting preview compression profile is distinct",
+            expected=0.55 * fc,
+            actual=deck_profile.compression_limit_MPa(fc),
+            abs_tolerance=1.0e-9,
+            units="MPa",
+            engineering_note="Deck casting/pre-composite profile is separate from transfer and final service preview profiles.",
         )
     )
     return results

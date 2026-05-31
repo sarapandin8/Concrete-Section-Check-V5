@@ -11,6 +11,7 @@ from concrete_pmm_pro.ui.loads_page import (
     COLUMN_SLS_LOAD_COLUMNS,
     COLUMN_ULS_LOAD_COLUMNS,
     _axis_convention_rows,
+    _beam_sls_stage_basis_warnings,
     _column_workflow_tables_to_legacy_editor_table,
     _default_beam_sls_load_table,
     _default_beam_uls_load_table,
@@ -237,7 +238,7 @@ def test_loads_page_includes_member_workflow_notice_source() -> None:
     source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
 
     assert "Active member workflow" in source
-    assert "Beam/Girder design load tables" in source
+    assert "Beam/Girder SLS rows can be selected in Analysis" in source
     assert "Pu/Mux/Muy PMM table" in source
 
 
@@ -381,3 +382,72 @@ def test_beam_sls_dropdown_edits_are_persisted_with_single_rerun_guard() -> None
     assert 'SelectboxColumn("Stage"' in source
     assert 'SelectboxColumn("Load Component"' in source
     assert 'SelectboxColumn("Section Basis"' in source
+
+
+def test_beam_sls_stage_basis_warnings_flag_total_resultant_and_mismatched_basis() -> None:
+    table = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Case Name": "SLS-TOTAL",
+                "Stage": "Final service",
+                "Load Component": "Total SLS resultant",
+                "Section Basis": "Composite transformed",
+                "N": "0",
+                "Mx": "500",
+                "My": "0",
+                "Vy": "0",
+                "Vx": "0",
+                "T": "0",
+                "Note": "quick preview only",
+            },
+            {
+                "Active": True,
+                "Case Name": "TRANSFER-BAD",
+                "Stage": "Transfer / release",
+                "Load Component": "Prestress / release",
+                "Section Basis": "Composite transformed",
+                "N": "0",
+                "Mx": "100",
+                "My": "0",
+                "Vy": "0",
+                "Vx": "0",
+                "T": "0",
+                "Note": "wrong basis",
+            },
+            {
+                "Active": True,
+                "Case Name": "LL-BAD",
+                "Stage": "Post-composite service action",
+                "Load Component": "LL+IM",
+                "Section Basis": "Precast gross",
+                "N": "0",
+                "Mx": "200",
+                "My": "0",
+                "Vy": "0",
+                "Vx": "0",
+                "T": "0",
+                "Note": "wrong basis",
+            },
+        ],
+        columns=BEAM_SLS_LOAD_COLUMNS,
+    )
+
+    warnings = _beam_sls_stage_basis_warnings(table)
+
+    joined = "\n".join(warnings)
+    assert "Total SLS resultant is suitable for quick preview only" in joined
+    assert "precast gross section" in joined
+    assert "composite transformed section" in joined
+
+
+def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guidance() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
+
+    assert "SLS rows can be selected in Analysis for quick preview checks" in source
+    assert "SLS stage / section-basis guidance" in source
+    assert "Total SLS resultant is suitable for quick preview only" in source
+    assert "full staged summation" in source

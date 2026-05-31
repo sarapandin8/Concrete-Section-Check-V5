@@ -10,6 +10,9 @@ def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> N
     assert "Girder SLS code profile" in SOURCE
     assert "DEFAULT_GIRDER_SLS_CODES" in SOURCE
     assert "This is not a final code-certified check" in SOURCE
+    assert "Code Stress Limit Preview" in SOURCE
+    assert "Code check status" in SOURCE
+    assert "NOT CHECKED" in SOURCE
     assert "does not change any stress" in SOURCE
 
 

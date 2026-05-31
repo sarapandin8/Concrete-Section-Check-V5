@@ -3385,6 +3385,7 @@ def _render_girder_code_limit_preview(
         st.info("No stress rows are available for code-limit preview.")
         return
 
+    st.markdown(f"##### Code Stress Limit Preview — {title}")
     enabled = st.checkbox(
         f"Enable code stress-limit preview — {title}",
         value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
@@ -3392,7 +3393,23 @@ def _render_girder_code_limit_preview(
         help="Preview top/bottom stress against editable AASHTO/ACI limit profiles. This is not a final code-certified check.",
     )
     if not enabled:
-        st.caption("CODE.SLS.LIMIT1 available: enable this preview to compare current stresses with editable AASHTO/ACI service-stress limits.")
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "Code check status",
+                    "value": "NOT CHECKED",
+                    "detail": "Enable this preview to compare current stresses with AASHTO/ACI editable limits",
+                    "status": "neutral",
+                },
+                {
+                    "title": "Limit profile",
+                    "value": "AASHTO / ACI available",
+                    "detail": "Preview framework only; final project code clauses remain engineer-controlled",
+                    "status": "info",
+                },
+            ],
+            columns=2,
+        )
         return
 
     fc_default = _girder_fc_for_sls_limit_preview()
@@ -3712,13 +3729,13 @@ def _render_beam_girder_service_stress_preview() -> None:
     stress_cols[0].metric("Service max compression", _format_girder_stress_mpa(result.max_compression_MPa))
     stress_cols[1].metric("Service max tension", _format_girder_stress_mpa(result.max_tension_MPa))
 
-    with st.expander("Quick elastic stress result table", expanded=has_service_action):
-        st.dataframe(result_df, use_container_width=True, hide_index=True)
-
     _render_girder_code_limit_preview(
         title="Quick trial service stress",
         stresses=_girder_stress_limit_input_rows_from_dataframe(result_df, "Total stress (MPa)"),
     )
+
+    with st.expander("Quick elastic stress result table", expanded=has_service_action):
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
     section_bottom_y_mm = 0.0
@@ -4023,7 +4040,7 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write("- Pe_eff is positive compressive effective prestress after losses.")
         st.write("- Prestress eccentricity e = yps - yc. A low tendon has negative e and gives higher bottom compression.")
         st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
-        st.write("- This preview is a manual elastic stress check foundation only; design-code stress limits and staged checks are future work.")
+        st.write("- This preview is a manual elastic stress check foundation only; code-limit checks are editable previews and staged checks remain engineer-controlled.")
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()

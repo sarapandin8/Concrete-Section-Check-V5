@@ -19,6 +19,8 @@ def test_girder_sls_workspace_formats_zero_stress_without_negative_zero() -> Non
     assert "_format_girder_stress_mpa" in SOURCE
     assert "-0.000 MPa" not in SOURCE
     assert "Quick elastic stress result table" in SOURCE
+    assert "Code Stress Limit Preview" in SOURCE
+    assert "Quick trial service stress" in SOURCE
 
 
 def test_girder_sls_workspace_keeps_design_limits_as_future_work() -> None:

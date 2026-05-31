@@ -17,7 +17,7 @@ def test_loads_to_analysis_preview_uses_n_and_mx_without_double_counting_live_lo
     assert "_analysis_float_or_zero(selected_load_row.get(\"N\"))" in SOURCE
     assert "_analysis_float_or_zero(selected_load_row.get(\"Mx\"))" in SOURCE
     assert "My, Vy, Vx, and T remain stored for future" in SOURCE
-    assert "Do not add separate live-load effects if this SLS row already includes LL+IM" in SOURCE
+    assert "Total SLS resultant including SDL and LL+IM" in SOURCE
 
 
 def test_loads_to_analysis_preview_respects_direct_section_basis_only() -> None:

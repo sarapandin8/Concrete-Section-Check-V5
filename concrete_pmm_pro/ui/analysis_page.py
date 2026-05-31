@@ -3386,6 +3386,35 @@ def _analysis_float_or_zero(value: object) -> float:
         return 0.0
 
 
+def _beam_sls_stage_label_for_analysis(value: object) -> str:
+    """Normalize Loads-page Beam/Girder SLS stages for Analysis display."""
+
+    text = "" if _analysis_value_is_blank(value) else str(value).strip()
+    cf = text.casefold()
+    if not cf:
+        return ""
+    if "transfer" in cf or "release" in cf:
+        return "Transfer stage"
+    if "construction" in cf or "deck" in cf or "pre-composite" in cf or "pre composite" in cf or "wet" in cf:
+        return "Construction stage"
+    if "service" in cf or "final" in cf or "post-composite" in cf or "post composite" in cf or "composite service" in cf:
+        return "Service stage"
+    return text
+
+
+def _beam_sls_component_for_analysis(stage: object, component: object = "") -> str:
+    """Return hidden component meaning for code-limit guards and audit notes."""
+
+    label = _beam_sls_stage_label_for_analysis(stage)
+    if label == "Transfer stage":
+        return "Girder self-weight"
+    if label == "Construction stage":
+        return "Girder self-weight + wet deck/topping"
+    if label == "Service stage":
+        return "Total SLS resultant"
+    return "" if _analysis_value_is_blank(component) else str(component).strip()
+
+
 def _beam_sls_load_rows_from_session_state() -> list[dict[str, object]]:
     """Return active Beam/Girder SLS load rows for Analysis preview selection.
 
@@ -3401,12 +3430,19 @@ def _beam_sls_load_rows_from_session_state() -> list[dict[str, object]]:
     if df.empty:
         return []
 
-    # Backward compatibility with LOADS.WORKFLOW1A tables before Stage and
-    # Load Component were split.
+    # Backward compatibility with LOADS.WORKFLOW1A/1B tables before the
+    # simplified three-stage LOADS.SLS2A editor.
     if "Stage" not in df.columns and "Stage / Component" in df.columns:
         df["Stage"] = df["Stage / Component"]
+    if "Stage" not in df.columns:
+        df["Stage"] = ""
     if "Load Component" not in df.columns:
-        df["Load Component"] = "Total SLS resultant"
+        df["Load Component"] = ""
+    df["Stage"] = df["Stage"].map(_beam_sls_stage_label_for_analysis)
+    df["Load Component"] = [
+        _beam_sls_component_for_analysis(stage, component)
+        for stage, component in zip(df["Stage"], df["Load Component"], strict=False)
+    ]
 
     rows: list[dict[str, object]] = []
     for _, raw_row in df.iterrows():
@@ -3421,10 +3457,9 @@ def _beam_sls_load_rows_from_session_state() -> list[dict[str, object]]:
 
 def _beam_sls_load_row_label(row: Mapping[str, object]) -> str:
     case_name = str(row.get("Case Name") or "Unnamed SLS row").strip() or "Unnamed SLS row"
-    stage = str(row.get("Stage") or "No stage").strip() or "No stage"
-    component = str(row.get("Load Component") or "No component").strip() or "No component"
+    stage = _beam_sls_stage_label_for_analysis(row.get("Stage")) or "No stage"
     basis = str(row.get("Section Basis") or "No basis").strip() or "No basis"
-    return f"{case_name} — {stage} / {component} / {basis}"
+    return f"{case_name} — {stage} / {basis}"
 
 
 def _beam_sls_load_basis_key(row: Mapping[str, object], available_basis_names: list[str]) -> str | None:
@@ -3435,12 +3470,35 @@ def _beam_sls_load_basis_key(row: Mapping[str, object], available_basis_names: l
     return None
 
 
+def _beam_sls_load_action_meaning(row: Mapping[str, object]) -> tuple[str, str]:
+    """Return compact commercial wording for the selected three-stage SLS row."""
+
+    stage = _beam_sls_stage_label_for_analysis(row.get("Stage"))
+    if stage == "Transfer stage":
+        return (
+            "Transfer external action",
+            "Precast girder self-weight only; include Pe_transfer/initial prestress separately in Analysis.",
+        )
+    if stage == "Construction stage":
+        return (
+            "Construction action",
+            "Precast girder plus wet deck/topping before composite action; use precast gross basis.",
+        )
+    if stage == "Service stage":
+        return (
+            "Final service action",
+            "Total SLS resultant including SDL and LL+IM; do not include prestress again when Analysis adds Pe separately.",
+        )
+    return ("Engineer-defined action", "Confirm stage, section basis, and prestress state before relying on preview status.")
+
+
 def _beam_sls_load_row_summary_cards(row: Mapping[str, object]) -> list[dict[str, object]]:
+    action_value, action_detail = _beam_sls_load_action_meaning(row)
     return [
         {
             "title": "Loads page row",
             "value": str(row.get("Case Name") or "Unnamed"),
-            "detail": f"{row.get('Stage') or 'No stage'} · {row.get('Load Component') or 'No component'}",
+            "detail": f"{_beam_sls_stage_label_for_analysis(row.get('Stage')) or 'No stage'} · {_beam_sls_component_for_analysis(row.get('Stage'), row.get('Load Component')) or 'No component'}",
             "status": "ready",
         },
         {
@@ -3456,10 +3514,10 @@ def _beam_sls_load_row_summary_cards(row: Mapping[str, object]) -> list[dict[str
             "status": "ready",
         },
         {
-            "title": "Double-count guard",
-            "value": "Engineer-controlled",
-            "detail": "Do not add separate live-load effects if this SLS row already includes LL+IM",
-            "status": "warning",
+            "title": "Action meaning",
+            "value": action_value,
+            "detail": action_detail,
+            "status": "warning" if "prestress" in action_detail.casefold() else "info",
         },
     ]
 

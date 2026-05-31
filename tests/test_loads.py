@@ -298,7 +298,7 @@ def test_split_mixed_load_table_to_column_uls_sls_tables() -> None:
     assert sls.loc[0, "My"] == "6"
 
 
-def test_beam_girder_workflow_default_tables_use_mux_vuy_tu_and_split_sls_stage_component() -> None:
+def test_beam_girder_workflow_default_tables_use_three_stage_sls_model() -> None:
     uls = _default_beam_uls_load_table()
     sls = _default_beam_sls_load_table()
 
@@ -306,12 +306,12 @@ def test_beam_girder_workflow_default_tables_use_mux_vuy_tu_and_split_sls_stage_
     assert ["Mux", "Vuy", "Tu"] == list(uls.columns[2:5])
     assert list(sls.columns) == BEAM_SLS_LOAD_COLUMNS
     assert "Stage" in sls.columns
-    assert "Load Component" in sls.columns
+    assert "Load Component" in sls.columns  # internal/project metadata, hidden from default editor
     assert "Stage / Component" not in sls.columns
-    assert sls.loc[0, "Stage"] == "Final service"
-    assert sls.loc[0, "Load Component"] == "Total SLS resultant"
-    assert "Section Basis" in sls.columns
-    assert "live-load effects" in sls.loc[0, "Note"]
+    assert list(sls["Stage"]) == ["Transfer stage", "Construction stage", "Service stage"]
+    assert list(sls["Load Component"]) == ["Girder self-weight", "Girder self-weight + wet deck/topping", "Total SLS resultant"]
+    assert list(sls["Section Basis"]) == ["Precast gross", "Precast gross", "Composite transformed"]
+    assert "SDL and LL+IM" in sls.loc[2, "Note"]
 
 
 def test_loads_workflow1b_migrates_old_stage_component_column() -> None:
@@ -336,7 +336,7 @@ def test_loads_workflow1b_migrates_old_stage_component_column() -> None:
     migrated = _normalize_beam_sls_load_table(old)
 
     assert list(migrated.columns) == BEAM_SLS_LOAD_COLUMNS
-    assert migrated.loc[0, "Stage"] == "Final service"
+    assert migrated.loc[0, "Stage"] == "Service stage"
     assert migrated.loc[0, "Load Component"] == "Total SLS resultant"
     assert "Stage / Component" not in migrated.columns
 
@@ -363,9 +363,9 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "SLS Stress Loads" in source
     assert "ULS Girder Design Loads" in source
     assert "SLS Girder Service Loads" in source
-    assert "Avoid double counting" in source
+    assert "Do not include prestress in the Loads resultant" in source
     assert "Load Component" in source
-    assert "Use Stage for timing/basis logic" in source
+    assert "three practical girder SLS stages" in source
     assert "Mux is main vertical bending" in source
     assert "Vuy is vertical shear" in source
 
@@ -379,12 +379,12 @@ def test_beam_sls_dropdown_edits_are_persisted_with_single_rerun_guard() -> None
     assert "_store_editor_table_and_rerun_on_change" in source
     assert "beam_sls_before_edit = sls_df.copy()" in source
     assert "st.rerun()" in source
-    assert 'SelectboxColumn("Stage"' in source
-    assert 'SelectboxColumn("Load Component"' in source
+    assert 'SelectboxColumn("Check Stage"' in source
+    assert 'SelectboxColumn("Load Component"' not in source
     assert 'SelectboxColumn("Section Basis"' in source
 
 
-def test_beam_sls_stage_basis_warnings_flag_total_resultant_and_mismatched_basis() -> None:
+def test_beam_sls_stage_basis_warnings_accept_service_total_but_flag_mismatched_basis() -> None:
     table = pd.DataFrame(
         [
             {
@@ -436,9 +436,9 @@ def test_beam_sls_stage_basis_warnings_flag_total_resultant_and_mismatched_basis
     warnings = _beam_sls_stage_basis_warnings(table)
 
     joined = "\n".join(warnings)
-    assert "Total SLS resultant is suitable for quick preview only" in joined
-    assert "precast gross section" in joined
-    assert "composite transformed section" in joined
+    assert "Total SLS resultant is suitable for quick preview only" not in joined
+    assert "Precast gross section basis" in joined
+    assert "Composite transformed section basis" in joined
 
 
 def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guidance() -> None:
@@ -449,5 +449,5 @@ def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guida
 
     assert "SLS rows can be selected in Analysis for quick preview checks" in source
     assert "SLS stage / section-basis guidance" in source
-    assert "Total SLS resultant is suitable for quick preview only" in source
+    assert "detailed Load Component dropdown" in source
     assert "full staged summation" in source

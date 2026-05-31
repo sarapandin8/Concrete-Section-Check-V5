@@ -609,7 +609,7 @@ def girder_sls_stage_basis_consistency_warnings(
             return None
         if "transfer" in row_stage_cf or "release" in row_stage_cf:
             return STAGE_TRANSFER
-        if "deck" in row_stage_cf or "pre-composite" in row_stage_cf or "pre composite" in row_stage_cf:
+        if "construction" in row_stage_cf or "deck" in row_stage_cf or "pre-composite" in row_stage_cf or "pre composite" in row_stage_cf:
             return STAGE_DECK_CASTING
         if "final" in row_stage_cf or "service" in row_stage_cf or "composite" in row_stage_cf:
             return STAGE_FINAL_SERVICE
@@ -647,10 +647,10 @@ def girder_sls_stage_basis_consistency_warnings(
             "Use transfer-stage prestress and self-weight actions with f'ci and precast gross section."
         )
 
-    if "total sls" in component_cf and ("precast" in basis or "composite" in basis):
+    if "total sls" in component_cf and stage != STAGE_FINAL_SERVICE and ("precast" in basis or "composite" in basis):
         warnings.append(
-            "Staged-effect warning: Total SLS resultant on a single section basis is suitable for quick preview only. "
-            "For final prestressed-girder SLS, split self-weight, wet deck, SDL, and LL+IM into staged rows."
+            "Staged-effect warning: Total SLS resultant is intended for final service. "
+            "Use Transfer or Construction stage resultants for earlier-stage checks."
         )
 
     if stage == STAGE_FINAL_SERVICE and ("wet deck" in component_cf or "girder self" in component_cf) and "composite" in basis:

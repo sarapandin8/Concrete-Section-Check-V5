@@ -32,25 +32,25 @@ COLUMN_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vu
 COLUMN_SLS_LOAD_COLUMNS = ["Active", "Case Name", "P", "Mx", "My", "Note"]
 BEAM_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
 BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+# LOADS.SLS2A keeps Load Component as internal/project metadata for backward
+# compatibility, but the commercial Beam/Girder SLS editor exposes only the
+# check stage.  The component meaning is derived from the selected stage.
+BEAM_SLS_EDITOR_COLUMNS = ["Active", "Case Name", "Stage", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 BEAM_STAGE_OPTIONS = [
     "",
-    "Transfer / release",
-    "Deck casting / pre-composite",
-    "Final service",
-    "Post-composite service action",
+    "Transfer stage",
+    "Construction stage",
+    "Service stage",
     "User-defined",
 ]
 BEAM_LOAD_COMPONENT_OPTIONS = [
     "",
-    "Prestress / release",
     "Girder self-weight",
-    "Wet deck / topping",
-    "SDL after composite",
-    "LL+IM",
+    "Girder self-weight + wet deck/topping",
     "Total SLS resultant",
     "User-defined",
 ]
-BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "Staged / mixed basis", "User-defined"]
+BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "User-defined"]
 WORKFLOW_LOAD_TABLE_KEYS = (
     "column_uls_loads_table",
     "column_sls_loads_table",
@@ -200,18 +200,68 @@ def _store_editor_table_and_rerun_on_change(
         _sync_workflow_load_tables_metadata()
         st.rerun()
 
+def _beam_sls_stage_label(value: object) -> str:
+    """Normalize Beam/Girder SLS rows to the simplified three-stage model."""
+
+    text = "" if _is_blank(value) else str(value).strip()
+    cf = text.casefold()
+    if not cf:
+        return ""
+    if "transfer" in cf or "release" in cf:
+        return "Transfer stage"
+    if "construction" in cf or "deck" in cf or "pre-composite" in cf or "pre composite" in cf or "wet" in cf:
+        return "Construction stage"
+    if "service" in cf or "final" in cf or "post-composite" in cf or "post composite" in cf or "composite service" in cf:
+        return "Service stage"
+    if "user" in cf:
+        return "User-defined"
+    return text
+
+
+def _beam_sls_component_for_stage(stage: object, existing_component: object = "") -> str:
+    """Return the internal component meaning derived from a three-stage SLS row."""
+
+    label = _beam_sls_stage_label(stage)
+    if label == "Transfer stage":
+        return "Girder self-weight"
+    if label == "Construction stage":
+        return "Girder self-weight + wet deck/topping"
+    if label == "Service stage":
+        return "Total SLS resultant"
+    if label == "User-defined" and not _is_blank(existing_component):
+        return str(existing_component).strip()
+    return "" if _is_blank(existing_component) else str(existing_component).strip()
+
+
+def _beam_sls_basis_for_stage(stage: object, existing_basis: object = "") -> str:
+    """Return recommended section basis when a row has no useful basis yet."""
+
+    label = _beam_sls_stage_label(stage)
+    existing = "" if _is_blank(existing_basis) else str(existing_basis).strip()
+    if existing in {"Precast gross", "Composite transformed", "User-defined"}:
+        return existing
+    if label in {"Transfer stage", "Construction stage"}:
+        return "Precast gross"
+    if label == "Service stage":
+        return "Composite transformed"
+    return existing
+
+
 def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
     """Return the current Beam/Girder SLS table schema.
 
-    LOADS.WORKFLOW1B splits the old ambiguous ``Stage / Component`` field
-    into separate ``Stage`` and ``Load Component`` fields.  Older session or
-    project metadata is migrated conservatively so existing rows are preserved
-    instead of being silently cleared.
+    LOADS.SLS2A simplifies the user-facing Beam/Girder SLS workflow to three
+    design stages: Transfer, Construction, and Service.  ``Load Component`` is
+    retained as hidden/internal metadata so older projects and Analysis guards
+    still understand what the row represents, but the editor no longer asks the
+    engineer to choose component-by-component rows.
     """
 
     raw = pd.DataFrame(df).copy() if df is not None else pd.DataFrame(columns=BEAM_SLS_LOAD_COLUMNS)
     if "Stage" not in raw.columns and "Stage / Component" in raw.columns:
         raw["Stage"] = raw["Stage / Component"]
+    if "Stage" not in raw.columns:
+        raw["Stage"] = ""
     if "Load Component" not in raw.columns:
         raw["Load Component"] = raw.get("Component", "")
         if "Stage / Component" in raw.columns:
@@ -219,6 +269,17 @@ def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
                 ~raw["Load Component"].map(_is_blank),
                 "Total SLS resultant",
             )
+    raw["Stage"] = raw["Stage"].map(_beam_sls_stage_label)
+    raw["Load Component"] = [
+        _beam_sls_component_for_stage(stage, component)
+        for stage, component in zip(raw["Stage"], raw["Load Component"], strict=False)
+    ]
+    if "Section Basis" not in raw.columns:
+        raw["Section Basis"] = ""
+    raw["Section Basis"] = [
+        _beam_sls_basis_for_stage(stage, basis)
+        for stage, basis in zip(raw["Stage"], raw["Section Basis"], strict=False)
+    ]
     return _stringify_table(raw, BEAM_SLS_LOAD_COLUMNS)
 
 
@@ -255,17 +316,45 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
         [
             {
                 "Active": True,
-                "Case Name": "SLS-G1",
-                "Stage": "Final service",
-                "Load Component": "Total SLS resultant",
-                "Section Basis": "Composite transformed",
+                "Case Name": "SLS-TR",
+                "Stage": "Transfer stage",
+                "Load Component": "Girder self-weight",
+                "Section Basis": "Precast gross",
                 "N": 0.0,
-                "Mx": 500.0,
+                "Mx": 0.0,
                 "My": 0.0,
                 "Vy": 0.0,
                 "Vx": 0.0,
                 "T": 0.0,
-                "Note": "Use total SLS resultant if it already includes live-load effects",
+                "Note": "Transfer external action: precast girder self-weight only; include Pe_transfer/initial prestress in Analysis.",
+            },
+            {
+                "Active": True,
+                "Case Name": "SLS-CONST",
+                "Stage": "Construction stage",
+                "Load Component": "Girder self-weight + wet deck/topping",
+                "Section Basis": "Precast gross",
+                "N": 0.0,
+                "Mx": 0.0,
+                "My": 0.0,
+                "Vy": 0.0,
+                "Vx": 0.0,
+                "T": 0.0,
+                "Note": "Construction action: precast girder self-weight plus wet deck/topping before composite action.",
+            },
+            {
+                "Active": True,
+                "Case Name": "SLS-SERV",
+                "Stage": "Service stage",
+                "Load Component": "Total SLS resultant",
+                "Section Basis": "Composite transformed",
+                "N": 0.0,
+                "Mx": 0.0,
+                "My": 0.0,
+                "Vy": 0.0,
+                "Vx": 0.0,
+                "T": 0.0,
+                "Note": "Final service action: total SLS resultant including SDL and LL+IM. Do not include prestress again here.",
             },
         ],
         columns=BEAM_SLS_LOAD_COLUMNS,
@@ -404,13 +493,13 @@ def _workflow_table_result(df: pd.DataFrame, *, table_name: str, numeric_columns
 
 
 def _beam_sls_stage_basis_warnings(df: pd.DataFrame) -> list[str]:
-    """Return engineering guidance warnings for Beam/Girder SLS rows.
+    """Return engineering guidance warnings for Beam/Girder SLS stage rows.
 
-    The SLS girder table now separates Stage from Load Component because final
-    prestressed-composite stress checks require staged superposition.  These
-    warnings intentionally do not block data entry; they help users avoid using
-    one total resultant on the wrong section basis before the future final
-    staged-summation engine is connected.
+    LOADS.SLS2A uses a commercial three-stage input model rather than making
+    the engineer choose detailed load components in the default editor.  The
+    guard now checks whether each stage uses the expected section basis while
+    treating the Service-stage Total SLS resultant as the normal intended input
+    for quick/final-service preview.
     """
 
     table = _normalize_beam_sls_load_table(df)
@@ -423,40 +512,29 @@ def _beam_sls_stage_basis_warnings(df: pd.DataFrame) -> list[str]:
 
         row_number = int(index) + 1
         case_name = str(row.get("Case Name") or f"Row {row_number}").strip() or f"Row {row_number}"
-        stage = str(row.get("Stage") or "").strip()
-        component = str(row.get("Load Component") or "").strip()
+        stage = _beam_sls_stage_label(row.get("Stage"))
         basis = str(row.get("Section Basis") or "").strip()
         prefix = f"Beam/Girder SLS row {row_number} ({case_name})"
 
-        if component == "Total SLS resultant":
+        if stage in {"Transfer stage", "Construction stage"} and basis == "Composite transformed":
             warnings.append(
-                f"{prefix}: Total SLS resultant is suitable for quick preview only. "
-                "For staged prestressed-girder stress checks, split girder self-weight, wet deck, SDL, and LL+IM into separate rows with the proper section basis."
+                f"{prefix}: {stage} should normally use the Precast gross section basis. "
+                "Composite transformed properties are normally for final service after composite action."
             )
-            if basis in {"Precast gross", "Composite transformed"}:
+        if stage == "Service stage" and basis == "Precast gross":
+            warnings.append(
+                f"{prefix}: Service stage normally uses the Composite transformed section basis when deck/topping composite metadata is active."
+            )
+        if stage == "Transfer stage":
+            note = str(row.get("Note") or "").casefold()
+            if "prestress" not in note and "pe_transfer" not in note:
                 warnings.append(
-                    f"{prefix}: a total resultant on a single section basis may hide staged effects; use Staged / mixed basis or split components for final SLS checks."
+                    f"{prefix}: transfer stress must include Pe_transfer / initial prestress in Analysis; "
+                    "the Loads row should contain only external girder self-weight action."
                 )
-            continue
 
-        should_be_precast = (
-            stage in {"Transfer / release", "Deck casting / pre-composite"}
-            or component in {"Prestress / release", "Girder self-weight", "Wet deck / topping"}
-        )
-        should_be_composite = (
-            stage == "Post-composite service action"
-            or component in {"SDL after composite", "LL+IM"}
-        )
-
-        if should_be_precast and basis == "Composite transformed":
-            warnings.append(
-                f"{prefix}: {stage or component} is normally checked on the precast gross section, not the composite transformed section."
-            )
-        if should_be_composite and basis == "Precast gross":
-            warnings.append(
-                f"{prefix}: {component or stage} is normally checked on the composite transformed section after composite action is active."
-            )
     return warnings
+
 
 def _default_load_table() -> pd.DataFrame:
     return pd.DataFrame(
@@ -1082,25 +1160,27 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
 
     st.markdown("#### SLS Girder Service Loads")
     st.caption(
-        "Use service-level resultants by separate stage and load component. N and Mx are currently the primary elastic stress inputs; "
-        "My, Vy, Vx, and T are stored for future biaxial stress, principal tension, shear cracking, and torsion checks."
+        "Use the three practical girder SLS stages: Transfer, Construction, and Service. "
+        "N and Mx are currently the primary elastic stress inputs; My, Vy, Vx, and T are stored for future checks."
     )
-    st.warning(
-        "Avoid double counting: if an SLS row is a total service resultant that already includes LL+IM, do not add a separate live-load action elsewhere in Analysis."
+    st.info(
+        "Stage meaning: Transfer = precast girder self-weight + Pe_transfer in Analysis; "
+        "Construction = precast girder + wet deck/topping; Service = total SLS resultant including SDL and LL+IM. "
+        "Do not include prestress in the Loads resultant when Pe is added separately in Analysis."
     )
     sls_df = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
     beam_sls_before_edit = sls_df.copy()
+    sls_editor_df = _stringify_table(sls_df, BEAM_SLS_EDITOR_COLUMNS)
     edited_sls = st.data_editor(
-        sls_df,
+        sls_editor_df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
         column_config={
             "Active": st.column_config.CheckboxColumn("Active"),
             "Case Name": st.column_config.TextColumn("Case Name"),
-            "Stage": st.column_config.SelectboxColumn("Stage", options=BEAM_STAGE_OPTIONS, help="When the action is applied during staged construction/service."),
-            "Load Component": st.column_config.SelectboxColumn("Load Component", options=BEAM_LOAD_COMPONENT_OPTIONS, help="What this row represents, e.g. self-weight, wet deck, SDL, LL+IM, or a total SLS resultant."),
-            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS, help="Section basis intended for this row. Total SLS resultants may require staged/mixed basis treatment."),
+            "Stage": st.column_config.SelectboxColumn("Check Stage", options=BEAM_STAGE_OPTIONS, help="Three-stage girder SLS model: Transfer, Construction, or Service."),
+            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS, help="Recommended: Precast gross for Transfer/Construction; Composite transformed for Service."),
             "N": st.column_config.TextColumn(f"N ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
             "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis. Sagging positive in girder SLS convention."),
             "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Optional service moment about y-axis."),
@@ -1143,11 +1223,11 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
 
     with st.expander("Beam/Girder load table scope", expanded=False):
         st.write("- ULS table prepares actions for future flexure, shear, and torsion design.")
-        st.write("- SLS table prepares service actions for future staged stress checks using separate Stage and Load Component fields.")
-        st.write("- Use Stage for timing/basis logic and Load Component for what the action represents; do not combine the two meanings in one field.")
-        st.write("- Beam/Girder SLS rows can now be selected in the Analysis SLS workspace for quick preview checks.")
+        st.write("- SLS table uses three engineer-facing stages instead of a detailed Load Component dropdown.")
+        st.write("- Transfer stage: external action is precast girder self-weight; Analysis must include Pe_transfer/initial prestress for a meaningful transfer check.")
+        st.write("- Construction stage: external action is precast girder plus wet deck/topping before composite action.")
+        st.write("- Service stage: external action is the Total SLS resultant including SDL and LL+IM; do not include prestress again if Analysis adds Pe separately.")
         st.write("- ULS rows and full staged summation are not yet connected to final code-certified girder design.")
-        st.write("- Total SLS resultants are acceptable for quick preview only; split stage/component rows for final staged stress checks.")
 
 def render_loads_page() -> None:
     st.subheader("Loads")

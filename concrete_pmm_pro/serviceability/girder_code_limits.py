@@ -583,8 +583,16 @@ def girder_sls_stage_basis_consistency_warnings(
     section_basis_label: str | None = None,
     load_stage: str | None = None,
     load_component: str | None = None,
+    stress_includes_prestress: bool | None = None,
+    prestress_force_state: str | None = None,
 ) -> tuple[str, ...]:
-    """Return engineering warnings for inconsistent stage/load/basis selections."""
+    """Return engineering warnings for inconsistent stage/load/basis selections.
+
+    ``stress_includes_prestress`` is intentionally optional so older callers
+    keep their existing behavior.  When supplied for a transfer/release
+    preview, it prevents a service-only stress result from being presented as
+    a meaningful transfer-stage prestressed-girder check.
+    """
 
     warnings: list[str] = []
     stage = normalize_girder_sls_stage(profile_stage)
@@ -593,6 +601,8 @@ def girder_sls_stage_basis_consistency_warnings(
     row_stage_cf = row_stage_text.casefold()
     component_text = str(load_component or "").strip()
     component_cf = component_text.casefold()
+    prestress_state_text = str(prestress_force_state or "").strip()
+    prestress_state_cf = prestress_state_text.casefold()
 
     def row_stage_family() -> str | None:
         if not row_stage_cf:
@@ -617,6 +627,19 @@ def girder_sls_stage_basis_consistency_warnings(
             f"Section basis warning: {stage} checks should normally use precast gross section properties, "
             "not composite transformed properties."
         )
+
+    if stage == STAGE_TRANSFER and stress_includes_prestress is False:
+        warnings.append(
+            "Transfer prestress warning: Transfer / Release checks normally require Pe_transfer or initial prestress effect. "
+            "The current preview stress result does not include transfer prestress."
+        )
+
+    if stage == STAGE_TRANSFER and stress_includes_prestress is True:
+        if (not prestress_state_cf) or "pe_eff" in prestress_state_cf or "after loss" in prestress_state_cf or "final" in prestress_state_cf:
+            warnings.append(
+                "Transfer prestress-force warning: Transfer / Release checks should normally use Pe_transfer / initial prestress, "
+                "not final Pe_eff after losses or an unverified generic Pe_eff value."
+            )
 
     if stage == STAGE_TRANSFER and "total" in component_cf:
         warnings.append(

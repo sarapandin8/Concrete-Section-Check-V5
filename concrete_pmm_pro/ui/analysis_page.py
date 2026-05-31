@@ -3614,14 +3614,17 @@ def _render_girder_code_limit_preview(
     section_basis_label: str | None = None,
     load_stage: str | None = None,
     load_component: str | None = None,
+    stress_includes_prestress: bool | None = None,
+    prestress_force_state_label: str | None = None,
 ) -> None:
     """Render compact CODE.SLS.LIMIT3 preview checks for a set of fiber stresses.
 
     This is a UI/reporting foundation only.  It does not change any stress
     kernel, PMM solver, prestress input, load table, or report workflow.
     CODE.SLS.LIMIT3 displays the governing preview-limit formulas and
-    warns when the selected load row, code-limit stage, and section basis are
-    inconsistent.  It remains guidance-only and does not alter stress values.
+    warns when the selected load row, code-limit stage, section basis, and
+    transfer-stage prestress assumptions are inconsistent.  It remains
+    guidance-only and does not alter stress values.
     """
 
     if not stresses:
@@ -3852,6 +3855,8 @@ def _render_girder_code_limit_preview(
         section_basis_label=section_basis_label,
         load_stage=load_stage,
         load_component=load_component,
+        stress_includes_prestress=stress_includes_prestress,
+        prestress_force_state=prestress_force_state_label,
     )
 
     with st.expander(f"Limit formulas and code-basis audit — {title}", expanded=False):
@@ -4207,6 +4212,8 @@ def _render_beam_girder_service_stress_preview() -> None:
         section_basis_label=basis_options.labels.get(basis_name, basis_name),
         load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or ""),
         load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
+        stress_includes_prestress=False,
+        prestress_force_state_label=None,
     )
 
     with st.expander("SLS check case stress table", expanded=False):
@@ -4356,6 +4363,8 @@ def _render_beam_girder_service_stress_preview() -> None:
                 section_basis_label=basis_options.labels.get(basis_name, basis_name),
                 load_stage=None if selected_load_row is None else str(selected_load_row.get("Stage") or ""),
                 load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
+                stress_includes_prestress=True,
+                prestress_force_state_label="Pe_eff after losses (current GIRDER.PS1B preview force)",
             )
 
     st.markdown("#### Manual Service Stage Stress Preview")
@@ -4523,6 +4532,8 @@ def _render_beam_girder_service_stress_preview() -> None:
                 section_basis_label=basis_options.labels.get(stage_basis_name, stage_basis_name),
                 load_stage=stage_template.title,
                 load_component=stage_template.title,
+                stress_includes_prestress=stage_result.prestress_result is not None,
+                prestress_force_state_label="Pe_eff / user-entered effective prestress; confirm Pe_transfer for release stage",
             )
 
         with st.expander("Manual stage preview limitations", expanded=False):

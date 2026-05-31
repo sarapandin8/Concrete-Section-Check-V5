@@ -103,6 +103,25 @@ def validate_girder_code_limits() -> list[ValidationResult]:
         )
     )
 
+    transfer_no_ps_warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Transfer / Release",
+        section_basis_label="Precast gross section",
+        load_stage="Transfer / Release",
+        load_component="Girder self-weight",
+        stress_includes_prestress=False,
+    )
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT3.TRANSFER.PRESTRESS_REQUIRED",
+            category=CATEGORY,
+            title="Transfer/release preview requires transfer prestress effect",
+            passed=any("Pe_transfer" in warning and "does not include transfer prestress" in warning for warning in transfer_no_ps_warnings),
+            expected="warning requiring Pe_transfer / initial prestress effect",
+            actual=list(transfer_no_ps_warnings),
+            engineering_note="A release-stage prestressed girder check without transfer prestress is an engineering-review condition, not a clean PASS/FAIL case.",
+        )
+    )
+
 
     aashto_options = girder_sls_limit_profile_options("AASHTO LRFD Bridge", "Final service / Composite")
     aci_options = girder_sls_limit_profile_options("ACI 318", "Final service / Composite")

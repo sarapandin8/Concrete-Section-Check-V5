@@ -194,3 +194,30 @@ def test_stage_basis_consistency_accepts_final_service_composite_live_load() -> 
     )
 
     assert warnings == ()
+
+
+def test_transfer_stage_requires_transfer_prestress_effect_for_preview_status() -> None:
+    warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Transfer / Release",
+        section_basis_label="Precast gross section",
+        load_stage="Transfer / Release",
+        load_component="Girder self-weight",
+        stress_includes_prestress=False,
+    )
+
+    assert any("Pe_transfer" in warning for warning in warnings)
+    assert any("does not include transfer prestress" in warning for warning in warnings)
+
+
+def test_transfer_stage_warns_when_pe_eff_after_losses_is_used_as_release_force() -> None:
+    warnings = girder_sls_stage_basis_consistency_warnings(
+        profile_stage="Transfer / Release",
+        section_basis_label="Precast gross section",
+        load_stage="Transfer / Release",
+        load_component="Transfer prestress + self-weight",
+        stress_includes_prestress=True,
+        prestress_force_state="Pe_eff after losses",
+    )
+
+    assert any("Pe_transfer" in warning for warning in warnings)
+    assert any("final Pe_eff after losses" in warning for warning in warnings)

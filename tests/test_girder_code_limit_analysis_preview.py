@@ -64,3 +64,10 @@ def test_analysis_page_compares_actual_stress_against_matching_limits() -> None:
     assert "compression demand uses compression limit" in SOURCE
     assert "tension demand uses tension limit" in SOURCE
     assert "matching stress type" in SOURCE
+
+
+def test_analysis_page_threads_transfer_prestress_requirement_context_into_limit_preview() -> None:
+    assert "stress_includes_prestress" in SOURCE
+    assert "prestress_force_state_label" in SOURCE
+    assert "Transfer / Release checks normally require Pe_transfer" in SOURCE or "Pe_eff after losses" in SOURCE
+    assert "current GIRDER.PS1B preview force" in SOURCE

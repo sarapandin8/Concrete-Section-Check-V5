@@ -1,0 +1,28 @@
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(encoding="utf-8")
+
+
+def test_analysis_preview_can_read_beam_girder_sls_rows_from_loads_page() -> None:
+    assert "LOADS.SLS.CONNECT1" in SOURCE
+    assert "_beam_sls_load_rows_from_session_state" in SOURCE
+    assert 'st.session_state.get("beam_sls_loads_table")' in SOURCE
+    assert "From Loads page — SLS Girder Service Loads" in SOURCE
+    assert "SLS action source" in SOURCE
+    assert "SLS load row from Loads page" in SOURCE
+
+
+def test_loads_to_analysis_preview_uses_n_and_mx_without_double_counting_live_load() -> None:
+    assert "_analysis_float_or_zero(selected_load_row.get(\"N\"))" in SOURCE
+    assert "_analysis_float_or_zero(selected_load_row.get(\"Mx\"))" in SOURCE
+    assert "My, Vy, Vx, and T remain stored for future" in SOURCE
+    assert "Do not add separate live-load effects if this SLS row already includes LL+IM" in SOURCE
+
+
+def test_loads_to_analysis_preview_respects_direct_section_basis_only() -> None:
+    assert "_DIRECT_BEAM_SLS_BASIS_MAP" in SOURCE
+    assert '"precast gross": "precast_gross"' in SOURCE
+    assert '"composite transformed": "composite_transformed"' in SOURCE
+    assert "staged/mixed or unsupported section basis" in SOURCE
+    assert "Preview section basis for selected Loads row" in SOURCE

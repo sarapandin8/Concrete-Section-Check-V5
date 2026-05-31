@@ -3338,6 +3338,126 @@ def _clean_girder_stress_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+# LOADS.SLS.CONNECT1 — connect Beam/Girder SLS load-table rows to the
+# Analysis SLS preview without changing solver/load-combination behaviour.
+_BEAM_SLS_LOAD_ANALYSIS_COLUMNS = ("Active", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note")
+_DIRECT_BEAM_SLS_BASIS_MAP = {
+    "precast gross": "precast_gross",
+    "composite transformed": "composite_transformed",
+}
+
+
+def _analysis_value_is_blank(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() == ""
+
+
+def _analysis_to_bool(value: object, *, default: bool = True) -> bool:
+    if _analysis_value_is_blank(value):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes", "y", "active", "checked"}:
+        return True
+    if text in {"false", "0", "no", "n", "inactive", "unchecked"}:
+        return False
+    return default
+
+
+def _analysis_float_or_zero(value: object) -> float:
+    if _analysis_value_is_blank(value):
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _beam_sls_load_rows_from_session_state() -> list[dict[str, object]]:
+    """Return active Beam/Girder SLS load rows for Analysis preview selection.
+
+    The Loads page remains the master data source.  This helper intentionally
+    performs tolerant normalization locally so Analysis can read table metadata
+    without importing the Loads UI module or mutating load-table state.
+    """
+
+    raw_table = st.session_state.get("beam_sls_loads_table")
+    if raw_table is None:
+        return []
+    df = pd.DataFrame(raw_table)
+    if df.empty:
+        return []
+
+    # Backward compatibility with LOADS.WORKFLOW1A tables before Stage and
+    # Load Component were split.
+    if "Stage" not in df.columns and "Stage / Component" in df.columns:
+        df["Stage"] = df["Stage / Component"]
+    if "Load Component" not in df.columns:
+        df["Load Component"] = "Total SLS resultant"
+
+    rows: list[dict[str, object]] = []
+    for _, raw_row in df.iterrows():
+        row = {column: raw_row.get(column, "") for column in _BEAM_SLS_LOAD_ANALYSIS_COLUMNS}
+        if not _analysis_to_bool(row.get("Active"), default=True):
+            continue
+        if _analysis_value_is_blank(row.get("Case Name")) and _analysis_value_is_blank(row.get("N")) and _analysis_value_is_blank(row.get("Mx")):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _beam_sls_load_row_label(row: Mapping[str, object]) -> str:
+    case_name = str(row.get("Case Name") or "Unnamed SLS row").strip() or "Unnamed SLS row"
+    stage = str(row.get("Stage") or "No stage").strip() or "No stage"
+    component = str(row.get("Load Component") or "No component").strip() or "No component"
+    basis = str(row.get("Section Basis") or "No basis").strip() or "No basis"
+    return f"{case_name} — {stage} / {component} / {basis}"
+
+
+def _beam_sls_load_basis_key(row: Mapping[str, object], available_basis_names: list[str]) -> str | None:
+    basis_text = str(row.get("Section Basis") or "").strip().casefold()
+    basis_key = _DIRECT_BEAM_SLS_BASIS_MAP.get(basis_text)
+    if basis_key in available_basis_names:
+        return basis_key
+    return None
+
+
+def _beam_sls_load_row_summary_cards(row: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "title": "Loads page row",
+            "value": str(row.get("Case Name") or "Unnamed"),
+            "detail": f"{row.get('Stage') or 'No stage'} · {row.get('Load Component') or 'No component'}",
+            "status": "ready",
+        },
+        {
+            "title": "Section basis from row",
+            "value": str(row.get("Section Basis") or "Not specified"),
+            "detail": "Directly used when it matches an available basis; otherwise choose an override below",
+            "status": "info",
+        },
+        {
+            "title": "Imported service action",
+            "value": f"N={_analysis_float_or_zero(row.get('N')):,.3f} kN · Mx={_analysis_float_or_zero(row.get('Mx')):,.3f} kN-m",
+            "detail": "My/Vy/Vx/T are preserved for future service checks",
+            "status": "ready",
+        },
+        {
+            "title": "Double-count guard",
+            "value": "Engineer-controlled",
+            "detail": "Do not add separate live-load effects if this SLS row already includes LL+IM",
+            "status": "warning",
+        },
+    ]
+
+
 
 def _girder_fc_for_sls_limit_preview() -> float:
     """Return the primary concrete f'c for Beam/Girder SLS limit preview."""
@@ -3663,33 +3783,87 @@ def _render_beam_girder_service_stress_preview() -> None:
     if st.session_state.get("girder_service_stress_basis_name") not in basis_names:
         st.session_state["girder_service_stress_basis_name"] = basis_names[0]
 
-    input_cols = st.columns(3)
-    with input_cols[0]:
-        basis_name = st.selectbox(
-            "Section basis for stress preview",
-            basis_names,
-            format_func=lambda name: basis_options.labels.get(name, name),
-            key="girder_service_stress_basis_name",
-            help="Choose precast gross properties or composite transformed properties when composite metadata is active.",
+    beam_sls_rows = _beam_sls_load_rows_from_session_state()
+    source_options = ["Manual input"]
+    if beam_sls_rows:
+        source_options.append("From Loads page — SLS Girder Service Loads")
+    if st.session_state.get("girder_sls_action_source") not in source_options:
+        st.session_state["girder_sls_action_source"] = source_options[0]
+    action_source = st.radio(
+        "SLS action source",
+        source_options,
+        horizontal=True,
+        key="girder_sls_action_source",
+        help="Use manual trial actions or read N/Mx from the active Beam/Girder SLS table on the Loads page.",
+    )
+
+    selected_load_row: dict[str, object] | None = None
+    if action_source.startswith("From Loads page"):
+        row_labels = [_beam_sls_load_row_label(row) for row in beam_sls_rows]
+        row_by_label = dict(zip(row_labels, beam_sls_rows, strict=False))
+        if st.session_state.get("girder_sls_load_row_label") not in row_labels:
+            st.session_state["girder_sls_load_row_label"] = row_labels[0]
+        selected_label = st.selectbox(
+            "SLS load row from Loads page",
+            row_labels,
+            key="girder_sls_load_row_label",
+            help="Loads page is the source of service action data. Analysis reads N and Mx only in this preview milestone.",
         )
-    with input_cols[1]:
-        axial_n = st.number_input(
-            "N service (kN, compression +)",
-            value=float(st.session_state.get("girder_service_stress_N_kN", 0.0)),
-            step=100.0,
-            format="%.3f",
-            key="girder_service_stress_N_kN",
-            help="Positive axial force is compression. Leave zero for ordinary flexural girder stress preview.",
+        selected_load_row = row_by_label[selected_label]
+        _render_analysis_summary_strip(_beam_sls_load_row_summary_cards(selected_load_row), columns=4)
+        st.caption(
+            "LOADS.SLS.CONNECT1 uses N and Mx from the selected row for the quick elastic stress preview. "
+            "My, Vy, Vx, and T remain stored for future biaxial, principal tension, shear, and torsion checks."
         )
-    with input_cols[2]:
-        moment_m = st.number_input(
-            "M service (kN-m, sagging +)",
-            value=float(st.session_state.get("girder_service_stress_M_kNm", 0.0)),
-            step=100.0,
-            format="%.3f",
-            key="girder_service_stress_M_kNm",
-            help="Positive sagging moment gives top compression and bottom tension.",
-        )
+
+    if selected_load_row is None:
+        input_cols = st.columns(3)
+        with input_cols[0]:
+            basis_name = st.selectbox(
+                "Section basis for stress preview",
+                basis_names,
+                format_func=lambda name: basis_options.labels.get(name, name),
+                key="girder_service_stress_basis_name",
+                help="Choose precast gross properties or composite transformed properties when composite metadata is active.",
+            )
+        with input_cols[1]:
+            axial_n = st.number_input(
+                "N service (kN, compression +)",
+                value=float(st.session_state.get("girder_service_stress_N_kN", 0.0)),
+                step=100.0,
+                format="%.3f",
+                key="girder_service_stress_N_kN",
+                help="Positive axial force is compression. Leave zero for ordinary flexural girder stress preview.",
+            )
+        with input_cols[2]:
+            moment_m = st.number_input(
+                "M service (kN-m, sagging +)",
+                value=float(st.session_state.get("girder_service_stress_M_kNm", 0.0)),
+                step=100.0,
+                format="%.3f",
+                key="girder_service_stress_M_kNm",
+                help="Positive sagging moment gives top compression and bottom tension.",
+            )
+    else:
+        mapped_basis_name = _beam_sls_load_basis_key(selected_load_row, basis_names)
+        if mapped_basis_name is not None:
+            basis_name = mapped_basis_name
+            st.info(f"Using section basis from selected Loads row: {basis_options.labels.get(basis_name, basis_name)}.")
+        else:
+            st.warning(
+                "The selected Loads row uses a staged/mixed or unsupported section basis. Choose the basis for this preview explicitly; "
+                "final staged summation is a future milestone."
+            )
+            if st.session_state.get("girder_sls_load_basis_override_name") not in basis_names:
+                st.session_state["girder_sls_load_basis_override_name"] = basis_names[0]
+            basis_name = st.selectbox(
+                "Preview section basis for selected Loads row",
+                basis_names,
+                format_func=lambda name: basis_options.labels.get(name, name),
+                key="girder_sls_load_basis_override_name",
+            )
+        axial_n = _analysis_float_or_zero(selected_load_row.get("N"))
+        moment_m = _analysis_float_or_zero(selected_load_row.get("Mx"))
 
     basis = basis_options.bases[basis_name]
     result = run_basic_girder_service_stress(basis, N_kN=float(axial_n), M_kNm=float(moment_m))

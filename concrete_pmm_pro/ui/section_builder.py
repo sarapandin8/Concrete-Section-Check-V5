@@ -524,6 +524,33 @@ def _analysis_mode_from_session_state() -> AnalysisModeSettings:
     return AnalysisModeSettings()
 
 
+def _axis_convention_rows() -> list[tuple[str, str]]:
+    """Return the shared axis/action convention used by Section Builder and Loads."""
+
+    return [
+        ("x-axis", "Horizontal section width direction in the section preview"),
+        ("y-axis", "Vertical section depth direction; positive upward in the section preview"),
+        ("z-axis", "Member / girder longitudinal axis"),
+        ("Mux", "Moment about x-axis; main vertical bending for typical girders"),
+        ("Muy", "Moment about y-axis; lateral/minor bending for typical girders"),
+        ("Vux", "Shear force in x-direction; lateral shear"),
+        ("Vuy", "Shear force in y-direction; vertical shear"),
+        ("Tu", "Torsion about the member longitudinal axis"),
+    ]
+
+
+def _render_axis_convention_card() -> None:
+    """Display the section-axis basis before users enter Mux/Muy/Vux/Vuy loads."""
+
+    st.markdown("##### Axis Convention")
+    st.markdown(
+        '<div class="cpmm-section-note">LOADS.WORKFLOW1A uses explicit x/y/z-axis action names. '
+        "Confirm these axes against the live section preview before entering loads; major/minor labels are intentionally avoided.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(_kv_panel_html(_axis_convention_rows()), unsafe_allow_html=True)
+
+
 def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
     """Show non-invasive Section Builder guidance for the active member workflow."""
     settings = _analysis_mode_from_session_state()
@@ -1090,6 +1117,7 @@ def _render_section_definition_panel(
         )
 
         _render_member_type_section_guidance(preset)
+        _render_axis_convention_card()
 
         with st.expander("Browse by geometry family", expanded=False):
             st.caption(

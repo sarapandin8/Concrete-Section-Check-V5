@@ -3386,37 +3386,16 @@ def _render_girder_code_limit_preview(
         return
 
     st.markdown(f"##### Code Stress Limit Preview — {title}")
-    enabled = st.checkbox(
-        f"Enable code stress-limit preview — {title}",
-        value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
-        key=f"girder_code_limit_enabled_{title}",
-        help="Preview top/bottom stress against editable AASHTO/ACI limit profiles. This is not a final code-certified check.",
+    st.caption(
+        "Select the visible code profile and stage here first, then enable the check when you want PASS/FAIL preview. "
+        "AASHTO is the bridge-girder default; ACI is available for ACI-based prestressed members."
     )
-    if not enabled:
-        _render_analysis_summary_strip(
-            [
-                {
-                    "title": "Code check status",
-                    "value": "NOT CHECKED",
-                    "detail": "Enable this preview to compare current stresses with AASHTO/ACI editable limits",
-                    "status": "neutral",
-                },
-                {
-                    "title": "Limit profile",
-                    "value": "AASHTO / ACI available",
-                    "detail": "Preview framework only; final project code clauses remain engineer-controlled",
-                    "status": "info",
-                },
-            ],
-            columns=2,
-        )
-        return
 
     fc_default = _girder_fc_for_sls_limit_preview()
     controls = st.columns(4)
     with controls[0]:
         code = st.selectbox(
-            "Girder SLS code profile",
+            "Design code profile",
             list(DEFAULT_GIRDER_SLS_CODES),
             key=f"girder_code_limit_code_{title}",
             help="AASHTO is generally the bridge-girder default; ACI is available for building/general prestressed members.",
@@ -3449,6 +3428,32 @@ def _render_girder_code_limit_preview(
         )
 
     default_profile = build_girder_sls_limit_profile(code=code, stage=stage, stress_zero_tolerance_MPa=float(zero_tol))
+    enabled = st.checkbox(
+        f"Enable PASS/FAIL code stress-limit preview — {title}",
+        value=bool(st.session_state.get(f"girder_code_limit_enabled_{title}", False)),
+        key=f"girder_code_limit_enabled_{title}",
+        help="Preview top/bottom stress against editable AASHTO/ACI limit profiles. This is not a final code-certified check.",
+    )
+    if not enabled:
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "Code check status",
+                    "value": "NOT CHECKED",
+                    "detail": "Enable PASS/FAIL preview after selecting code profile and stage",
+                    "status": "neutral",
+                },
+                {
+                    "title": "Selected limit profile",
+                    "value": str(code),
+                    "detail": f"Stage: {stage} · f'c={float(fc):.3f} MPa",
+                    "status": "info",
+                },
+            ],
+            columns=2,
+        )
+        return
+
     with st.expander(f"Advanced code-limit profile override — {title}", expanded=default_expanded):
         st.caption("Preview defaults are centralized and editable. Confirm final values against the selected project code edition and authority requirements.")
         override_cols = st.columns(3)
@@ -4040,7 +4045,7 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write("- Pe_eff is positive compressive effective prestress after losses.")
         st.write("- Prestress eccentricity e = yps - yc. A low tendon has negative e and gives higher bottom compression.")
         st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
-        st.write("- This preview is a manual elastic stress check foundation only; code-limit checks are editable previews and staged checks remain engineer-controlled.")
+        st.write("- This preview is a manual elastic stress check foundation only; code-limit checks are editable previews and staged checks are future work and remain engineer-controlled.")
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()

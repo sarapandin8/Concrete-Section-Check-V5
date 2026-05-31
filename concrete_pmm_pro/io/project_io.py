@@ -60,6 +60,28 @@ def _clean_table_value(value: Any) -> Any:
     return value
 
 
+WORKFLOW_LOAD_TABLE_METADATA_KEYS = (
+    "column_uls_loads_table",
+    "column_sls_loads_table",
+    "beam_uls_loads_table",
+    "beam_sls_loads_table",
+)
+
+
+def _workflow_load_table_metadata_from_session(session_state: Any) -> dict[str, list[dict[str, Any]]]:
+    """Serialize workflow-specific load tables without changing the solver LoadCase schema."""
+
+    tables: dict[str, list[dict[str, Any]]] = {}
+    for key in WORKFLOW_LOAD_TABLE_METADATA_KEYS:
+        table = _get_session_value(session_state, key, None)
+        if table is None:
+            continue
+        df = pd.DataFrame(table)
+        if not df.empty:
+            tables[key] = df.to_dict(orient="records")
+    return tables
+
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -106,6 +128,9 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     prestress_table_metadata = _prestress_table_metadata_from_session(session_state)
     if prestress_table_metadata:
         metadata["prestress_table_metadata"] = prestress_table_metadata
+    workflow_load_tables = _workflow_load_table_metadata_from_session(session_state)
+    if workflow_load_tables:
+        metadata["workflow_load_tables"] = workflow_load_tables
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -409,6 +434,11 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     session_state["include_default_stress_check_points"] = project.include_default_stress_check_points
 
     session_state["loads_table"] = _loads_to_table(project.loads)
+    workflow_load_tables = project.metadata.get("workflow_load_tables")
+    if isinstance(workflow_load_tables, dict):
+        for key in WORKFLOW_LOAD_TABLE_METADATA_KEYS:
+            if key in workflow_load_tables:
+                session_state[key] = pd.DataFrame(workflow_load_tables.get(key) or [])
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

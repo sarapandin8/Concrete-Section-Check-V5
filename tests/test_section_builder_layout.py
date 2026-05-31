@@ -345,3 +345,13 @@ def test_aashto_be1_top_width_reference_helpers_are_workflow_specific() -> None:
     assert "B1" in section_builder._effective_width_top_width_basis_note(i_girder)
     assert "B - 2b1" in section_builder._effective_width_top_width_basis_note(plank)
     assert "B - b1" in section_builder._effective_width_top_width_basis_note(exterior_plank)
+
+
+def test_section_builder_source_contains_axis_convention_for_load_tables() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Axis Convention" in source
+    assert "LOADS.WORKFLOW1A" in source
+    assert "major/minor labels are intentionally avoided" in source
+    assert "Mux" in source
+    assert "Vuy" in source

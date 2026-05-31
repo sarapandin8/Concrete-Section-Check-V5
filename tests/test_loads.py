@@ -5,7 +5,23 @@ import pytest
 
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
-from concrete_pmm_pro.ui.loads_page import _excel_template_bytes, _normalize_editor_dataframe, _preview_dataframe, load_cases_from_dataframe, prepare_imported_load_table
+from concrete_pmm_pro.ui.loads_page import (
+    BEAM_SLS_LOAD_COLUMNS,
+    BEAM_ULS_LOAD_COLUMNS,
+    COLUMN_SLS_LOAD_COLUMNS,
+    COLUMN_ULS_LOAD_COLUMNS,
+    _axis_convention_rows,
+    _column_workflow_tables_to_legacy_editor_table,
+    _default_beam_sls_load_table,
+    _default_beam_uls_load_table,
+    _excel_template_bytes,
+    _normalize_editor_dataframe,
+    _preview_dataframe,
+    _split_mixed_editor_table_to_column_tables,
+    _workflow_table_result,
+    load_cases_from_dataframe,
+    prepare_imported_load_table,
+)
 
 
 def test_force_unit_conversions() -> None:
@@ -222,3 +238,98 @@ def test_loads_page_includes_member_workflow_notice_source() -> None:
     assert "Active member workflow" in source
     assert "Beam/Girder design load tables" in source
     assert "Pu/Mux/Muy PMM table" in source
+
+
+def test_loads_workflow1a_axis_convention_uses_explicit_section_axes() -> None:
+    rows = dict(_axis_convention_rows())
+
+    assert "x-axis" in rows
+    assert "y-axis" in rows
+    assert "z-axis" in rows
+    assert "main vertical bending" in rows["Mux"]
+    assert "vertical shear" in rows["Vuy"]
+    assert "major" not in " ".join(rows.keys()).lower()
+
+
+def test_column_workflow_tables_map_back_to_existing_pmm_loadcase_contract() -> None:
+    uls = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-COL", "Pu": "1000", "Mux": "200", "Muy": "50", "Vux": "10", "Vuy": "20", "Tu": "5", "Note": "uls"},
+        ],
+        columns=COLUMN_ULS_LOAD_COLUMNS,
+    )
+    sls = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "SLS-COL", "P": "700", "Mx": "120", "My": "30", "Note": "sls"},
+        ],
+        columns=COLUMN_SLS_LOAD_COLUMNS,
+    )
+
+    legacy = _column_workflow_tables_to_legacy_editor_table(uls, sls)
+    load_cases = load_cases_from_dataframe(legacy, "kN", "kN-m")
+
+    assert list(legacy["Limit State"]) == ["ULS", "SLS"]
+    assert load_cases[0].name == "ULS-COL"
+    assert load_cases[0].Pu_N == pytest.approx(1_000_000)
+    assert load_cases[0].Mux_Nmm == pytest.approx(200_000_000)
+    assert load_cases[1].name == "SLS-COL"
+    assert load_cases[1].load_type == "SLS"
+    assert load_cases[1].Pu_N == pytest.approx(700_000)
+    assert load_cases[1].Mux_Nmm == pytest.approx(120_000_000)
+
+
+def test_split_mixed_load_table_to_column_uls_sls_tables() -> None:
+    mixed = pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-1", "Limit State": "ULS", "Pu": "1", "Mux": "2", "Muy": "3", "Note": "strength"},
+            {"Active": True, "Case Name": "SLS-1", "Limit State": "SLS", "Pu": "4", "Mux": "5", "Muy": "6", "Note": "service"},
+        ]
+    )
+
+    uls, sls = _split_mixed_editor_table_to_column_tables(mixed)
+
+    assert list(uls.columns) == COLUMN_ULS_LOAD_COLUMNS
+    assert list(sls.columns) == COLUMN_SLS_LOAD_COLUMNS
+    assert uls.loc[0, "Case Name"] == "ULS-1"
+    assert sls.loc[0, "P"] == "4"
+    assert sls.loc[0, "Mx"] == "5"
+    assert sls.loc[0, "My"] == "6"
+
+
+def test_beam_girder_workflow_default_tables_use_mux_vuy_tu_and_sls_stage_basis() -> None:
+    uls = _default_beam_uls_load_table()
+    sls = _default_beam_sls_load_table()
+
+    assert list(uls.columns) == BEAM_ULS_LOAD_COLUMNS
+    assert ["Mux", "Vuy", "Tu"] == list(uls.columns[2:5])
+    assert list(sls.columns) == BEAM_SLS_LOAD_COLUMNS
+    assert "Stage / Component" in sls.columns
+    assert "Section Basis" in sls.columns
+    assert "live-load effects" in sls.loc[0, "Note"]
+
+
+def test_beam_girder_workflow_table_validation_rejects_non_numeric_actions() -> None:
+    table = pd.DataFrame(
+        [{"Active": True, "Case Name": "BG-1", "Mux": "bad", "Vuy": "10", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": ""}],
+        columns=BEAM_ULS_LOAD_COLUMNS,
+    )
+
+    result = _workflow_table_result(table, table_name="Beam/Girder ULS", numeric_columns=["Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"])
+
+    assert result.errors
+    assert "Mux must be numeric" in result.errors[0]
+
+
+def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_count_warning() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
+
+    assert "ULS PMM / Shear Loads" in source
+    assert "SLS Stress Loads" in source
+    assert "ULS Girder Design Loads" in source
+    assert "SLS Girder Service Loads" in source
+    assert "Avoid double counting" in source
+    assert "Mux is main vertical bending" in source
+    assert "Vuy is vertical shear" in source

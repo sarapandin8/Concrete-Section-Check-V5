@@ -23,6 +23,30 @@ LOAD_TYPE_OPTIONS = ["ULS", "SLS", "Extreme", "Construction", "Other"]
 FORCE_UNIT_OPTIONS = ["kN", "N", "tonf"]
 MOMENT_UNIT_OPTIONS = ["kN-m", "N-mm", "tonf-m"]
 EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Note"]
+
+# LOADS.WORKFLOW1A — workflow-specific table schemas.
+# These tables intentionally remain separate from the existing LoadCase PMM
+# solver contract.  Column/Pier tables are mapped back to Pu/Mux/Muy for the
+# existing PMM workflow; Beam/Girder tables are stored as future-ready data only.
+COLUMN_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vuy", "Tu", "Note"]
+COLUMN_SLS_LOAD_COLUMNS = ["Active", "Case Name", "P", "Mx", "My", "Note"]
+BEAM_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
+BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage / Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+BEAM_STAGE_OPTIONS = [
+    "",
+    "Transfer / release",
+    "Deck casting / pre-composite",
+    "Final service",
+    "Post-composite service action",
+    "User-defined",
+]
+BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "User-defined"]
+WORKFLOW_LOAD_TABLE_KEYS = (
+    "column_uls_loads_table",
+    "column_sls_loads_table",
+    "beam_uls_loads_table",
+    "beam_sls_loads_table",
+)
 IMPORT_FILE_TYPES = ["xlsx", "csv"]
 LEGACY_COLUMN_RENAMES = {
     "Combo Name": "Case Name",
@@ -82,13 +106,233 @@ def _render_load_workflow_notice() -> None:
     settings = _analysis_mode_from_session_state()
     st.info(
         f"Active member workflow: {analysis_mode_label(settings)}. "
-        "The current load table stores Pu, Mux, and Muy for PMM/SLS section workflows."
+        "Loads are now entered in workflow-specific ULS and SLS tables. "
+        "Column/Pier PMM mode maps ULS/SLS force resultants to the existing Pu/Mux/Muy PMM table analysis contract."
     )
     if settings.member_type == "beam_girder":
-        st.warning(
-            "Beam/Girder design load tables for Mu, Vu, Tu, transfer stage, service stage, and prestress effects "
-            "are future work. Do not treat the current Pu/Mux/Muy PMM table as a completed bridge girder design workflow."
+        st.caption(
+            "Beam/Girder design load tables use explicit section-axis action names. They are stored for staged SLS/ULS "
+            "girder workflows and are not yet auto-connected to final design checks. Do not duplicate live-load "
+            "effects here if an SLS case already includes them."
         )
+
+
+def _axis_convention_rows() -> list[tuple[str, str]]:
+    """Shared section/load action convention for engineering UI text."""
+
+    return [
+        ("x-axis", "Horizontal section width direction in the section preview"),
+        ("y-axis", "Vertical section depth direction; positive upward in the section preview"),
+        ("z-axis", "Member / girder longitudinal axis"),
+        ("Mux", "Moment about x-axis; main vertical bending for typical girders"),
+        ("Muy", "Moment about y-axis; lateral/minor bending for typical girders"),
+        ("Vux", "Shear force in x-direction; lateral shear"),
+        ("Vuy", "Shear force in y-direction; vertical shear"),
+        ("Tu", "Torsion about the member longitudinal axis"),
+    ]
+
+
+def _render_axis_convention_panel() -> None:
+    st.markdown("**Axis Convention for Load Tables**")
+    st.caption(
+        "LOADS.WORKFLOW1A uses explicit x/y/z-axis action names instead of major/minor labels so users do not "
+        "have to reinterpret the design axes. Confirm these axes against the section preview before entering loads."
+    )
+    st.dataframe(pd.DataFrame(_axis_convention_rows(), columns=["Item", "Meaning"]), use_container_width=True, hide_index=True)
+
+
+def _stringify_table(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    normalized = df.copy()
+    for column in columns:
+        if column not in normalized.columns:
+            normalized[column] = True if column == "Active" else ""
+    normalized = normalized[columns].copy()
+    normalized["Active"] = normalized["Active"].map(lambda value: _to_bool(value, default=True)).astype(bool)
+    for column in columns:
+        if column == "Active":
+            continue
+        normalized[column] = normalized[column].map(lambda value: "" if _is_blank(value) else str(value))
+    return normalized
+
+
+def _default_column_uls_load_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-01", "Pu": 1000.0, "Mux": 100.0, "Muy": 50.0, "Vux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Note": "PMM + shear design demand"},
+            {"Active": True, "Case Name": "ULS-02", "Pu": 1200.0, "Mux": 120.0, "Muy": 60.0, "Vux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Note": "Alternate ULS combo"},
+        ],
+        columns=COLUMN_ULS_LOAD_COLUMNS,
+    )
+
+
+def _default_column_sls_load_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "SLS-01", "P": 700.0, "Mx": 70.0, "My": 35.0, "Note": "Service stress resultant"},
+        ],
+        columns=COLUMN_SLS_LOAD_COLUMNS,
+    )
+
+
+def _default_beam_uls_load_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Active": True, "Case Name": "ULS-G1", "Mux": 1000.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Flexure/shear/torsion design resultant"},
+        ],
+        columns=BEAM_ULS_LOAD_COLUMNS,
+    )
+
+
+def _default_beam_sls_load_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Case Name": "SLS-G1",
+                "Stage / Component": "Final service",
+                "Section Basis": "Composite transformed",
+                "N": 0.0,
+                "Mx": 500.0,
+                "My": 0.0,
+                "Vy": 0.0,
+                "Vx": 0.0,
+                "T": 0.0,
+                "Note": "Use total SLS resultant if it already includes live-load effects",
+            },
+        ],
+        columns=BEAM_SLS_LOAD_COLUMNS,
+    )
+
+
+def _split_mixed_editor_table_to_column_tables(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    editor_df = _normalize_editor_dataframe(df)
+    uls_rows: list[dict[str, Any]] = []
+    sls_rows: list[dict[str, Any]] = []
+    for _, row in editor_df.iterrows():
+        if _row_is_blank(row):
+            continue
+        limit_state = _normalize_limit_state(row.get("Limit State")) or str(row.get("Limit State") or "").strip()
+        if limit_state == "SLS":
+            sls_rows.append(
+                {
+                    "Active": _to_bool(row.get("Active"), default=True),
+                    "Case Name": row.get("Case Name", ""),
+                    "P": row.get("Pu", ""),
+                    "Mx": row.get("Mux", ""),
+                    "My": row.get("Muy", ""),
+                    "Note": row.get("Note", ""),
+                }
+            )
+        else:
+            uls_rows.append(
+                {
+                    "Active": _to_bool(row.get("Active"), default=True),
+                    "Case Name": row.get("Case Name", ""),
+                    "Pu": row.get("Pu", ""),
+                    "Mux": row.get("Mux", ""),
+                    "Muy": row.get("Muy", ""),
+                    "Vux": 0.0,
+                    "Vuy": 0.0,
+                    "Tu": 0.0,
+                    "Note": row.get("Note", ""),
+                }
+            )
+    return (
+        _stringify_table(pd.DataFrame(uls_rows) if uls_rows else _default_column_uls_load_table(), COLUMN_ULS_LOAD_COLUMNS),
+        _stringify_table(pd.DataFrame(sls_rows) if sls_rows else _default_column_sls_load_table(), COLUMN_SLS_LOAD_COLUMNS),
+    )
+
+
+def _column_workflow_tables_to_legacy_editor_table(uls_df: pd.DataFrame, sls_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    uls_df = _stringify_table(uls_df, COLUMN_ULS_LOAD_COLUMNS)
+    sls_df = _stringify_table(sls_df, COLUMN_SLS_LOAD_COLUMNS)
+    for _, row in uls_df.iterrows():
+        rows.append(
+            {
+                "Active": _to_bool(row.get("Active"), default=True),
+                "Case Name": row.get("Case Name", ""),
+                "Limit State": "ULS",
+                "Pu": row.get("Pu", ""),
+                "Mux": row.get("Mux", ""),
+                "Muy": row.get("Muy", ""),
+                "Note": row.get("Note", ""),
+            }
+        )
+    for _, row in sls_df.iterrows():
+        rows.append(
+            {
+                "Active": _to_bool(row.get("Active"), default=True),
+                "Case Name": row.get("Case Name", ""),
+                "Limit State": "SLS",
+                "Pu": row.get("P", ""),
+                "Mux": row.get("Mx", ""),
+                "Muy": row.get("My", ""),
+                "Note": row.get("Note", ""),
+            }
+        )
+    return _normalize_editor_dataframe(pd.DataFrame(rows, columns=EDITOR_COLUMNS))
+
+
+def _ensure_workflow_load_tables_initialized() -> None:
+    if "column_uls_loads_table" not in st.session_state or "column_sls_loads_table" not in st.session_state:
+        uls_df, sls_df = _split_mixed_editor_table_to_column_tables(st.session_state.get("loads_table", _default_load_table()))
+        st.session_state.setdefault("column_uls_loads_table", uls_df)
+        st.session_state.setdefault("column_sls_loads_table", sls_df)
+    if "beam_uls_loads_table" not in st.session_state:
+        st.session_state["beam_uls_loads_table"] = _default_beam_uls_load_table()
+    if "beam_sls_loads_table" not in st.session_state:
+        st.session_state["beam_sls_loads_table"] = _default_beam_sls_load_table()
+
+
+def _sync_workflow_load_tables_metadata() -> None:
+    metadata = dict(st.session_state.get("project_metadata", {}) or {})
+    workflow_tables: dict[str, list[dict[str, Any]]] = {}
+    for key in WORKFLOW_LOAD_TABLE_KEYS:
+        value = st.session_state.get(key)
+        if value is None:
+            continue
+        workflow_tables[key] = pd.DataFrame(value).to_dict(orient="records")
+    if workflow_tables:
+        metadata["workflow_load_tables"] = workflow_tables
+        st.session_state["project_metadata"] = metadata
+
+
+def _workflow_table_result(df: pd.DataFrame, *, table_name: str, numeric_columns: list[str]) -> LoadParseResult:
+    errors: list[str] = []
+    warnings: list[str] = []
+    seen_names: set[str] = set()
+    nonblank_rows = 0
+    active_rows = 0
+    valid_rows: list[LoadCase] = []
+    for index, row in df.iterrows():
+        row_number = int(index) + 1
+        if _is_blank(row.get("Case Name")) and all(_is_blank(row.get(column)) for column in numeric_columns):
+            continue
+        nonblank_rows += 1
+        name = str(row.get("Case Name") or "").strip()
+        if not name:
+            errors.append(f"{table_name} row {row_number}: Case Name cannot be blank.")
+            continue
+        name_key = name.lower()
+        if name_key in seen_names:
+            errors.append(f"{table_name} row {row_number}: Duplicate Case Name = {name}.")
+            continue
+        seen_names.add(name_key)
+        for column in numeric_columns:
+            if _to_float(row.get(column)) is None:
+                errors.append(f"{table_name} row {row_number}: {column} must be numeric.")
+        if _to_bool(row.get("Active"), default=True):
+            active_rows += 1
+        valid_rows.append(LoadCase(name=name, active=_to_bool(row.get("Active"), default=True), load_type="Other"))
+    if nonblank_rows and active_rows == 0:
+        warnings.append(f"{table_name}: no active rows are selected.")
+    return LoadParseResult(
+        load_cases=valid_rows,
+        errors=errors,
+        warnings=warnings,
+        info=[f"{table_name}: {active_rows} active row(s), {nonblank_rows} non-blank row(s)."],
+    )
 
 def _default_load_table() -> pd.DataFrame:
     return pd.DataFrame(
@@ -567,77 +811,229 @@ def _render_load_import_workflow(force_unit: str, moment_unit: str) -> None:
         st.rerun()
 
 
-def render_loads_page() -> None:
-    st.subheader("Loads")
-    st.caption("Paste-friendly load case input for PMM strength and serviceability workflows.")
-
-    _render_load_workflow_notice()
-
-    st.info(
-        "PMM strength checks currently use active ULS demand values: Pu, Mux, and Muy. "
-        "Active SLS cases are stored and used by available serviceability checks."
+def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
+    st.markdown("### Column / Pier / Wall / Pylon Loads")
+    st.caption(
+        "ULS and SLS loads are separated so PMM strength, shear demand, and service stress resultants are not mixed. "
+        "Only Pu/Mux/Muy from active ULS rows are passed to the existing PMM demand/capacity workflow."
     )
 
-    unit_cols = st.columns(2)
-    with unit_cols[0]:
-        force_unit = st.selectbox("Force unit", FORCE_UNIT_OPTIONS, index=0, help="Unit used in the Pu column of the input table.")
-    with unit_cols[1]:
-        moment_unit = st.selectbox("Moment unit", MOMENT_UNIT_OPTIONS, index=0, help="Unit used in the Mux and Muy columns of the input table.")
-
     with st.expander("Excel / CSV load template", expanded=False):
+        st.caption("The current import template maps to the Column/Pier PMM workflow and will be split into ULS/SLS tables.")
         _render_load_template_downloads()
 
-    with st.expander("Import Load Cases from Excel / CSV", expanded=True):
-        _render_load_import_workflow(force_unit, moment_unit)
+    with st.expander("Import Column/Pier Load Cases from Excel / CSV", expanded=False):
+        st.caption("Imported Pu/Mux/Muy rows are split by Limit State into the workflow-specific ULS and SLS tables.")
+        uploaded_file = st.file_uploader(
+            "Upload completed Column/Pier load template",
+            type=IMPORT_FILE_TYPES,
+            help="Supported files: .xlsx or .csv. The first sheet is read for Excel files.",
+            key="column_loads_import_file",
+        )
+        if uploaded_file is not None:
+            try:
+                imported_raw = _read_uploaded_load_table(uploaded_file)
+                imported_editor = prepare_imported_load_table(imported_raw)
+                imported_uls, imported_sls = _split_mixed_editor_table_to_column_tables(imported_editor)
+            except Exception as exc:  # pragma: no cover - UI guardrail
+                st.error(f"Could not read load import file: {exc}")
+            else:
+                result = parse_load_cases_from_dataframe(imported_editor, force_unit, moment_unit)
+                st.dataframe(imported_editor, use_container_width=True, hide_index=True)
+                _render_summary_metrics(result, total_rows=len(imported_editor))
+                if result.errors:
+                    st.warning("Fix import validation errors before applying this file.")
+                    with st.expander("Import Rows Excluded from Analysis", expanded=True):
+                        for error in result.errors:
+                            st.error(error)
+                elif st.button("Apply imported loads to Column/Pier ULS/SLS tables", type="primary", use_container_width=True):
+                    st.session_state["column_uls_loads_table"] = imported_uls
+                    st.session_state["column_sls_loads_table"] = imported_sls
+                    st.session_state.pop("column_uls_loads_editor", None)
+                    st.session_state.pop("column_sls_loads_editor", None)
+                    st.success("Imported loads applied to workflow-specific Column/Pier tables.")
+                    st.rerun()
 
-    with st.expander("Sign convention", expanded=False):
-        st.write("- Pu is axial force demand. Compression is positive.")
-        st.write("- Mux is moment demand about the x-axis.")
-        st.write("- Muy is moment demand about the y-axis.")
-        st.write("- x-axis is positive to the right in the section preview.")
-        st.write("- y-axis is positive upward in the section preview.")
-        st.write("- Positive moments follow the right-hand rule.")
-        st.write("- For PMM strength checks, use active ULS load combinations.")
-        st.write("- SLS load cases are stored and used by serviceability checks where available.")
-
-    if "loads_table" not in st.session_state:
-        st.session_state["loads_table"] = _default_load_table()
-
-    editor_df = _normalize_editor_dataframe(st.session_state["loads_table"])
-    st.markdown("**Load Case Input Table**")
-    st.caption("Edit imported rows here if needed. Rows with blank case names are excluded; duplicate names are rejected.")
-    edited_df = st.data_editor(
-        editor_df,
+    st.markdown("#### ULS PMM / Shear Loads")
+    st.caption(
+        "Use factored loads. PMM checks use Pu, Mux, and Muy. Vux, Vuy, and Tu are stored for future shear/torsion design."
+    )
+    uls_df = _stringify_table(pd.DataFrame(st.session_state.get("column_uls_loads_table")), COLUMN_ULS_LOAD_COLUMNS)
+    edited_uls = st.data_editor(
+        uls_df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Active": st.column_config.CheckboxColumn("Active", help="Only active and valid rows are used by analysis."),
-            "Case Name": st.column_config.TextColumn("Case Name", help="Unique load case or combination name."),
-            "Limit State": st.column_config.SelectboxColumn("Limit State", options=LOAD_TYPE_OPTIONS, help="ULS is used for strength checks; SLS is stored for service checks."),
-            "Pu": st.column_config.TextColumn(f"Pu ({force_unit}, compression +)", help="Axial demand. Compression is positive."),
-            "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Moment demand about the x-axis."),
-            "Muy": st.column_config.TextColumn(f"Muy ({moment_unit})", help="Moment demand about the y-axis."),
-            "Note": st.column_config.TextColumn("Note", help="Optional engineering note. Not used in calculation."),
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Case Name": st.column_config.TextColumn("Case Name"),
+            "Pu": st.column_config.TextColumn(f"Pu ({force_unit}, compression +)", help="Factored axial force for PMM. Compression is positive."),
+            "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Factored moment about x-axis for PMM."),
+            "Muy": st.column_config.TextColumn(f"Muy ({moment_unit})", help="Factored moment about y-axis for PMM."),
+            "Vux": st.column_config.TextColumn(f"Vux ({force_unit})", help="Factored shear in x-direction for future shear design."),
+            "Vuy": st.column_config.TextColumn(f"Vuy ({force_unit})", help="Factored shear in y-direction for future shear design."),
+            "Tu": st.column_config.TextColumn(f"Tu ({moment_unit})", help="Factored torsion about member longitudinal axis. Future design use."),
+            "Note": st.column_config.TextColumn("Note"),
         },
-        key="loads_data_editor",
+        key="column_uls_loads_editor",
     )
-    edited_df = _normalize_editor_dataframe(edited_df)
-    st.session_state["loads_table"] = edited_df
+    edited_uls = _stringify_table(edited_uls, COLUMN_ULS_LOAD_COLUMNS)
+    st.session_state["column_uls_loads_table"] = edited_uls
 
-    result = parse_load_cases_from_dataframe(edited_df, force_unit, moment_unit)
-    # Keep valid rows available even when other pasted rows are invalid.
-    # Invalid rows are reported in the validation panel and excluded from analysis.
+    st.markdown("#### SLS Stress Loads")
+    st.caption("Use service-level resultants for elastic SLS stress checks. Do not enter live load separately if this SLS case already includes it.")
+    sls_df = _stringify_table(pd.DataFrame(st.session_state.get("column_sls_loads_table")), COLUMN_SLS_LOAD_COLUMNS)
+    edited_sls = st.data_editor(
+        sls_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Case Name": st.column_config.TextColumn("Case Name"),
+            "P": st.column_config.TextColumn(f"P ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
+            "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis."),
+            "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Service moment about y-axis."),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="column_sls_loads_editor",
+    )
+    edited_sls = _stringify_table(edited_sls, COLUMN_SLS_LOAD_COLUMNS)
+    st.session_state["column_sls_loads_table"] = edited_sls
+
+    legacy_editor = _column_workflow_tables_to_legacy_editor_table(edited_uls, edited_sls)
+    st.session_state["loads_table"] = legacy_editor
+    result = parse_load_cases_from_dataframe(legacy_editor, force_unit, moment_unit)
     st.session_state["load_cases"] = result.load_cases
+    _sync_workflow_load_tables_metadata()
 
-    nonblank_count = sum(0 if _row_is_blank(row) else 1 for _, row in edited_df.iterrows())
+    nonblank_count = sum(0 if _row_is_blank(row) else 1 for _, row in legacy_editor.iterrows())
     _render_summary_metrics(result, total_rows=nonblank_count)
     _render_validation_panel(result)
 
-    with st.expander("Valid Load Cases Used by Analysis", expanded=True):
-        st.caption("This table shows validated rows converted back to the selected input units for review.")
+    with st.expander("Valid Column/Pier Load Cases Used by Analysis", expanded=True):
+        st.caption("Existing PMM/SLS analysis still receives valid active rows converted to Pu/Mux/Muy internal resultants.")
         st.dataframe(_valid_load_cases_dataframe(result.load_cases, force_unit, moment_unit), use_container_width=True, hide_index=True)
 
     with st.expander("Internal Units Preview", expanded=False):
-        st.caption("Internal solver units are N and N-mm.")
+        st.caption("Internal solver units are N and N-mm. Shear/torsion columns are stored for future design but not passed to PMM yet.")
         st.dataframe(_preview_dataframe(st.session_state["load_cases"]), use_container_width=True, hide_index=True)
+
+
+def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
+    st.markdown("### Beam / Girder Loads")
+    st.caption(
+        "Beam/Girder load tables use explicit section-axis names: Mux is main vertical bending for typical girders and Vuy is vertical shear. "
+        "These tables are stored for future girder SLS/ULS workflows and are not automatically connected to final checks yet."
+    )
+
+    st.markdown("#### ULS Girder Design Loads")
+    st.caption("Use factored resultants for future flexural, shear, and torsion design. Mux, Vuy, and Tu are the primary girder ULS actions.")
+    uls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
+    edited_uls = st.data_editor(
+        uls_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Case Name": st.column_config.TextColumn("Case Name"),
+            "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Factored main bending about x-axis."),
+            "Vuy": st.column_config.TextColumn(f"Vuy ({force_unit})", help="Factored vertical shear in y-direction."),
+            "Tu": st.column_config.TextColumn(f"Tu ({moment_unit})", help="Factored torsion about member longitudinal axis."),
+            "Muy": st.column_config.TextColumn(f"Muy ({moment_unit})", help="Optional lateral/minor bending about y-axis."),
+            "Vux": st.column_config.TextColumn(f"Vux ({force_unit})", help="Optional lateral shear in x-direction."),
+            "Nu": st.column_config.TextColumn(f"Nu ({force_unit})", help="Optional axial force for special girder/frame action."),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="beam_uls_loads_editor",
+    )
+    edited_uls = _stringify_table(edited_uls, BEAM_ULS_LOAD_COLUMNS)
+    st.session_state["beam_uls_loads_table"] = edited_uls
+
+    st.markdown("#### SLS Girder Service Loads")
+    st.caption(
+        "Use service-level resultants by stage/component. N and Mx are currently the primary elastic stress inputs; "
+        "My, Vy, Vx, and T are stored for future biaxial stress, principal tension, shear cracking, and torsion checks."
+    )
+    st.warning(
+        "Avoid double counting: if an SLS row is a total service resultant that already includes LL+IM, do not add a separate live-load action elsewhere in Analysis."
+    )
+    sls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")), BEAM_SLS_LOAD_COLUMNS)
+    edited_sls = st.data_editor(
+        sls_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Case Name": st.column_config.TextColumn("Case Name"),
+            "Stage / Component": st.column_config.SelectboxColumn("Stage / Component", options=BEAM_STAGE_OPTIONS),
+            "Section Basis": st.column_config.SelectboxColumn("Section Basis", options=BEAM_SECTION_BASIS_OPTIONS),
+            "N": st.column_config.TextColumn(f"N ({force_unit}, compression +)", help="Service axial force. Compression is positive."),
+            "Mx": st.column_config.TextColumn(f"Mx ({moment_unit})", help="Service moment about x-axis. Sagging positive in girder SLS convention."),
+            "My": st.column_config.TextColumn(f"My ({moment_unit})", help="Optional service moment about y-axis."),
+            "Vy": st.column_config.TextColumn(f"Vy ({force_unit})", help="Optional vertical shear for future service shear/principal stress checks."),
+            "Vx": st.column_config.TextColumn(f"Vx ({force_unit})", help="Optional lateral shear for future service checks."),
+            "T": st.column_config.TextColumn(f"T ({moment_unit})", help="Optional service torsion for future torsion cracking checks."),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="beam_sls_loads_editor",
+    )
+    edited_sls = _stringify_table(edited_sls, BEAM_SLS_LOAD_COLUMNS)
+    st.session_state["beam_sls_loads_table"] = edited_sls
+    _sync_workflow_load_tables_metadata()
+
+    uls_result = _workflow_table_result(edited_uls, table_name="Beam/Girder ULS", numeric_columns=["Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"])
+    sls_result = _workflow_table_result(edited_sls, table_name="Beam/Girder SLS", numeric_columns=["N", "Mx", "My", "Vy", "Vx", "T"])
+    cols = st.columns(4)
+    cols[0].metric("ULS rows", len(uls_result.load_cases))
+    cols[1].metric("SLS rows", len(sls_result.load_cases))
+    cols[2].metric("ULS errors", len(uls_result.errors))
+    cols[3].metric("SLS errors", len(sls_result.errors))
+    for result in (uls_result, sls_result):
+        if result.errors:
+            for error in result.errors:
+                st.error(error)
+        for warning in result.warnings:
+            st.warning(warning)
+        for info in result.info:
+            st.info(info)
+
+    with st.expander("Beam/Girder load table scope", expanded=False):
+        st.write("- ULS table prepares actions for future flexure, shear, and torsion design.")
+        st.write("- SLS table prepares service actions for future staged stress checks.")
+        st.write("- These Beam/Girder tables are not yet auto-connected to PMM or final code-certified girder design.")
+        st.write("- Use the Analysis SLS workspace manual preview until load-table-to-analysis integration is added.")
+
+def render_loads_page() -> None:
+    st.subheader("Loads")
+    st.caption("Workflow-based ULS/SLS load input for PMM and future Beam/Girder design workflows.")
+
+    _ensure_workflow_load_tables_initialized()
+    _render_load_workflow_notice()
+
+    unit_cols = st.columns(2)
+    with unit_cols[0]:
+        force_unit = st.selectbox(
+            "Force unit",
+            FORCE_UNIT_OPTIONS,
+            index=0,
+            help="Unit used by axial and shear columns in the active load tables.",
+        )
+    with unit_cols[1]:
+        moment_unit = st.selectbox(
+            "Moment unit",
+            MOMENT_UNIT_OPTIONS,
+            index=0,
+            help="Unit used by moment and torsion columns in the active load tables.",
+        )
+
+    with st.expander("Axis convention for load input", expanded=True):
+        _render_axis_convention_panel()
+
+    settings = _analysis_mode_from_session_state()
+    if settings.member_type == "beam_girder":
+        _render_beam_girder_load_tables(force_unit, moment_unit)
+    else:
+        _render_column_load_tables(force_unit, moment_unit)

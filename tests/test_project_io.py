@@ -395,3 +395,32 @@ def test_session_state_with_empty_concrete_materials_keeps_existing_primary() ->
     assert project.concrete_material.fc_MPa == pytest.approx(35.0)
     assert project.active_concrete_material_name == "Session Legacy C35"
     assert DEFAULT_PRIMARY_CONCRETE_MATERIAL in {material.name for material in project.concrete_materials}
+
+
+def test_project_session_round_trip_preserves_workflow_load_tables_metadata() -> None:
+    session_state = {
+        "load_cases": [LoadCase(name="ULS-01", Pu_N=1000.0, Mux_Nmm=2000.0, Muy_Nmm=3000.0)],
+        "column_uls_loads_table": [
+            {"Active": True, "Case Name": "ULS-COL", "Pu": "1000", "Mux": "200", "Muy": "50", "Vux": "10", "Vuy": "20", "Tu": "0", "Note": "uls"}
+        ],
+        "column_sls_loads_table": [
+            {"Active": True, "Case Name": "SLS-COL", "P": "700", "Mx": "120", "My": "30", "Note": "sls"}
+        ],
+        "beam_uls_loads_table": [
+            {"Active": True, "Case Name": "ULS-G", "Mux": "1000", "Vuy": "250", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": "girder"}
+        ],
+        "beam_sls_loads_table": [
+            {"Active": True, "Case Name": "SLS-G", "Stage / Component": "Final service", "Section Basis": "Composite transformed", "N": "0", "Mx": "500", "My": "0", "Vy": "0", "Vx": "0", "T": "0", "Note": "girder sls"}
+        ],
+    }
+
+    project = project_from_session_state(session_state)
+    assert "workflow_load_tables" in project.metadata
+    assert project.metadata["workflow_load_tables"]["beam_sls_loads_table"][0]["Case Name"] == "SLS-G"
+
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert "beam_sls_loads_table" in restored
+    assert restored["beam_sls_loads_table"].iloc[0]["Case Name"] == "SLS-G"
+    assert restored["column_uls_loads_table"].iloc[0]["Vuy"] == "20"

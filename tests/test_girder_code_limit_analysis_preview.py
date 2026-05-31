@@ -5,10 +5,10 @@ SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(
 
 
 def test_analysis_page_exposes_code_limit_preview_without_solver_coupling() -> None:
-    assert "CODE.SLS.LIMIT1" in SOURCE
-    assert "Enable PASS/FAIL code stress-limit preview" in SOURCE
+    assert "CODE.SLS.LIMIT2.1" in SOURCE
+    assert "Enable PASS/FAIL preview" in SOURCE
     assert "Design code profile" in SOURCE
-    assert "Select the visible code profile and stage here first" in SOURCE
+    assert "Visible code/stage selector" in SOURCE
     assert "DEFAULT_GIRDER_SLS_CODES" in SOURCE
     assert "This is not a final code-certified check" in SOURCE
     assert "Code Stress Limit Preview" in SOURCE
@@ -37,4 +37,4 @@ def test_analysis_page_exposes_stage_aware_code_limit_controls() -> None:
     assert "Recommended section basis" in SOURCE
     assert "f'ci" in SOURCE
     assert "Pe_eff" in SOURCE
-    assert "Losses are not calculated automatically" in SOURCE
+    assert "losses are not calculated automatically" in SOURCE.lower()

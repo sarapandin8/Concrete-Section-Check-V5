@@ -17,8 +17,11 @@ def test_default_aashto_service_profile_computes_editable_limits() -> None:
     profile = default_girder_sls_limit_profile("AASHTO LRFD Bridge", "Final service / Composite")
 
     assert profile.compression_limit_MPa(45.0) == pytest.approx(20.25)
-    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.50 * math.sqrt(45.0))
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.19 * math.sqrt(45.0))
     assert "Confirm" in profile.limitation_note
+    aci_service = default_girder_sls_limit_profile("ACI 318", "Final service / Composite")
+    assert aci_service.tension_allowable_MPa(45.0) == pytest.approx(0.50 * math.sqrt(45.0))
+    assert aci_service.tension_allowable_MPa(45.0) > profile.tension_allowable_MPa(45.0)
 
 
 def test_default_aci_transfer_profile_is_distinct_stage_profile() -> None:

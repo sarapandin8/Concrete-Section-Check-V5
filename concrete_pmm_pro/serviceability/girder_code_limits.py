@@ -203,6 +203,11 @@ def default_girder_sls_limit_profile(
         "Editable preview profile only. Confirm code edition, authority/project specifications, prestress class, "
         "reinforcement/cracking assumptions, concrete strength at stage, and prestress-force state before final design."
     )
+    code_note = (
+        "AASHTO bridge-girder preview defaults are intentionally separated from ACI building/member preview defaults."
+        if code == "AASHTO LRFD Bridge"
+        else "ACI prestressed-member preview defaults are intentionally separated from AASHTO bridge defaults."
+    )
     common = dict(
         code=code,
         stage=stage,
@@ -210,38 +215,55 @@ def default_girder_sls_limit_profile(
         prestress_force_basis=meta["prestress_force_basis"],
         recommended_section_basis=meta["recommended_section_basis"],
         stage_guidance=meta["stage_guidance"],
-        limitation_note=base_note,
+        limitation_note=f"{base_note} {code_note}",
     )
+
+    # Preview defaults are code-profile-specific but still engineer-editable.
+    # They are not a final locked clause-selection engine.  Transfer values are
+    # intentionally similar because many prestressed-code checks use comparable
+    # release-stage compression/tension concepts; final-service tension defaults
+    # are separated so AASHTO/ACI do not appear identical in the UI.
+    if code == "AASHTO LRFD Bridge":
+        transfer_comp, transfer_tension = 0.60, 0.25
+        deck_comp, deck_tension = 0.55, 0.25
+        final_comp, final_tension = 0.45, 0.19
+        family_note = "AASHTO LRFD Bridge editable preview profile"
+    else:
+        transfer_comp, transfer_tension = 0.60, 0.25
+        deck_comp, deck_tension = 0.55, 0.25
+        final_comp, final_tension = 0.45, 0.50
+        family_note = "ACI 318 editable prestressed-member preview profile"
+
     if stage == STAGE_TRANSFER:
         return GirderServiceStressLimitProfile(
             **common,
-            compression_limit_ratio=0.60,
+            compression_limit_ratio=transfer_comp,
             tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=0.25,
-            clause_note=f"{code} transfer/release stress preview profile. Use f'ci and transfer-stage prestress force.",
+            tension_sqrt_fc_ratio=transfer_tension,
+            clause_note=f"{family_note}: transfer/release stage. Use f'ci and transfer-stage prestress force.",
         )
     if stage == STAGE_DECK_CASTING:
         return GirderServiceStressLimitProfile(
             **common,
-            compression_limit_ratio=0.55,
+            compression_limit_ratio=deck_comp,
             tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=0.25,
-            clause_note=f"{code} deck-casting/pre-composite stress preview profile. Wet deck generally acts on precast gross section.",
+            tension_sqrt_fc_ratio=deck_tension,
+            clause_note=f"{family_note}: deck-casting/pre-composite stage. Wet deck generally acts on precast gross section.",
         )
     if stage == STAGE_FINAL_SERVICE:
         return GirderServiceStressLimitProfile(
             **common,
-            compression_limit_ratio=0.45,
+            compression_limit_ratio=final_comp,
             tension_limit_mode="sqrt(fc) ratio",
-            tension_sqrt_fc_ratio=0.50,
-            clause_note=f"{code} final-service stress preview profile. Use service strength and effective prestress after losses.",
+            tension_sqrt_fc_ratio=final_tension,
+            clause_note=f"{family_note}: final-service stage. Use service strength and effective prestress after losses.",
         )
     return GirderServiceStressLimitProfile(
         **common,
         compression_limit_ratio=0.45,
         tension_limit_mode="User-defined",
         tension_limit_MPa=0.0,
-        clause_note=f"{code} user-defined stress profile.",
+        clause_note=f"{code} user-defined editable stress profile.",
     )
 
 

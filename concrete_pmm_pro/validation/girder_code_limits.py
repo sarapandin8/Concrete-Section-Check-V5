@@ -48,6 +48,23 @@ def validate_girder_code_limits() -> list[ValidationResult]:
         )
     )
 
+
+    aci_final = default_girder_sls_limit_profile("ACI 318", "Final service / Composite")
+    results.append(
+        boolean_validation_result(
+            case_id="CODE.SLS.LIMIT2.CODE_PROFILES.DISTINCT_FINAL_TENSION",
+            category=CATEGORY,
+            title="AASHTO and ACI final-service preview profiles are visibly distinct",
+            passed=aashto_service.tension_allowable_MPa(fc) < aci_final.tension_allowable_MPa(fc),
+            expected="AASHTO final-service tension preview < ACI final-service tension preview",
+            actual={
+                "AASHTO tension MPa": aashto_service.tension_allowable_MPa(fc),
+                "ACI tension MPa": aci_final.tension_allowable_MPa(fc),
+            },
+            engineering_note="Profiles remain editable previews, but they should not look identical when switching code families.",
+        )
+    )
+
     no_tension = build_girder_sls_limit_profile(
         code="AASHTO LRFD Bridge",
         stage="User-defined",

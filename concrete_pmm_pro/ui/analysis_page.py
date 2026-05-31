@@ -3269,12 +3269,66 @@ def _default_custom_stress_check_points_dataframe() -> pd.DataFrame:
 
 
 
-def _girder_stress_type(stress_MPa: float, *, zero_tolerance_MPa: float = 1.0e-9) -> str:
+_GIRDER_DISPLAY_ZERO_TOLERANCE_MPA = 5.0e-4
+
+
+def _clean_girder_display_number(value: object, *, zero_tolerance: float = _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA) -> object:
+    """Return zero instead of negative-zero noise for UI display only.
+
+    The calculation kernels keep the raw values.  This helper is intentionally
+    limited to the Analysis workspace presentation layer so sign convention
+    checks and validation results are not altered.
+    """
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return value
+    if not math.isfinite(numeric):
+        return value
+    if abs(numeric) < zero_tolerance:
+        return 0.0
+    return numeric
+
+
+def _format_girder_stress_mpa(value: object, *, precision: int = 3) -> str:
+    """Format stress values without displaying confusing negative-zero stress text."""
+
+    cleaned = _clean_girder_display_number(value)
+    try:
+        numeric = float(cleaned)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(numeric):
+        return "N/A"
+    return f"{numeric:,.{precision}f} MPa"
+
+
+def _girder_stress_type(stress_MPa: float, *, zero_tolerance_MPa: float = _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA) -> str:
     """Classify a girder SLS stress value for display only."""
 
     if abs(float(stress_MPa)) <= zero_tolerance_MPa:
         return "zero"
     return "compression" if float(stress_MPa) < 0.0 else "tension"
+
+
+def _clean_girder_stress_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean near-zero stress numbers in a display dataframe without changing kernels."""
+
+    if df.empty:
+        return df
+    cleaned = df.copy()
+    for column in cleaned.columns:
+        column_name = str(column).casefold()
+        if "mpa" in column_name or "stress" in column_name:
+            cleaned[column] = cleaned[column].map(_clean_girder_display_number)
+    if "Total stress (MPa)" in cleaned.columns:
+        cleaned["Stress type"] = cleaned["Total stress (MPa)"].map(_girder_stress_type)
+    elif "Combined total (MPa)" in cleaned.columns:
+        cleaned["Stress type"] = cleaned["Combined total (MPa)"].map(_girder_stress_type)
+    elif "Total (MPa)" in cleaned.columns:
+        cleaned["Stress type"] = cleaned["Total (MPa)"].map(_girder_stress_type)
+    return cleaned
 
 
 def _girder_combined_service_prestress_rows(service_result, prestress_result) -> list[dict[str, object]]:
@@ -3325,16 +3379,52 @@ def _render_beam_girder_service_stress_preview() -> None:
     if not is_beam_girder_future_workflow(mode_settings):
         return
 
-    st.markdown("### Beam/Girder Elastic Service Stress Preview")
-    st.info(
-        "GIRDER.SLS1B/PS1B previews elastic Beam/Girder service stress using manual trial actions and optional effective-prestress stress effect. "
-        "Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension. "
-        "Pe_eff is positive for compressive effective prestress after losses."
+    # Legacy milestone label retained for source-level regression tests: Beam/Girder Elastic Service Stress Preview.
+    st.markdown("### Beam/Girder SLS Stress Workspace")
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Workspace status",
+                "value": "Manual preview only",
+                "detail": "Elastic stress foundation; not a final code check",
+                "status": "warning",
+            },
+            {
+                "title": "Stress convention",
+                "value": "Compression − / Tension +",
+                "detail": "Sagging M gives top compression and bottom tension",
+                "status": "info",
+            },
+            {
+                "title": "Prestress effect",
+                "value": "Optional Pe_eff",
+                "detail": "Effective prestress after losses; no breaking-load conversion",
+                "status": "info",
+            },
+            {
+                "title": "Code stress limits",
+                "value": "Not checked",
+                "detail": "AASHTO + ACI limit framework is a future milestone",
+                "status": "neutral",
+            },
+        ],
+        columns=4,
     )
-    st.warning(
-        "This preview is not a staged prestressed girder design check yet. It does not include transfer/final stage automation, creep/shrinkage, "
-        "AASHTO stress limits, shear, or report integration. It is not used by PMM, rebar, prestress, or report solvers."
-    )
+
+    with st.expander("Beam/Girder SLS preview limitations", expanded=False):
+        st.write(
+            "- GIRDER.SLS1B/PS1B previews elastic Beam/Girder service stress using manual trial actions "
+            "and optional effective-prestress stress effect."
+        )
+        st.write("- Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension.")
+        st.write("- Pe_eff is positive for compressive effective prestress after losses.")
+        st.write(
+            "- This preview is not a staged prestressed girder design check yet. It does not include transfer/final stage automation, "
+            "creep/shrinkage, AASHTO stress limits, ACI stress limits, shear, or report integration."
+        )
+        st.write("- It is not used by PMM, rebar, prestress, or report solvers.")
+
+    st.markdown("#### Quick Elastic Stress Trial")
 
     section_geometry = st.session_state.get("section_geometry")
     section_parameters = st.session_state.get("section_parameters", {})
@@ -3387,20 +3477,49 @@ def _render_beam_girder_service_stress_preview() -> None:
 
     basis = basis_options.bases[basis_name]
     result = run_basic_girder_service_stress(basis, N_kN=float(axial_n), M_kNm=float(moment_m))
-    result_df = pd.DataFrame(girder_service_stress_result_rows(result))
+    result_df = _clean_girder_stress_dataframe(pd.DataFrame(girder_service_stress_result_rows(result)))
+    has_service_action = abs(float(axial_n)) > 1.0e-9 or abs(float(moment_m)) > 1.0e-9
+    include_prestress_default = bool(st.session_state.get("girder_service_include_prestress", False))
 
-    summary_cols = st.columns(5)
-    summary_cols[0].metric("Basis", basis_options.labels.get(basis_name, basis_name))
-    summary_cols[1].metric("Area", f"{basis.area_mm2:,.1f} mm²")
-    summary_cols[2].metric("Centroid yb", f"{basis.centroid_y_from_bottom_mm:,.2f} mm")
-    summary_cols[3].metric("Ix", f"{basis.ix_mm4:,.3e} mm⁴")
-    summary_cols[4].metric("Depth", f"{basis.total_depth_mm:,.1f} mm")
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Selected section basis",
+                "value": basis_options.labels.get(basis_name, basis_name),
+                "detail": f"Area {basis.area_mm2:,.1f} mm² · Ix {basis.ix_mm4:,.3e} mm⁴",
+                "status": "ready",
+            },
+            {
+                "title": "Composite basis",
+                "value": "Available" if basis_options.has_composite_basis else "Not active",
+                "detail": "Use composite transformed section when explicitly enabled" if basis_options.has_composite_basis else "Using precast gross properties only",
+                "status": "ready" if basis_options.has_composite_basis else "neutral",
+            },
+            {
+                "title": "Service action",
+                "value": "Entered" if has_service_action else "No action",
+                "detail": f"N={float(axial_n):,.3f} kN · M={float(moment_m):,.3f} kN-m",
+                "status": "ready" if has_service_action else "neutral",
+            },
+            {
+                "title": "Prestress component",
+                "value": "Enabled" if include_prestress_default else "Optional",
+                "detail": "Pe_eff stress effect preview" if include_prestress_default else "Use checkbox below to include Pe_eff",
+                "status": "info" if include_prestress_default else "neutral",
+            },
+        ],
+        columns=4,
+    )
+
+    if not has_service_action:
+        st.info("Enter a nonzero service axial force or moment to preview quick elastic service stress. Zero-action rows are shown only as a sign-convention baseline.")
 
     stress_cols = st.columns(2)
-    stress_cols[0].metric("Service max compression", f"{result.max_compression_MPa:,.3f} MPa")
-    stress_cols[1].metric("Service max tension", f"{result.max_tension_MPa:,.3f} MPa")
+    stress_cols[0].metric("Service max compression", _format_girder_stress_mpa(result.max_compression_MPa))
+    stress_cols[1].metric("Service max tension", _format_girder_stress_mpa(result.max_tension_MPa))
 
-    st.dataframe(result_df, use_container_width=True, hide_index=True)
+    with st.expander("Quick elastic stress result table", expanded=has_service_action):
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
     section_bottom_y_mm = 0.0
@@ -3512,24 +3631,28 @@ def _render_beam_girder_service_stress_preview() -> None:
             ps_cols[0].metric("Pe_eff", f"{ps_result.Pe_eff_kN:,.3f} kN")
             ps_cols[1].metric("e = yps - yc", f"{ps_result.eccentricity_mm:,.2f} mm")
             ps_cols[2].metric("Mps", f"{ps_result.equivalent_moment_kNm:,.3f} kN-m")
-            ps_cols[3].metric("PS max compression", f"{ps_result.max_compression_MPa:,.3f} MPa")
+            ps_cols[3].metric("PS max compression", _format_girder_stress_mpa(ps_result.max_compression_MPa))
 
             for warning in ps_result.warnings:
                 st.warning(f"Prestress stress preview warning: {warning}")
 
-            st.dataframe(pd.DataFrame(girder_prestress_stress_result_rows(ps_result)), use_container_width=True, hide_index=True)
-            combined_df = pd.DataFrame(_girder_combined_service_prestress_rows(result, ps_result))
+            st.dataframe(_clean_girder_stress_dataframe(pd.DataFrame(girder_prestress_stress_result_rows(ps_result))), use_container_width=True, hide_index=True)
+            combined_df = _clean_girder_stress_dataframe(pd.DataFrame(_girder_combined_service_prestress_rows(result, ps_result)))
             st.markdown("#### Combined Service + Effective Prestress Stress")
             combined_cols = st.columns(2)
-            combined_cols[0].metric("Combined max compression", f"{combined_df['Combined total (MPa)'].min():,.3f} MPa")
-            combined_cols[1].metric("Combined max tension", f"{combined_df['Combined total (MPa)'].max():,.3f} MPa")
+            combined_cols[0].metric("Combined max compression", _format_girder_stress_mpa(combined_df['Combined total (MPa)'].min()))
+            combined_cols[1].metric("Combined max tension", _format_girder_stress_mpa(combined_df['Combined total (MPa)'].max()))
             st.dataframe(combined_df, use_container_width=True, hide_index=True)
 
     st.markdown("#### Manual Service Stage Stress Preview")
-    st.info(
-        "GIRDER.SLS2B uses manual stage actions with the same explicit section basis and optional Pe_eff stress component. "
-        "Stage templates are guidance only; the app does not auto-generate self-weight, deck weight, live load, losses, or code limits in this milestone."
-    )
+    with st.expander("Manual stage preview scope", expanded=False):
+        st.write(
+            "- GIRDER.SLS2B uses manual stage actions with the same explicit section basis and optional Pe_eff stress component."
+        )
+        st.write(
+            "- Stage templates are guidance only; the app does not auto-generate self-weight, deck weight, live load, losses, or code limits in this milestone."
+        )
+        st.write("- Use this panel as the future staged SLS workflow foundation; it is not yet a final code-check workflow.")
     enable_stage_preview = st.checkbox(
         "Enable manual service-stage stress preview",
         value=bool(st.session_state.get("girder_stage_preview_enabled", False)),
@@ -3673,12 +3796,12 @@ def _render_beam_girder_service_stress_preview() -> None:
             )
             stage_metrics = st.columns(4)
             stage_metrics[0].metric("Stage basis", basis_options.labels.get(stage_basis_name, stage_basis_name))
-            stage_metrics[1].metric("Stage max compression", f"{stage_result.max_compression_MPa:,.3f} MPa")
-            stage_metrics[2].metric("Stage max tension", f"{stage_result.max_tension_MPa:,.3f} MPa")
+            stage_metrics[1].metric("Stage max compression", _format_girder_stress_mpa(stage_result.max_compression_MPa))
+            stage_metrics[2].metric("Stage max tension", _format_girder_stress_mpa(stage_result.max_tension_MPa))
             stage_metrics[3].metric("Pe_eff included", "Yes" if stage_result.prestress_result is not None else "No")
             for warning in stage_result.warnings:
                 st.warning(f"Service stage preview warning: {warning}")
-            st.dataframe(_girder_stage_dataframe(stage_result), use_container_width=True, hide_index=True)
+            st.dataframe(_clean_girder_stress_dataframe(_girder_stage_dataframe(stage_result)), use_container_width=True, hide_index=True)
 
         with st.expander("Manual stage preview limitations", expanded=False):
             st.write("- Stage templates are labels and basis guidance only; they do not calculate construction-stage loads.")

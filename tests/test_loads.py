@@ -24,7 +24,9 @@ from concrete_pmm_pro.ui.loads_page import (
     _normalize_beam_sls_load_table,
     _preview_dataframe,
     _split_mixed_editor_table_to_column_tables,
+    _safe_excel_sheet_name,
     _workflow_table_result,
+    _workflow_template_bytes,
     load_cases_from_dataframe,
     prepare_imported_load_table,
 )
@@ -408,6 +410,22 @@ def test_loads_import1_beam_station_validation_allows_same_case_at_different_sta
 
     assert result.errors == []
     assert len(result.load_cases) == 2
+
+
+
+
+def test_loads_import1_workflow_template_sanitizes_excel_sheet_names() -> None:
+    template = pd.DataFrame([{"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1"}])
+
+    workbook_bytes = _workflow_template_bytes(
+        template,
+        sheet_name="Beam/Girder ULS station-load import",
+        instructions=[{"Field": "Case Name", "Instruction": "Required."}],
+    )
+
+    assert workbook_bytes.startswith(b"PK")
+    assert _safe_excel_sheet_name("Beam/Girder ULS station-load import") == "Beam Girder ULS station-load"
+    assert _safe_excel_sheet_name("/:*?[]") == "Load Template"
 
 
 def test_beam_girder_workflow_table_validation_rejects_non_numeric_actions() -> None:

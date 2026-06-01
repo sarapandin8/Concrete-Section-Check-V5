@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+import re
 from typing import Any
 
 import pandas as pd
@@ -767,12 +768,34 @@ WORKFLOW_IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+EXCEL_SHEET_INVALID_CHARS = re.compile(r"[:\\/?*\[\]]")
+
+
+def _safe_excel_sheet_name(sheet_name: str, *, fallback: str = "Load Template") -> str:
+    """Return a worksheet title accepted by Excel/openpyxl.
+
+    Excel worksheet names may not contain ``: / ? * [ ] and backslash`` and may not exceed 31
+    characters.  Some user-facing table names intentionally contain slashes,
+    such as "Beam/Girder ULS".  Those titles are fine in the UI but must be
+    sanitized before creating a downloadable XLSX template; otherwise the Loads
+    page can fail before the user even opens the import expander.
+    """
+
+    cleaned = EXCEL_SHEET_INVALID_CHARS.sub(" ", str(sheet_name or "")).strip()
+    cleaned = " ".join(cleaned.split())
+    if cleaned.lower().endswith(" import"):
+        cleaned = cleaned[:-7].strip()
+    if not cleaned:
+        cleaned = fallback
+    return cleaned[:31]
+
+
 def _workflow_template_bytes(template: pd.DataFrame, *, sheet_name: str, instructions: list[dict[str, str]]) -> bytes:
     """Return an XLSX workflow-specific load template."""
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        template.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        template.to_excel(writer, sheet_name=_safe_excel_sheet_name(sheet_name), index=False)
         pd.DataFrame(instructions).to_excel(writer, sheet_name="Instructions", index=False)
     return output.getvalue()
 

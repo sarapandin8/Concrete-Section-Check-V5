@@ -432,6 +432,10 @@ def _is_parametric_i_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")) == "parametric_i_girder"
 
 
+def _is_precast_u_girder(preset: dict[str, Any]) -> bool:
+    return str(preset.get("key", "")) == "u_girder"
+
+
 def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
@@ -455,7 +459,7 @@ def _is_composite_capable_preset(preset: dict[str, Any]) -> bool:
     # for the Precast I-Girder as well as Precast Plank Girder presets.  The deck
     # metadata is still explicit UI input and remains separate from gross
     # section properties and all PMM/prestress solver paths.
-    return _is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)
+    return _is_parametric_i_girder(preset) or _is_precast_u_girder(preset) or _is_parametric_plank_girder(preset)
 
 
 def _girder_section_family(preset: dict[str, Any]) -> str:
@@ -667,6 +671,8 @@ def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> fl
 
     if _is_parametric_i_girder(preset):
         return float(params.get("B1_mm", 0.0) or 0.0)
+    if _is_precast_u_girder(preset):
+        return float(params.get("top_" + "width" + "_mm", 0.0) or params.get("B1_mm", 0.0) or 0.0)
     if _is_parametric_plank_girder(preset):
         b = float(params.get("B_mm", 0.0) or 0.0)
         b1 = float(params.get("b1_mm", 0.0) or 0.0)
@@ -681,6 +687,8 @@ def _effective_width_top_width_basis_note(preset: dict[str, Any]) -> str:
 
     if _is_parametric_i_girder(preset):
         return "Auto from I-Girder top flange width B1."
+    if _is_precast_u_girder(preset):
+        return "Auto from U-Girder top width."
     if _is_parametric_plank_girder(preset):
         if str(preset.get("key", "")) == "parametric_plank_girder_interior":
             return "Auto from Interior Plank top width B - 2b1."
@@ -875,18 +883,19 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
     return params
 
 
-def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[str, float]:
-    """Render explicit deck/topping metadata for the parametric I-Girder.
+def _render_precast_composite_girder_metadata_inputs(preset: dict[str, Any]) -> dict[str, float]:
+    """Render explicit deck/topping metadata for precast composite girder presets.
 
-    These values are not part of the I-Girder polygon generator. They are
+    These values are not part of the precast girder polygon generator. They are
     stored in section_parameters only for display-only transformed composite
-    properties and future Beam/Girder SLS workflows.
+    properties and Beam/Girder SLS service-basis routing.
     """
 
-    preset_key = str(preset.get("key", "parametric_i_girder"))
+    preset_key = str(preset.get("key", "precast_girder"))
+    display_name = str(preset.get("display_name", "Precast girder"))
     st.markdown("##### Composite Deck / Topping Metadata")
     st.markdown(
-        '<div class="cpmm-section-note">I-Girder deck/topping metadata is explicit and display-only in SECTION.COMPOSITE1C. '
+        f'<div class="cpmm-section-note">{display_name} deck/topping metadata is explicit and display-only. '
         "It is not merged into the precast polygon and is not used by PMM, prestress, or report logic.</div>",
         unsafe_allow_html=True,
     )
@@ -900,7 +909,7 @@ def _render_i_girder_composite_metadata_inputs(preset: dict[str, Any]) -> dict[s
             min_value=0.0,
             max_value=3000.0,
             step=5.0,
-            help_text="Composite deck/topping thickness metadata. Not merged into the I-Girder polygon.",
+            help_text="Composite deck/topping thickness metadata. Not merged into the precast girder polygon.",
         )
         girder_length = _render_metadata_number_input(
             name="girder_length_mm",
@@ -1193,8 +1202,8 @@ def _render_section_definition_panel(
         if _is_composite_capable_preset(preset):
             params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
-            if _is_parametric_i_girder(preset):
-                params.update(_render_i_girder_composite_metadata_inputs(preset))
+            if _is_parametric_i_girder(preset) or _is_precast_u_girder(preset):
+                params.update(_render_precast_composite_girder_metadata_inputs(preset))
 
             params = _render_effective_width_helper(preset, params)
 
@@ -1482,9 +1491,9 @@ def _render_section_properties_summary(
                 SectionMetric("ULS PMM", "Supported", "Current section-analysis workflow", "ready"),
                 SectionMetric(
                     "Beam/Girder",
-                    "Planned" if (_is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)) else "N/A",
+                    "Planned" if _is_composite_capable_preset(preset) else "N/A",
                     "Future station assignment",
-                    "info" if (_is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)) else "neutral",
+                    "info" if _is_composite_capable_preset(preset) else "neutral",
                 ),
                 SectionMetric("Readiness", _readiness_label(validation), "", _validation_status(validation), True),
             ]

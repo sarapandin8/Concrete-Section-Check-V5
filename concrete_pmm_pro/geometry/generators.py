@@ -719,7 +719,7 @@ def u_girder(
     bottom_width_mm: float,
     wall_thickness_mm: float,
     bottom_slab_thickness_mm: float,
-    name: str = "U-girder",
+    name: str = "Precast U-Girder",
 ) -> SectionGeometry:
     _require_positive("total depth", depth_mm)
     _require_positive("top width", top_width_mm)
@@ -745,7 +745,7 @@ def u_girder(
         _point(bottom_width_mm / 2.0, bot_y),
         _point(-bottom_width_mm / 2.0, bot_y),
     ]
-    _ensure_valid_simple_polygon(points, "U-girder")
+    _ensure_valid_simple_polygon(points, "Precast U-Girder")
     return SectionGeometry(name=name, outer_polygon=points, holes=[], metadata={"preset": "u_girder"})
 
 

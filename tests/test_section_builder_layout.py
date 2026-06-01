@@ -200,14 +200,19 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     i_girder = preset_by_key("parametric_i_girder")
     plank = preset_by_key("parametric_plank_girder_interior")
     general_i = preset_by_key("psc_i_girder")
+    u_girder = preset_by_key("u_girder")
 
     assert i_girder["display_name"] == "Precast I-Girder"
     assert i_girder["category"] == "Precast Composite Girder"
     assert plank["display_name"] == "Precast Plank Girder — Interior"
     assert plank["category"] == "Precast Composite Girder"
     assert general_i["category"] == "General / Non-composite Girder"
+    assert u_girder["display_name"] == "Precast U-Girder"
+    assert u_girder["category"] == "Precast Composite Girder"
     assert section_builder._girder_section_family(i_girder) == "precast_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(i_girder) == "Composite transformed"
+    assert section_builder._girder_section_family(u_girder) == "precast_composite_girder"
+    assert section_builder._recommended_service_basis_for_preset(u_girder) == "Composite transformed"
     assert section_builder._girder_section_family(general_i) == "general_non_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(general_i) == "Precast gross"
 
@@ -297,7 +302,7 @@ def test_composite1c_enables_i_girder_composite_metadata_display() -> None:
     assert "SECTION.COMPOSITE1C" in source
     assert "Composite Deck / Topping Metadata" in source
     assert "parametric_i_girder_Tslab_mm" in source or "Tslab Deck/topping thickness" in source
-    assert "_render_i_girder_composite_metadata_inputs" in source
+    assert "_render_precast_composite_girder_metadata_inputs" in source
 
 
 def test_i_girder_is_composite_capable_but_geometry_ignores_metadata() -> None:

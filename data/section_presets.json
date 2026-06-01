@@ -713,8 +713,8 @@
     },
     {
       "key": "u_girder",
-      "display_name": "U-Girder",
-      "category": "General / Non-composite Girder",
+      "display_name": "Precast U-Girder",
+      "category": "Precast Composite Girder",
       "generator": "u_girder",
       "dimensions_generator": "u_girder",
       "parameters": [

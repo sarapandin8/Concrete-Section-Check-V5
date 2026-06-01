@@ -57,6 +57,7 @@ BEAM_LOAD_COMPONENT_OPTIONS = [
 BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "User-defined"]
 PRECAST_COMPOSITE_GIRDER_PRESET_KEYS = {
     "parametric_i_girder",
+    "u_girder",
     "parametric_plank_girder_interior",
     "parametric_plank_girder_exterior",
 }

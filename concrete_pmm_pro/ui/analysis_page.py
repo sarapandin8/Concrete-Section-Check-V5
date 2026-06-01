@@ -3348,7 +3348,7 @@ def _clean_girder_stress_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 # SLS check case stress table; manual stage actions; code-check workflow; Combined service plus prestress stress; Manual service stage stress; current GIRDER.PS1B preview force; Include effective prestress stress component; Breaking Load, duct diameter, and strand-count metadata are not used; AASHTO stress limits; girder_stage_preview_enabled; Pe_eff is positive for compression after losses; Combined Service + Effective Prestress Stress; Stage templates are guidance only; No AASHTO stress limits; Results remain preview-only; not used by PMM, rebar, prestress, load-table, or report workflows.
 # LOADS.SLS.CONNECT1 — connect Beam/Girder SLS load-table rows to the
 # Analysis SLS preview without changing solver/load-combination behaviour.
-_BEAM_SLS_LOAD_ANALYSIS_COLUMNS = ("Active", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note")
+_BEAM_SLS_LOAD_ANALYSIS_COLUMNS = ("Active", "Station x (m)", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note")
 _DIRECT_BEAM_SLS_BASIS_MAP = {
     "precast gross": "precast_gross",
     "composite transformed": "composite_transformed",
@@ -3492,6 +3492,11 @@ def _beam_sls_load_rows_from_session_state() -> list[dict[str, object]]:
 
     # Backward compatibility with LOADS.WORKFLOW1A/1B tables before the
     # simplified three-stage LOADS.SLS2A editor.
+    if "Station x (m)" not in df.columns:
+        for alias in ("Station", "x", "x (m)", "X", "X (m)", "Distance", "Distance (m)"):
+            if alias in df.columns:
+                df["Station x (m)"] = df[alias]
+                break
     if "Stage" not in df.columns and "Stage / Component" in df.columns:
         df["Stage"] = df["Stage / Component"]
     if "Stage" not in df.columns:
@@ -3519,7 +3524,9 @@ def _beam_sls_load_row_label(row: Mapping[str, object]) -> str:
     case_name = str(row.get("Case Name") or "Unnamed SLS row").strip() or "Unnamed SLS row"
     stage = _beam_sls_stage_label_for_analysis(row.get("Stage")) or "No stage"
     basis = str(row.get("Section Basis") or "No basis").strip() or "No basis"
-    return f"{case_name} — {stage} / {basis}"
+    station_text = str(row.get("Station x (m)") or "").strip()
+    station_label = f"x={station_text} m" if station_text else "x=not specified"
+    return f"{station_label} — {case_name} — {stage} / {basis}"
 
 
 def _beam_sls_load_basis_key(row: Mapping[str, object], available_basis_names: list[str]) -> str | None:
@@ -3558,7 +3565,7 @@ def _beam_sls_load_row_summary_cards(row: Mapping[str, object]) -> list[dict[str
         {
             "title": "Loads page row",
             "value": str(row.get("Case Name") or "Unnamed"),
-            "detail": f"{_beam_sls_stage_label_for_analysis(row.get('Stage')) or 'No stage'} · {_beam_sls_component_for_analysis(row.get('Stage'), row.get('Load Component')) or 'No component'}",
+            "detail": f"x={str(row.get('Station x (m)') or 'not specified')} m · {_beam_sls_stage_label_for_analysis(row.get('Stage')) or 'No stage'} · {_beam_sls_component_for_analysis(row.get('Stage'), row.get('Load Component')) or 'No component'}",
             "status": "ready",
         },
         {

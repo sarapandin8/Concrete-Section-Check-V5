@@ -37,3 +37,5 @@ def test_analysis_preview_groups_beam_girder_sls_rows_into_stage_tabs() -> None:
     assert "Construction stage" in SOURCE
     assert "Service stage" in SOURCE
     assert "Each stage keeps its own code-limit/profile/prestress UI state" in SOURCE
+    assert "Station x (m)" in SOURCE
+    assert "x={station_text} m" in SOURCE

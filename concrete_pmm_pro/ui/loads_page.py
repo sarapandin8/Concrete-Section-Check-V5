@@ -30,15 +30,15 @@ EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Not
 # existing PMM workflow; Beam/Girder tables are stored as future-ready data only.
 COLUMN_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vuy", "Tu", "Note"]
 COLUMN_SLS_LOAD_COLUMNS = ["Active", "Case Name", "P", "Mx", "My", "Note"]
-BEAM_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
-BEAM_SLS_LOAD_COLUMNS = ["Active", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+BEAM_ULS_LOAD_COLUMNS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
+BEAM_SLS_LOAD_COLUMNS = ["Active", "Station x (m)", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 # LOADS.SLS2A keeps Load Component as internal/project metadata for backward
 # compatibility, but the commercial Beam/Girder SLS editor exposes only the
 # check stage.  The component meaning is derived from the selected stage.
-BEAM_SLS_EDITOR_COLUMNS = ["Active", "Case Name", "Stage", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+BEAM_SLS_EDITOR_COLUMNS = ["Active", "Station x (m)", "Case Name", "Stage", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 # LOADS.SLS2C presents the SLS inputs as stage sub-tabs while keeping one
 # backend/project table.  Each tab edits only its own stage rows.
-BEAM_SLS_STAGE_EDITOR_COLUMNS = ["Active", "Case Name", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
+BEAM_SLS_STAGE_EDITOR_COLUMNS = ["Active", "Station x (m)", "Case Name", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 BEAM_STAGE_OPTIONS = [
     "",
     "Transfer stage",
@@ -261,6 +261,11 @@ def _normalize_beam_sls_load_table(df: pd.DataFrame) -> pd.DataFrame:
     """
 
     raw = pd.DataFrame(df).copy() if df is not None else pd.DataFrame(columns=BEAM_SLS_LOAD_COLUMNS)
+    if "Station x (m)" not in raw.columns:
+        for alias in ("Station", "x", "x (m)", "X", "X (m)", "Station_m"):
+            if alias in raw.columns:
+                raw["Station x (m)"] = raw[alias]
+                break
     if "Stage" not in raw.columns and "Stage / Component" in raw.columns:
         raw["Stage"] = raw["Stage / Component"]
     if "Stage" not in raw.columns:
@@ -358,6 +363,7 @@ def _beam_sls_default_row_for_stage(stage_label: str) -> dict[str, object]:
     stage = spec["stage"]
     return {
         "Active": True,
+        "Station x (m)": 0.0,
         "Case Name": spec["case_name"],
         "Stage": stage,
         "Load Component": _beam_sls_component_for_stage(stage),
@@ -415,7 +421,8 @@ def _beam_sls_table_after_stage_edit(table: pd.DataFrame, stage_label: str, edit
     merged = pd.concat([keep_rows, pd.DataFrame(new_rows, columns=BEAM_SLS_LOAD_COLUMNS)], ignore_index=True)
     order = {"Transfer stage": 0, "Construction stage": 1, "Service stage": 2, "User-defined": 3}
     merged["__stage_order"] = merged["Stage"].map(lambda value: order.get(_beam_sls_stage_label(value), 99))
-    merged = merged.sort_values(["__stage_order", "Case Name"], kind="stable").drop(columns=["__stage_order"])
+    merged["__station_order"] = merged["Station x (m)"].map(_station_sort_value)
+    merged = merged.sort_values(["__stage_order", "__station_order", "Case Name"], kind="stable").drop(columns=["__stage_order", "__station_order"])
     return _normalize_beam_sls_load_table(merged)
 
 
@@ -443,7 +450,7 @@ def _default_column_sls_load_table() -> pd.DataFrame:
 def _default_beam_uls_load_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Active": True, "Case Name": "ULS-G1", "Mux": 1000.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Flexure/shear/torsion design resultant"},
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 1000.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Flexure/shear/torsion design resultant"},
         ],
         columns=BEAM_ULS_LOAD_COLUMNS,
     )
@@ -454,6 +461,7 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
         [
             {
                 "Active": True,
+                "Station x (m)": 0.0,
                 "Case Name": "SLS-TR",
                 "Stage": "Transfer stage",
                 "Load Component": "Girder self-weight",
@@ -468,6 +476,7 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
             },
             {
                 "Active": True,
+                "Station x (m)": 0.0,
                 "Case Name": "SLS-CONST",
                 "Stage": "Construction stage",
                 "Load Component": "Girder self-weight + wet deck/topping",
@@ -482,6 +491,7 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
             },
             {
                 "Active": True,
+                "Station x (m)": 0.0,
                 "Case Name": "SLS-SERV",
                 "Stage": "Service stage",
                 "Load Component": "Total SLS resultant",
@@ -593,27 +603,41 @@ def _sync_workflow_load_tables_metadata() -> None:
         st.session_state["project_metadata"] = metadata
 
 
-def _workflow_table_result(df: pd.DataFrame, *, table_name: str, numeric_columns: list[str]) -> LoadParseResult:
+def _workflow_table_result(
+    df: pd.DataFrame,
+    *,
+    table_name: str,
+    numeric_columns: list[str],
+    unique_key_columns: list[str] | None = None,
+) -> LoadParseResult:
     errors: list[str] = []
     warnings: list[str] = []
-    seen_names: set[str] = set()
+    seen_keys: set[tuple[str, ...]] = set()
+    key_columns = unique_key_columns or ["Case Name"]
     nonblank_rows = 0
     active_rows = 0
     valid_rows: list[LoadCase] = []
     for index, row in df.iterrows():
         row_number = int(index) + 1
-        if _is_blank(row.get("Case Name")) and all(_is_blank(row.get(column)) for column in numeric_columns):
+        identity_blank = all(_is_blank(row.get(column)) for column in key_columns)
+        if identity_blank and all(_is_blank(row.get(column)) for column in numeric_columns):
             continue
         nonblank_rows += 1
         name = str(row.get("Case Name") or "").strip()
         if not name:
             errors.append(f"{table_name} row {row_number}: Case Name cannot be blank.")
             continue
-        name_key = name.lower()
-        if name_key in seen_names:
-            errors.append(f"{table_name} row {row_number}: Duplicate Case Name = {name}.")
+        for column in key_columns:
+            if column == "Active":
+                continue
+            if _is_blank(row.get(column)):
+                errors.append(f"{table_name} row {row_number}: {column} cannot be blank.")
+        row_key = tuple(str(row.get(column) or "").strip().casefold() for column in key_columns)
+        if row_key in seen_keys:
+            key_label = ", ".join(f"{column}={row.get(column)}" for column in key_columns)
+            errors.append(f"{table_name} row {row_number}: Duplicate row key ({key_label}).")
             continue
-        seen_names.add(name_key)
+        seen_keys.add(row_key)
         for column in numeric_columns:
             if _to_float(row.get(column)) is None:
                 errors.append(f"{table_name} row {row_number}: {column} must be numeric.")
@@ -717,6 +741,159 @@ def _excel_template_bytes() -> bytes:
     return output.getvalue()
 
 
+WORKFLOW_IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
+    "Active": ("Active", "Use", "Use?", "Selected", "Include"),
+    "Station x (m)": ("Station x (m)", "Station", "x", "x (m)", "X", "X (m)", "Distance", "Distance (m)", "Location", "Location (m)"),
+    "Case Name": ("Case Name", "Combo Name", "Load Case", "Loadcase", "OutputCase", "Case", "Name"),
+    "Limit State": ("Limit State", "Load Type", "Type"),
+    "Stage": ("Stage", "Check Stage", "Stage / Component"),
+    "Load Component": ("Load Component", "Component", "Stage / Component"),
+    "Section Basis": ("Section Basis", "Basis", "Section", "Stress Basis"),
+    "Pu": ("Pu", "P", "Axial", "Axial Force", "Nu"),
+    "P": ("P", "Pu", "Axial", "Axial Force", "N", "Nu"),
+    "N": ("N", "P", "Pu", "Axial", "Axial Force", "Nu"),
+    "Mux": ("Mux", "Mx", "M3", "Moment x", "Moment X"),
+    "Mx": ("Mx", "Mux", "M3", "Moment x", "Moment X"),
+    "Muy": ("Muy", "My", "M2", "Moment y", "Moment Y"),
+    "My": ("My", "Muy", "M2", "Moment y", "Moment Y"),
+    "Vux": ("Vux", "Vx", "Shear x", "Shear X"),
+    "Vx": ("Vx", "Vux", "Shear x", "Shear X"),
+    "Vuy": ("Vuy", "Vy", "Shear y", "Shear Y"),
+    "Vy": ("Vy", "Vuy", "Shear y", "Shear Y"),
+    "Tu": ("Tu", "T", "Torsion"),
+    "T": ("T", "Tu", "Torsion"),
+    "Nu": ("Nu", "N", "P", "Pu", "Axial", "Axial Force"),
+    "Note": ("Note", "Notes", "Description", "Remarks", "Comment"),
+}
+
+
+def _workflow_template_bytes(template: pd.DataFrame, *, sheet_name: str, instructions: list[dict[str, str]]) -> bytes:
+    """Return an XLSX workflow-specific load template."""
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        template.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        pd.DataFrame(instructions).to_excel(writer, sheet_name="Instructions", index=False)
+    return output.getvalue()
+
+
+def _workflow_template_instructions(columns: list[str]) -> list[dict[str, str]]:
+    instructions: list[dict[str, str]] = []
+    for column in columns:
+        if column == "Active":
+            text = "TRUE/FALSE. Blank is treated as TRUE during import."
+        elif column == "Station x (m)":
+            text = "Girder station along member length in metres. Required for Beam/Girder station-based loads."
+        elif column == "Case Name":
+            text = "Load case / combination name. For station-based girder tables, the same case name may repeat at different stations."
+        elif column in {"Pu", "P", "N", "Nu", "Vux", "Vuy", "Vx", "Vy"}:
+            text = "Force in the selected force unit. Compression is positive for axial force columns."
+        elif column in {"Mux", "Muy", "Mx", "My", "Tu", "T"}:
+            text = "Moment/torsion in the selected moment unit."
+        elif column == "Section Basis":
+            text = "Use Precast gross or Composite transformed. Stage tab defaults are recommended."
+        elif column == "Note":
+            text = "Optional engineering note."
+        else:
+            text = "Fill as shown in the template."
+        instructions.append({"Field": column, "Instruction": text})
+    return instructions
+
+
+def _sample_workflow_template(table_name: str, columns: list[str], *, stage_label: str | None = None) -> pd.DataFrame:
+    """Return a paste-friendly sample template for a specific load input table."""
+
+    if table_name == "Column/Pier SLS":
+        rows = [
+            {"Active": True, "Case Name": "SLS-01", "P": 700.0, "Mx": 70.0, "My": 35.0, "Note": "Service stress resultant"},
+            {"Active": True, "Case Name": "SLS-02", "P": 850.0, "Mx": -40.0, "My": 55.0, "Note": "Alternate service case"},
+        ]
+    elif table_name == "Beam/Girder ULS":
+        rows = [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 0.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "End station"},
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "ULS-G1", "Mux": 1500.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Midspan station"},
+        ]
+    elif table_name == "Beam/Girder SLS":
+        spec = _beam_sls_stage_spec(stage_label or "Service stage")
+        stage = spec["stage"]
+        rows = [
+            {
+                "Active": True,
+                "Station x (m)": 0.0,
+                "Case Name": spec["case_name"],
+                "Section Basis": spec["basis"],
+                "N": 0.0,
+                "Mx": 0.0,
+                "My": 0.0,
+                "Vy": 0.0,
+                "Vx": 0.0,
+                "T": 0.0,
+                "Note": spec["note"],
+            },
+            {
+                "Active": True,
+                "Station x (m)": 10.0,
+                "Case Name": spec["case_name"],
+                "Section Basis": spec["basis"],
+                "N": 0.0,
+                "Mx": 500.0,
+                "My": 0.0,
+                "Vy": 0.0,
+                "Vx": 0.0,
+                "T": 0.0,
+                "Note": "Station-based imported row",
+            },
+        ]
+    else:
+        rows = []
+    return _stringify_table(pd.DataFrame(rows), columns)
+
+
+def _first_import_value(row: pd.Series, canonical_column: str) -> Any:
+    """Return the first nonblank value from common aliases for a workflow load column."""
+
+    aliases = WORKFLOW_IMPORT_ALIASES.get(canonical_column, (canonical_column,))
+    lookup = {str(column).strip().casefold(): column for column in row.index}
+    for alias in aliases:
+        key = alias.strip().casefold()
+        if key in lookup and not _is_blank(row.get(lookup[key])):
+            return row.get(lookup[key])
+    return None
+
+
+def prepare_imported_workflow_load_table(
+    df: pd.DataFrame,
+    columns: list[str],
+    *,
+    default_values: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    """Normalize workflow-specific load imports without changing solver contracts.
+
+    This is used only for the engineering load input tables that the user asked
+    to support: Column/Pier SLS, Beam/Girder ULS, and Beam/Girder SLS.
+    """
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columns)
+    defaults = dict(default_values or {})
+    rows: list[dict[str, Any]] = []
+    for _, raw_row in df.iterrows():
+        raw_series = pd.Series(raw_row)
+        candidate = {column: _first_import_value(raw_series, column) for column in columns}
+        for column, value in defaults.items():
+            if column in candidate and _is_blank(candidate.get(column)):
+                candidate[column] = value
+        if all(_is_blank(value) for key, value in candidate.items() if key != "Active"):
+            continue
+        rows.append(candidate)
+    return _stringify_table(pd.DataFrame(rows), columns).reset_index(drop=True)
+
+
+def _station_sort_value(value: Any) -> float:
+    parsed = _to_float(value)
+    return float("inf") if parsed is None else float(parsed)
+
+
 def _read_uploaded_load_table(uploaded_file: Any) -> pd.DataFrame:
     """Read a CSV/XLSX upload into a raw dataframe for validation.
 
@@ -765,6 +942,10 @@ def _row_is_blank(row: pd.Series) -> bool:
     columns = [
         "Case Name",
         "Combo Name",
+        "Station x (m)",
+        "Station",
+        "x",
+        "x (m)",
         "Pu",
         "Pu_kN",
         "Pu_N",
@@ -1151,6 +1332,113 @@ def _render_load_import_workflow(force_unit: str, moment_unit: str) -> None:
         st.rerun()
 
 
+def _render_workflow_import_tools(
+    *,
+    title: str,
+    table_name: str,
+    columns: list[str],
+    numeric_columns: list[str],
+    state_key: str,
+    editor_key: str,
+    key_prefix: str,
+    default_values: dict[str, Any] | None = None,
+    unique_key_columns: list[str] | None = None,
+    stage_label: str | None = None,
+    replace_callback: Any | None = None,
+    append_callback: Any | None = None,
+) -> None:
+    """Render download/import/apply controls for workflow-specific load inputs."""
+
+    template = _sample_workflow_template(table_name, columns, stage_label=stage_label)
+    st.markdown(f"**{title}**")
+    st.caption("Download the template, fill it in Excel, upload it, validate, then replace or append rows.")
+    st.dataframe(template, use_container_width=True, hide_index=True)
+    dl_cols = st.columns(2)
+    with dl_cols[0]:
+        st.download_button(
+            "Download Excel template",
+            data=_workflow_template_bytes(
+                template,
+                sheet_name=table_name,
+                instructions=_workflow_template_instructions(columns),
+            ),
+            file_name=f"{key_prefix}_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"{key_prefix}_xlsx_template_download",
+        )
+    with dl_cols[1]:
+        st.download_button(
+            "Download CSV template",
+            data=template.to_csv(index=False).encode("utf-8"),
+            file_name=f"{key_prefix}_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"{key_prefix}_csv_template_download",
+        )
+
+    uploaded_file = st.file_uploader(
+        f"Upload {title}",
+        type=IMPORT_FILE_TYPES,
+        help="Supported files: .xlsx or .csv. The first sheet is read for Excel files.",
+        key=f"{key_prefix}_import_file",
+    )
+    if uploaded_file is None:
+        return
+    try:
+        imported_raw = _read_uploaded_load_table(uploaded_file)
+        imported = prepare_imported_workflow_load_table(imported_raw, columns, default_values=default_values)
+    except Exception as exc:  # pragma: no cover - UI guardrail
+        st.error(f"Could not read load import file: {exc}")
+        return
+    if imported.empty:
+        st.warning("The uploaded file does not contain any non-blank load rows.")
+        return
+    result = _workflow_table_result(
+        imported,
+        table_name=table_name,
+        numeric_columns=numeric_columns,
+        unique_key_columns=unique_key_columns,
+    )
+    st.markdown("**Import Preview**")
+    st.dataframe(imported, use_container_width=True, hide_index=True)
+    if result.errors:
+        with st.expander("Import validation errors", expanded=True):
+            for error in result.errors:
+                st.error(error)
+        apply_disabled = True
+    else:
+        st.success("Import validation passed.")
+        apply_disabled = False
+    for warning in result.warnings:
+        st.warning(warning)
+    for info in result.info:
+        st.info(info)
+
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        if st.button("Replace current rows", type="primary", use_container_width=True, disabled=apply_disabled, key=f"{key_prefix}_replace_import"):
+            if replace_callback is not None:
+                replace_callback(imported)
+            else:
+                st.session_state[state_key] = imported
+            st.session_state.pop(editor_key, None)
+            _sync_workflow_load_tables_metadata()
+            st.success("Imported rows replaced the current table.")
+            st.rerun()
+    with action_cols[1]:
+        if st.button("Append imported rows", use_container_width=True, disabled=apply_disabled, key=f"{key_prefix}_append_import"):
+            if append_callback is not None:
+                append_callback(imported)
+            else:
+                current = _stringify_table(pd.DataFrame(st.session_state.get(state_key)), columns)
+                st.session_state[state_key] = _stringify_table(pd.concat([current, imported], ignore_index=True), columns)
+            st.session_state.pop(editor_key, None)
+            _sync_workflow_load_tables_metadata()
+            st.success("Imported rows appended to the current table.")
+            st.rerun()
+
+
 def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
     st.markdown("### Column / Pier / Wall / Pylon Loads")
     st.caption(
@@ -1220,6 +1508,19 @@ def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
     edited_uls = _stringify_table(edited_uls, COLUMN_ULS_LOAD_COLUMNS)
     st.session_state["column_uls_loads_table"] = edited_uls
 
+    with st.expander("Import Column/Pier SLS Loads from Excel / CSV", expanded=False):
+        st.caption("Column/Pier SLS loads follow the same case-based import pattern as the accepted ULS table; no station column is used.")
+        _render_workflow_import_tools(
+            title="Column/Pier SLS load import",
+            table_name="Column/Pier SLS",
+            columns=COLUMN_SLS_LOAD_COLUMNS,
+            numeric_columns=["P", "Mx", "My"],
+            state_key="column_sls_loads_table",
+            editor_key="column_sls_loads_editor",
+            key_prefix="column_sls_loads",
+            unique_key_columns=["Case Name"],
+        )
+
     st.markdown("#### SLS Stress Loads")
     st.caption("Use service-level resultants for elastic SLS stress checks. Do not enter live load separately if this SLS case already includes it.")
     sls_df = _stringify_table(pd.DataFrame(st.session_state.get("column_sls_loads_table")), COLUMN_SLS_LOAD_COLUMNS)
@@ -1273,7 +1574,19 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     status_cols[3].metric("Final staged check", "Future")
 
     st.markdown("#### ULS Girder Design Loads")
-    st.caption("Use factored resultants for future flexural, shear, and torsion design. Mux, Vuy, and Tu are the primary girder ULS actions.")
+    st.caption("Use station-based factored resultants for future flexural, shear, and torsion design along the girder length. Mux, Vuy, and Tu are the primary girder ULS actions.")
+    with st.expander("Import Beam/Girder ULS station loads from Excel / CSV", expanded=False):
+        st.caption("Beam/Girder ULS loads are station-based. The same case name may repeat at different Station x values.")
+        _render_workflow_import_tools(
+            title="Beam/Girder ULS station-load import",
+            table_name="Beam/Girder ULS",
+            columns=BEAM_ULS_LOAD_COLUMNS,
+            numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
+            state_key="beam_uls_loads_table",
+            editor_key="beam_uls_loads_editor",
+            key_prefix="beam_uls_station_loads",
+            unique_key_columns=["Case Name", "Station x (m)"],
+        )
     uls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
     edited_uls = st.data_editor(
         uls_df,
@@ -1282,6 +1595,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         hide_index=True,
         column_config={
             "Active": st.column_config.CheckboxColumn("Active"),
+            "Station x (m)": st.column_config.TextColumn("Station x (m)", help="Station along girder length for station-based ULS design actions."),
             "Case Name": st.column_config.TextColumn("Case Name"),
             "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Factored main bending about x-axis."),
             "Vuy": st.column_config.TextColumn(f"Vuy ({force_unit})", help="Factored vertical shear in y-direction."),
@@ -1321,6 +1635,34 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
             stage_cols[2].caption("Do not include prestress in the external load resultant when Pe is added separately.")
             st.caption(spec["note"])
             current_sls_table = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+
+            def _replace_stage_rows(imported: pd.DataFrame, *, _stage_label: str = stage_label) -> None:
+                base_table = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+                st.session_state["beam_sls_loads_table"] = _beam_sls_table_after_stage_edit(base_table, _stage_label, imported)
+
+            def _append_stage_rows(imported: pd.DataFrame, *, _stage_label: str = stage_label) -> None:
+                base_table = _normalize_beam_sls_load_table(pd.DataFrame(st.session_state.get("beam_sls_loads_table")))
+                current_stage_rows = _beam_sls_stage_editor_rows(base_table, _stage_label)
+                combined_rows = _stringify_table(pd.concat([current_stage_rows, imported], ignore_index=True), BEAM_SLS_STAGE_EDITOR_COLUMNS)
+                st.session_state["beam_sls_loads_table"] = _beam_sls_table_after_stage_edit(base_table, _stage_label, combined_rows)
+
+            with st.expander(f"Import {spec['title']} station loads from Excel / CSV", expanded=False):
+                st.caption("Beam/Girder SLS loads are station-based inside each stage tab. Stage and load-component metadata are assigned by this tab.")
+                _render_workflow_import_tools(
+                    title=f"{spec['title']} SLS station-load import",
+                    table_name="Beam/Girder SLS",
+                    columns=BEAM_SLS_STAGE_EDITOR_COLUMNS,
+                    numeric_columns=["Station x (m)", "N", "Mx", "My", "Vy", "Vx", "T"],
+                    state_key="beam_sls_loads_table",
+                    editor_key=f"beam_sls_{stage_key}_loads_editor",
+                    key_prefix=f"beam_sls_{stage_key}_station_loads",
+                    default_values={"Section Basis": spec["basis"]},
+                    unique_key_columns=["Case Name", "Station x (m)"],
+                    stage_label=stage_label,
+                    replace_callback=_replace_stage_rows,
+                    append_callback=_append_stage_rows,
+                )
+
             stage_editor_df = _beam_sls_stage_editor_rows(current_sls_table, stage_label)
             edited_stage = st.data_editor(
                 stage_editor_df,
@@ -1329,6 +1671,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
                 hide_index=True,
                 column_config={
                     "Active": st.column_config.CheckboxColumn("Active"),
+                    "Station x (m)": st.column_config.TextColumn("Station x (m)", help="Station along girder length for this SLS stage check."),
                     "Case Name": st.column_config.TextColumn("Case Name"),
                     "Section Basis": st.column_config.SelectboxColumn(
                         "Section Basis",
@@ -1367,8 +1710,18 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
             for warning in stage_basis_warnings:
                 st.warning(warning)
 
-    uls_result = _workflow_table_result(edited_uls, table_name="Beam/Girder ULS", numeric_columns=["Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"])
-    sls_result = _workflow_table_result(edited_sls, table_name="Beam/Girder SLS", numeric_columns=["N", "Mx", "My", "Vy", "Vx", "T"])
+    uls_result = _workflow_table_result(
+        edited_uls,
+        table_name="Beam/Girder ULS",
+        numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
+        unique_key_columns=["Case Name", "Station x (m)"],
+    )
+    sls_result = _workflow_table_result(
+        edited_sls,
+        table_name="Beam/Girder SLS",
+        numeric_columns=["Station x (m)", "N", "Mx", "My", "Vy", "Vx", "T"],
+        unique_key_columns=["Case Name", "Station x (m)"],
+    )
     cols = st.columns(4)
     cols[0].metric("ULS rows", len(uls_result.load_cases))
     cols[1].metric("SLS rows", len(sls_result.load_cases))

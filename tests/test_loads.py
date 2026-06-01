@@ -20,6 +20,7 @@ from concrete_pmm_pro.ui.loads_page import (
     _default_beam_uls_load_table,
     _excel_template_bytes,
     _normalize_editor_dataframe,
+    prepare_imported_workflow_load_table,
     _normalize_beam_sls_load_table,
     _preview_dataframe,
     _split_mixed_editor_table_to_column_tables,
@@ -306,8 +307,10 @@ def test_beam_girder_workflow_default_tables_use_three_stage_sls_model() -> None
     sls = _default_beam_sls_load_table()
 
     assert list(uls.columns) == BEAM_ULS_LOAD_COLUMNS
-    assert ["Mux", "Vuy", "Tu"] == list(uls.columns[2:5])
+    assert ["Mux", "Vuy", "Tu"] == list(uls.columns[3:6])
+    assert "Station x (m)" in uls.columns
     assert list(sls.columns) == BEAM_SLS_LOAD_COLUMNS
+    assert "Station x (m)" in sls.columns
     assert "Stage" in sls.columns
     assert "Load Component" in sls.columns  # internal/project metadata, hidden from default editor
     assert "Stage / Component" not in sls.columns
@@ -364,6 +367,47 @@ def test_loads_sls2c_stage_editor_hides_stage_and_component_but_preserves_backen
     assert service_row["Section Basis"] == "Composite transformed"
     assert service_row["Mx"] == "1234.5"
     assert set(merged["Stage"]) == {"Transfer stage", "Construction stage", "Service stage"}
+
+
+def test_loads_import1_beam_sls_station_rows_preserve_stage_metadata() -> None:
+    imported = pd.DataFrame(
+        [
+            {"Active": True, "Station": 0.0, "Case Name": "SLS-SERV", "Mx": "0", "N": "0"},
+            {"Active": True, "Station": 10.0, "Case Name": "SLS-SERV", "Mx": "500", "N": "0"},
+        ]
+    )
+
+    prepared = prepare_imported_workflow_load_table(
+        imported,
+        BEAM_SLS_STAGE_EDITOR_COLUMNS,
+        default_values={"Section Basis": "Composite transformed"},
+    )
+    merged = _beam_sls_table_after_stage_edit(_default_beam_sls_load_table(), "Service stage", prepared)
+
+    service_rows = merged[merged["Stage"] == "Service stage"].reset_index(drop=True)
+    assert list(service_rows["Station x (m)"]) == ["0.0", "10.0"]
+    assert set(service_rows["Load Component"]) == {"Total SLS resultant"}
+    assert set(service_rows["Section Basis"]) == {"Composite transformed"}
+
+
+def test_loads_import1_beam_station_validation_allows_same_case_at_different_stations() -> None:
+    table = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": "0", "Case Name": "ULS-G1", "Mux": "0", "Vuy": "10", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": ""},
+            {"Active": True, "Station x (m)": "5", "Case Name": "ULS-G1", "Mux": "100", "Vuy": "0", "Tu": "0", "Muy": "0", "Vux": "0", "Nu": "0", "Note": ""},
+        ],
+        columns=BEAM_ULS_LOAD_COLUMNS,
+    )
+
+    result = _workflow_table_result(
+        table,
+        table_name="Beam/Girder ULS",
+        numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
+        unique_key_columns=["Case Name", "Station x (m)"],
+    )
+
+    assert result.errors == []
+    assert len(result.load_cases) == 2
 
 
 def test_beam_girder_workflow_table_validation_rejects_non_numeric_actions() -> None:
@@ -479,4 +523,6 @@ def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guida
     assert "SLS stage / section-basis guidance" in source
     assert "detailed load-component dropdown" in source
     assert "Combined SLS backend table used by Analysis" in source
+    assert "station-based" in source
+    assert "Import Beam/Girder ULS station loads" in source
     assert "full staged summation" in source

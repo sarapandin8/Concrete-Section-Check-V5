@@ -15,6 +15,10 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Left debond m" in PRESTRESS_SOURCE
     assert "Right debond m" in PRESTRESS_SOURCE
     assert "Effective prestress preview" in PRESTRESS_SOURCE
+    assert "12.7 mm low-relaxation strand" in PRESTRESS_SOURCE
+    assert "15.2 mm low-relaxation strand" in PRESTRESS_SOURCE
+    assert "Individual strands" in PRESTRESS_SOURCE
+    assert "Computed spacing_mm" in PRESTRESS_SOURCE
     assert "Transfer/development length transition is not modeled" in PRESTRESS_SOURCE
     assert "does not change current Analysis results" in PRESTRESS_SOURCE
 
@@ -41,6 +45,7 @@ def test_strand_layout_normalization_and_station_preview_with_streamlit_stub(mon
 
     from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
         _girder_effective_prestress_preview_dataframe,
+        _girder_strand_point_layout_dataframe,
         _normalize_girder_strand_layout_table,
     )
 
@@ -49,6 +54,7 @@ def test_strand_layout_normalization_and_station_preview_with_streamlit_stub(mon
             {
                 "Active": True,
                 "Group ID": "Row 1",
+                "Strand Size": "15.2 mm low-relaxation strand",
                 "No. Strands": 2,
                 "Area/Strand_mm2": 140.0,
                 "y_mm_from_bottom": 100.0,
@@ -61,6 +67,7 @@ def test_strand_layout_normalization_and_station_preview_with_streamlit_stub(mon
             {
                 "Active": True,
                 "Group ID": "Row 2",
+                "Strand Size": "15.2 mm low-relaxation strand",
                 "No. Strands": 2,
                 "Area/Strand_mm2": 140.0,
                 "y_mm_from_bottom": 200.0,
@@ -81,3 +88,35 @@ def test_strand_layout_normalization_and_station_preview_with_streamlit_stub(mon
     assert preview.loc[5.0, "Effective strands"] == 4
     assert preview.loc[5.0, "Pe_transfer_eff_kN"] == 600.0
     assert preview.loc[5.0, "yps_eff_mm_from_bottom"] == 150.0
+
+    points = _girder_strand_point_layout_dataframe(table, None)
+    assert len(points) == 4
+    assert set(points["Group ID"]) == {"Row 1", "Row 2"}
+
+
+def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        DEFAULT_GIRDER_STRAND_SIZE,
+        _normalize_girder_strand_layout_table,
+    )
+
+    table = _normalize_girder_strand_layout_table(None, span_length_m=30.0)
+    assert DEFAULT_GIRDER_STRAND_SIZE == "12.7 mm low-relaxation strand"
+    assert set(table["Strand Size"]) == {"12.7 mm low-relaxation strand"}
+    assert table.loc[0, "Area/Strand_mm2"] == 98.7
+    assert table.loc[0, "Total Aps_mm2"] == 12 * 98.7
+    assert table.loc[0, "Edge CL_mm"] == 50.0
+    assert table.loc[0, "Min spacing_mm"] == 50.0

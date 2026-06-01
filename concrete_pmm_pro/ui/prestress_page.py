@@ -192,6 +192,64 @@ GIRDER_STRAND_SIZE_PROPERTIES = {
 
 DEFAULT_GIRDER_STRAND_SIZE = "12.7 mm low-relaxation strand"
 
+GIRDER_PRESTRESS_UI_PRESET_KEYS = frozenset(
+    {
+        "parametric_i_girder",
+        "u_girder",
+        "box_section_fillet",
+        "parametric_plank_girder_interior",
+        "parametric_plank_girder_exterior",
+        "psc_i_girder",
+        "single_cell_box_girder",
+    }
+)
+
+
+def _session_member_type() -> str:
+    """Return the current Project-page member workflow from session state."""
+
+    settings = st.session_state.get("analysis_mode_settings")
+    if hasattr(settings, "member_type"):
+        return str(getattr(settings, "member_type") or "").strip()
+    if isinstance(settings, dict):
+        return str(settings.get("member_type") or "").strip()
+    return "column_pier_pmm"
+
+
+def _current_section_preset_key() -> str:
+    """Return the active Section Builder preset key without importing Section Builder."""
+
+    return str(st.session_state.get("section_preset_key") or "").strip()
+
+
+def _is_girder_prestress_layout_workflow_active() -> bool:
+    """Return whether the dedicated girder strand/debonding UI should be shown.
+
+    GIRDER.PS3A is a Beam/Girder-only workflow.  It must not appear on
+    Column/Pier/Wall/Pylon sections where the generic prestress table is still
+    available for special cases but the simple-supported girder strand layout is
+    not applicable.
+    """
+
+    return _session_member_type() == "beam_girder" and _current_section_preset_key() in GIRDER_PRESTRESS_UI_PRESET_KEYS
+
+
+def _has_active_prestress_force(elements: list[PrestressElement]) -> bool:
+    """Return whether any prestress row has an actual prestress force/state.
+
+    Passive catalog/example rows are useful reference data but should not force
+    a large default section preview on non-prestressed members.
+    """
+
+    for element in elements:
+        if abs(float(element.pe_eff_n or 0.0)) > 1.0:
+            return True
+        if abs(float(element.initial_stress_mpa or 0.0)) > 1e-6:
+            return True
+        if abs(float(element.initial_strain or 0.0)) > 1e-12:
+            return True
+    return False
+
 
 
 @dataclass(frozen=True)
@@ -403,7 +461,7 @@ def _default_prestress_table(prestress_db: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "Active": True,
+                "Active": False,
                 "Label": "PS1",
                 "Steel Type": first["type"],
                 "Product": first_product,
@@ -429,7 +487,7 @@ def _default_prestress_table(prestress_db: pd.DataFrame) -> pd.DataFrame:
                 "Note": "",
             },
             {
-                "Active": True,
+                "Active": False,
                 "Label": "PS2",
                 "Steel Type": second["type"],
                 "Product": second_product,
@@ -2421,9 +2479,16 @@ def render_prestress_page() -> None:
     st.session_state["prestress_elements"] = result.elements
     st.session_state["prestress_valid_for_analysis"] = valid_for_analysis
 
+    girder_prestress_layout_active = _is_girder_prestress_layout_workflow_active()
     with main_col:
-        _render_girder_prestress_force_state_inputs(result.elements, geometry)
-        _render_girder_strand_layout_and_debonding_ui(geometry)
+        if girder_prestress_layout_active:
+            _render_girder_prestress_force_state_inputs(result.elements, geometry)
+            _render_girder_strand_layout_and_debonding_ui(geometry)
+        elif _session_member_type() == "beam_girder":
+            st.info(
+                "Simple-supported strand layout and debonding tools are hidden for the current section preset. "
+                "Use a girder preset or the generic prestress table if this member intentionally has prestressing."
+            )
 
     active_rebar_count = len(st.session_state.get("rebars", []) or [])
 
@@ -2447,15 +2512,32 @@ def render_prestress_page() -> None:
     st.dataframe(prestress_summary_dataframe(result.elements), use_container_width=True, hide_index=True)
 
     if geometry is not None:
-        st.markdown("#### Section Preview with Prestress")
-        st.plotly_chart(
-            create_section_preview(
-                geometry,
-                st.session_state.get("section_dimensions", []),
-                "symbol_value",
-                st.session_state.get("rebars", []),
-                result.elements,
-            ),
-            use_container_width=True,
-            key="prestress_section_preview",
-        )
+        if _has_active_prestress_force(result.elements):
+            st.markdown("#### Section Preview with Active Prestress")
+            st.plotly_chart(
+                create_section_preview(
+                    geometry,
+                    st.session_state.get("section_dimensions", []),
+                    "symbol_value",
+                    st.session_state.get("rebars", []),
+                    result.elements,
+                ),
+                use_container_width=True,
+                key="prestress_section_preview",
+            )
+        elif result.elements:
+            with st.expander("Passive prestress/reference steel preview", expanded=False):
+                st.caption(
+                    "Only passive prestress/reference rows are active. They are hidden from the default view so non-prestressed members do not look prestressed."
+                )
+                st.plotly_chart(
+                    create_section_preview(
+                        geometry,
+                        st.session_state.get("section_dimensions", []),
+                        "symbol_value",
+                        st.session_state.get("rebars", []),
+                        result.elements,
+                    ),
+                    use_container_width=True,
+                    key="prestress_passive_section_preview",
+                )

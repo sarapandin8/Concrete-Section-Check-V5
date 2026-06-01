@@ -120,3 +120,55 @@ def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> No
     assert table.loc[0, "Total Aps_mm2"] == 12 * 98.7
     assert table.loc[0, "Edge CL_mm"] == 50.0
     assert table.loc[0, "Min spacing_mm"] == 50.0
+
+
+def test_girder_strand_layout_ui_is_gated_to_beam_girder_preset(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.core.models import PrestressElement  # noqa: PLC0415
+    import concrete_pmm_pro.ui.prestress_page as prestress_page  # noqa: PLC0415
+
+    prestress_page.st.session_state = {"analysis_mode_settings": {"member_type": "column_pier_pmm"}, "section_preset_key": "parametric_i_girder"}
+    assert not prestress_page._is_girder_prestress_layout_workflow_active()
+
+    prestress_page.st.session_state = {"analysis_mode_settings": {"member_type": "beam_girder"}, "section_preset_key": "rectangle"}
+    assert not prestress_page._is_girder_prestress_layout_workflow_active()
+
+    prestress_page.st.session_state = {"analysis_mode_settings": {"member_type": "beam_girder"}, "section_preset_key": "parametric_i_girder"}
+    assert prestress_page._is_girder_prestress_layout_workflow_active()
+
+    passive = PrestressElement(x_mm=0, y_mm=0, area_mm2=100, pe_eff_n=0, initial_stress_mpa=0, initial_strain=0)
+    active = PrestressElement(x_mm=0, y_mm=0, area_mm2=100, pe_eff_n=1000, initial_stress_mpa=10, initial_strain=10 / 195000)
+    assert not prestress_page._has_active_prestress_force([passive])
+    assert prestress_page._has_active_prestress_force([active])
+
+
+def test_default_prestress_rows_are_inactive_examples() -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    sys.modules.setdefault("streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import _default_prestress_table, load_prestress_steel_database  # noqa: PLC0415
+
+    table = _default_prestress_table(load_prestress_steel_database())
+    assert table["Active"].tolist() == [False, False]

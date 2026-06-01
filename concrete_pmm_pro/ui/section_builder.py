@@ -452,14 +452,46 @@ def _is_composite_capable_preset(preset: dict[str, Any]) -> bool:
     """Return whether the current preset has explicit deck/topping metadata."""
 
     # SECTION.COMPOSITE1C enables display-only transformed composite properties
-    # for the parametric I-Girder as well as Plank Girder presets.  The deck
+    # for the Precast I-Girder as well as Precast Plank Girder presets.  The deck
     # metadata is still explicit UI input and remains separate from gross
     # section properties and all PMM/prestress solver paths.
     return _is_parametric_i_girder(preset) or _is_parametric_plank_girder(preset)
 
 
+def _girder_section_family(preset: dict[str, Any]) -> str:
+    """Classify the Beam/Girder section intent used by service-stage UI routing."""
+
+    category = str(preset.get("category", "")).casefold()
+    if _is_composite_capable_preset(preset) or category == "precast composite girder":
+        return "precast_composite_girder"
+    if "girder" in category:
+        return "general_non_composite_girder"
+    return "non_girder"
+
+
+def _girder_section_family_label(preset: dict[str, Any]) -> str:
+    """Return the user-facing section family label for Beam/Girder workflow."""
+
+    family = _girder_section_family(preset)
+    if family == "precast_composite_girder":
+        return "Precast Composite Girder"
+    if family == "general_non_composite_girder":
+        return "General / Non-composite Girder"
+    return "Column/Pier/Wall/Pylon section"
+
+
+def _recommended_service_basis_for_preset(preset: dict[str, Any]) -> str:
+    """Return the default Service-stage basis implied by the selected section family."""
+
+    if _girder_section_family(preset) == "precast_composite_girder":
+        return "Composite transformed"
+    return "Precast gross"
+
+
 _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
-_BEAM_GIRDER_SECTION_CATEGORIES = frozenset({"Girder", "Box Girder", "Custom"})
+_BEAM_GIRDER_SECTION_CATEGORIES = frozenset(
+    {"Precast Composite Girder", "General / Non-composite Girder", "Girder", "Box Girder", "Custom"}
+)
 
 
 def _section_categories_for_member_type(settings: AnalysisModeSettings) -> set[str]:
@@ -555,16 +587,20 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
     """Show non-invasive Section Builder guidance for the active member workflow."""
     settings = _analysis_mode_from_session_state()
     preset_key = str(preset.get("key", ""))
-    is_girder_preset = preset_key == "parametric_i_girder" or preset_key.startswith("parametric_plank_girder_")
+    is_girder_preset = "girder" in str(preset.get("category", "")).casefold() or "girder" in preset_key
 
     rows = [("Active member workflow", analysis_mode_label(settings))]
     if settings.member_type == "beam_girder":
+        family_label = _girder_section_family_label(preset)
+        service_basis = _recommended_service_basis_for_preset(preset)
         rows.extend(
             [
-                ("Recommended section family", "I-Girder / Plank Girder / future bridge girder presets"),
+                ("Selected girder family", family_label),
+                ("Service-stage basis default", service_basis),
+                ("Recommended section family", "Precast Composite Girder or General / Non-composite Girder presets"),
                 ("Custom category", "Custom Girder section presets remain under this workflow"),
-                ("Current geometry status", "Gross precast polygon only"),
-                ("Girder design checks", "Future milestone; not implemented in MEMBER.TYPE1"),
+                ("Current geometry status", "Gross section polygon only; composite properties remain explicit metadata"),
+                ("Girder design checks", "Stage-based SLS preview uses the selected family to guide service basis"),
                 ("Current preset fit", "Good for Beam/Girder" if is_girder_preset else "Review: selected preset is not a girder preset"),
             ]
         )
@@ -940,7 +976,7 @@ def _render_parametric_i_girder_dimension_qa(params: dict[str, Any]) -> None:
 
     st.markdown("##### I-Girder Dimension QA")
     st.markdown(
-        '<div class="cpmm-section-note">Parametric I-Girder is symmetric about the vertical centerline. '
+        '<div class="cpmm-section-note">Precast I-Girder is symmetric about the vertical centerline. '
         "Composite deck/topping metadata can be defined below for transformed-section display, but the generated polygon remains precast-only.</div>",
         unsafe_allow_html=True,
     )
@@ -994,7 +1030,7 @@ def _render_parametric_plank_girder_dimension_qa(preset: dict[str, Any], params:
 
     st.markdown("##### Plank Girder Dimension / Composite QA")
     st.markdown(
-        '<div class="cpmm-section-note">Parametric Plank Girder is generated as a precast-only section. '
+        '<div class="cpmm-section-note">Precast Plank Girder is generated as a precast-only section. '
         "Be can be manual or calculated by the AASHTO.BE1 helper; n and Btransformed are calculated automatically for composite metadata.</div>",
         unsafe_allow_html=True,
     )
@@ -1212,6 +1248,9 @@ def _build_geometry(
 def _store_valid_section_state(preset: dict[str, Any], params: dict[str, Any], geometry: Any, dimensions: list[Any]) -> None:
     st.session_state["section_preset_key"] = preset["key"]
     st.session_state["section_preset_name"] = preset["display_name"]
+    st.session_state["section_category"] = str(preset.get("category", ""))
+    st.session_state["girder_section_family"] = _girder_section_family(preset)
+    st.session_state["girder_service_default_basis"] = _recommended_service_basis_for_preset(preset)
     st.session_state["section_parameters"] = params
     st.session_state["section_geometry"] = geometry
     st.session_state["section_dimensions"] = dimensions

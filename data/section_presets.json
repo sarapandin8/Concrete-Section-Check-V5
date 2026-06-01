@@ -5,8 +5,8 @@
     "Basic Solid",
     "Hollow / Voided",
     "Pier / Column",
-    "Girder",
-    "Box Girder",
+    "Precast Composite Girder",
+    "General / Non-composite Girder",
     "Custom"
   ],
   "presets": [
@@ -184,7 +184,7 @@
     {
       "key": "box_section_fillet",
       "display_name": "Box Section with Fillet",
-      "category": "Box Girder",
+      "category": "General / Non-composite Girder",
       "generator": "box_section_fillet",
       "dimensions_generator": "box_section_fillet",
       "parameters": [
@@ -273,8 +273,8 @@
     },
     {
       "key": "parametric_i_girder",
-      "display_name": "Parametric I-Girder",
-      "category": "Girder",
+      "display_name": "Precast I-Girder",
+      "category": "Precast Composite Girder",
       "generator": "parametric_i_girder",
       "dimensions_generator": "parametric_i_girder",
       "parameters": [
@@ -382,8 +382,8 @@
     },
     {
       "key": "parametric_plank_girder_interior",
-      "display_name": "Parametric Plank Girder \u2014 Interior",
-      "category": "Girder",
+      "display_name": "Precast Plank Girder — Interior",
+      "category": "Precast Composite Girder",
       "generator": "parametric_plank_girder_interior",
       "dimensions_generator": "parametric_plank_girder_interior",
       "parameters": [
@@ -415,7 +415,7 @@
           "min": 0,
           "max": 5000,
           "step": 5,
-          "description": "Lower side offset. Interior: B \u2248 b3 + 2b2. Exterior: B \u2248 b3 + b2."
+          "description": "Lower side offset. Interior: B ≈ b3 + 2b2. Exterior: B ≈ b3 + b2."
         },
         {
           "name": "b3_mm",
@@ -511,8 +511,8 @@
     },
     {
       "key": "parametric_plank_girder_exterior",
-      "display_name": "Parametric Plank Girder \u2014 Exterior",
-      "category": "Girder",
+      "display_name": "Precast Plank Girder — Exterior",
+      "category": "Precast Composite Girder",
       "generator": "parametric_plank_girder_exterior",
       "dimensions_generator": "parametric_plank_girder_exterior",
       "parameters": [
@@ -544,7 +544,7 @@
           "min": 0,
           "max": 5000,
           "step": 5,
-          "description": "Lower side offset. Interior: B \u2248 b3 + 2b2. Exterior: B \u2248 b3 + b2."
+          "description": "Lower side offset. Interior: B ≈ b3 + 2b2. Exterior: B ≈ b3 + b2."
         },
         {
           "name": "b3_mm",
@@ -651,7 +651,7 @@
     {
       "key": "psc_i_girder",
       "display_name": "PSC I-Girder",
-      "category": "Girder",
+      "category": "General / Non-composite Girder",
       "generator": "psc_i_girder",
       "dimensions_generator": "psc_i_girder",
       "parameters": [
@@ -714,7 +714,7 @@
     {
       "key": "u_girder",
       "display_name": "U-Girder",
-      "category": "Girder",
+      "category": "General / Non-composite Girder",
       "generator": "u_girder",
       "dimensions_generator": "u_girder",
       "parameters": [
@@ -768,7 +768,7 @@
     {
       "key": "single_cell_box_girder",
       "display_name": "Single Cell Box Girder",
-      "category": "Box Girder",
+      "category": "General / Non-composite Girder",
       "generator": "single_cell_box_girder",
       "dimensions_generator": "single_cell_box_girder",
       "parameters": [

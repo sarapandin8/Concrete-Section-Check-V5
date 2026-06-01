@@ -339,7 +339,7 @@ def parametric_i_girder(
     T1_mm: float,
     T2_mm: float,
     C1_mm: float = 0.0,
-    name: str = "Parametric I-Girder",
+    name: str = "Precast I-Girder",
 ) -> SectionGeometry:
     """Generate a symmetric parametric bridge I-girder section.
 
@@ -429,7 +429,7 @@ def parametric_i_girder(
     if c > 0:
         add(points, -b2, bottom_y + c)
 
-    _ensure_valid_simple_polygon(points, "Parametric I-Girder")
+    _ensure_valid_simple_polygon(points, "Precast I-Girder")
     return SectionGeometry(
         name=name,
         outer_polygon=points,
@@ -510,7 +510,7 @@ def parametric_plank_girder_interior(
     Ebeam_MPa: float = 35000.0,
     Edeck_MPa: float = 28560.0,
     girder_length_mm: float = 12000.0,
-    name: str = "Parametric Plank Girder — Interior",
+    name: str = "Precast Plank Girder — Interior",
 ) -> SectionGeometry:
     """Generate a symmetric interior precast plank-girder polygon.
 
@@ -620,7 +620,7 @@ def parametric_plank_girder_exterior(
     Edeck_MPa: float = 28560.0,
     girder_length_mm: float = 12000.0,
     overhang_mm: float = 500.0,
-    name: str = "Parametric Plank Girder — Exterior",
+    name: str = "Precast Plank Girder — Exterior",
 ) -> SectionGeometry:
     """Generate an asymmetric exterior precast plank-girder polygon.
 

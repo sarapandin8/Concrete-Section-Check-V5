@@ -11,8 +11,10 @@ from concrete_pmm_pro.ui.loads_page import (
     BEAM_ULS_LOAD_COLUMNS,
     COLUMN_SLS_LOAD_COLUMNS,
     COLUMN_ULS_LOAD_COLUMNS,
+    _active_girder_service_basis_default,
     _axis_convention_rows,
     _beam_sls_stage_basis_warnings,
+    _beam_sls_stage_input_specs,
     _beam_sls_stage_editor_rows,
     _beam_sls_table_after_stage_edit,
     _column_workflow_tables_to_legacy_editor_table,
@@ -320,6 +322,28 @@ def test_beam_girder_workflow_default_tables_use_three_stage_sls_model() -> None
     assert list(sls["Load Component"]) == ["Girder self-weight", "Girder self-weight + wet deck/topping", "Total SLS resultant"]
     assert list(sls["Section Basis"]) == ["Precast gross", "Precast gross", "Composite transformed"]
     assert "SDL and LL+IM" in sls.loc[2, "Note"]
+
+
+def test_beam_girder_service_stage_basis_follows_selected_section_family() -> None:
+    from concrete_pmm_pro.ui import loads_page
+
+    original_state = dict(loads_page.st.session_state)
+    try:
+        loads_page.st.session_state.clear()
+        loads_page.st.session_state["girder_section_family"] = "general_non_composite_girder"
+        loads_page.st.session_state["girder_service_default_basis"] = "Precast gross"
+
+        specs = _beam_sls_stage_input_specs()
+        service_spec = next(spec for spec in specs if spec["stage"] == "Service stage")
+        sls = _default_beam_sls_load_table()
+
+        assert _active_girder_service_basis_default() == "Precast gross"
+        assert service_spec["basis"] == "Precast gross"
+        assert sls[sls["Stage"] == "Service stage"].iloc[0]["Section Basis"] == "Precast gross"
+        assert "General / Non-composite Girder" in service_spec["note"]
+    finally:
+        loads_page.st.session_state.clear()
+        loads_page.st.session_state.update(original_state)
 
 
 def test_loads_workflow1b_migrates_old_stage_component_column() -> None:

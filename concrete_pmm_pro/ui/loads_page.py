@@ -55,6 +55,11 @@ BEAM_LOAD_COMPONENT_OPTIONS = [
     "User-defined",
 ]
 BEAM_SECTION_BASIS_OPTIONS = ["", "Precast gross", "Composite transformed", "User-defined"]
+PRECAST_COMPOSITE_GIRDER_PRESET_KEYS = {
+    "parametric_i_girder",
+    "parametric_plank_girder_interior",
+    "parametric_plank_girder_exterior",
+}
 WORKFLOW_LOAD_TABLE_KEYS = (
     "column_uls_loads_table",
     "column_sls_loads_table",
@@ -237,6 +242,42 @@ def _beam_sls_component_for_stage(stage: object, existing_component: object = ""
     return "" if _is_blank(existing_component) else str(existing_component).strip()
 
 
+def _active_girder_section_family() -> str:
+    """Return the selected Beam/Girder section family without importing Section Builder."""
+
+    family = str(st.session_state.get("girder_section_family") or "").strip()
+    if family in {"precast_composite_girder", "general_non_composite_girder"}:
+        return family
+    preset_key = str(st.session_state.get("section_preset_key") or "").strip()
+    if preset_key in PRECAST_COMPOSITE_GIRDER_PRESET_KEYS:
+        return "precast_composite_girder"
+    category = str(st.session_state.get("section_category") or "").casefold()
+    if "precast" in category and "composite" in category and "girder" in category:
+        return "precast_composite_girder"
+    if "girder" in category:
+        return "general_non_composite_girder"
+    # The default Beam/Girder preset is a Precast Composite Girder.  Until a
+    # section is selected, keep the existing composite-girder default.
+    return "precast_composite_girder"
+
+
+def _active_girder_service_basis_default() -> str:
+    """Return the Service-stage section-basis default implied by the section family."""
+
+    stored = str(st.session_state.get("girder_service_default_basis") or "").strip()
+    if stored in {"Composite transformed", "Precast gross"}:
+        return stored
+    if _active_girder_section_family() == "precast_composite_girder":
+        return "Composite transformed"
+    return "Precast gross"
+
+
+def _active_girder_section_family_label() -> str:
+    if _active_girder_section_family() == "precast_composite_girder":
+        return "Precast Composite Girder"
+    return "General / Non-composite Girder"
+
+
 def _beam_sls_basis_for_stage(stage: object, existing_basis: object = "") -> str:
     """Return recommended section basis when a row has no useful basis yet."""
 
@@ -247,7 +288,7 @@ def _beam_sls_basis_for_stage(stage: object, existing_basis: object = "") -> str
     if label in {"Transfer stage", "Construction stage"}:
         return "Precast gross"
     if label == "Service stage":
-        return "Composite transformed"
+        return _active_girder_service_basis_default()
     return existing
 
 
@@ -312,6 +353,19 @@ def _beam_sls_stage_input_specs() -> list[dict[str, str]]:
     while the project data remains one normalized SLS load table.
     """
 
+    service_basis = _active_girder_service_basis_default()
+    service_family = _active_girder_section_family_label()
+    service_action = (
+        "Total SLS resultant including SDL and LL+IM on composite basis"
+        if service_basis == "Composite transformed"
+        else "Total SLS resultant including SDL and LL+IM on gross/non-composite basis"
+    )
+    service_note = (
+        "Final service action: total SLS resultant including SDL and LL+IM. Use Composite transformed for Precast Composite Girder; do not include prestress again here."
+        if service_basis == "Composite transformed"
+        else "Final service action: total SLS resultant including SDL and LL+IM. General / Non-composite Girder uses the gross section basis unless the engineer defines composite action separately."
+    )
+
     return [
         {
             "stage": "Transfer stage",
@@ -333,9 +387,9 @@ def _beam_sls_stage_input_specs() -> list[dict[str, str]]:
             "stage": "Service stage",
             "title": "Service stage",
             "case_name": "SLS-SERV",
-            "basis": "Composite transformed",
-            "action": "Total SLS resultant including SDL and LL+IM",
-            "note": "Final service action: total SLS resultant including SDL and LL+IM. Do not include prestress again here.",
+            "basis": service_basis,
+            "action": service_action,
+            "note": f"{service_note} Active section family: {service_family}.",
         },
     ]
 
@@ -458,54 +512,10 @@ def _default_beam_uls_load_table() -> pd.DataFrame:
 
 
 def _default_beam_sls_load_table() -> pd.DataFrame:
+    """Return the default three-stage Beam/Girder SLS table for the active section family."""
+
     return pd.DataFrame(
-        [
-            {
-                "Active": True,
-                "Station x (m)": 0.0,
-                "Case Name": "SLS-TR",
-                "Stage": "Transfer stage",
-                "Load Component": "Girder self-weight",
-                "Section Basis": "Precast gross",
-                "N": 0.0,
-                "Mx": 0.0,
-                "My": 0.0,
-                "Vy": 0.0,
-                "Vx": 0.0,
-                "T": 0.0,
-                "Note": "Transfer external action: precast girder self-weight only; include Pe_transfer/initial prestress in Analysis.",
-            },
-            {
-                "Active": True,
-                "Station x (m)": 0.0,
-                "Case Name": "SLS-CONST",
-                "Stage": "Construction stage",
-                "Load Component": "Girder self-weight + wet deck/topping",
-                "Section Basis": "Precast gross",
-                "N": 0.0,
-                "Mx": 0.0,
-                "My": 0.0,
-                "Vy": 0.0,
-                "Vx": 0.0,
-                "T": 0.0,
-                "Note": "Construction action: precast girder self-weight plus wet deck/topping before composite action.",
-            },
-            {
-                "Active": True,
-                "Station x (m)": 0.0,
-                "Case Name": "SLS-SERV",
-                "Stage": "Service stage",
-                "Load Component": "Total SLS resultant",
-                "Section Basis": "Composite transformed",
-                "N": 0.0,
-                "Mx": 0.0,
-                "My": 0.0,
-                "Vy": 0.0,
-                "Vx": 0.0,
-                "T": 0.0,
-                "Note": "Final service action: total SLS resultant including SDL and LL+IM. Do not include prestress again here.",
-            },
-        ],
+        [_beam_sls_default_row_for_stage(spec["stage"]) for spec in _beam_sls_stage_input_specs()],
         columns=BEAM_SLS_LOAD_COLUMNS,
     )
 
@@ -684,9 +694,11 @@ def _beam_sls_stage_basis_warnings(df: pd.DataFrame) -> list[str]:
                 f"{prefix}: {stage} should normally use the Precast gross section basis. "
                 "Composite transformed properties are normally for final service after composite action."
             )
-        if stage == "Service stage" and basis == "Precast gross":
+        service_default_basis = _active_girder_service_basis_default()
+        if stage == "Service stage" and basis != service_default_basis and basis in {"Precast gross", "Composite transformed"}:
             warnings.append(
-                f"{prefix}: Service stage normally uses the Composite transformed section basis when deck/topping composite metadata is active."
+                f"{prefix}: Service stage normally uses the {service_default_basis} section basis for the active "
+                f"{_active_girder_section_family_label()} selection."
             )
         if stage == "Transfer stage":
             note = str(row.get("Note") or "").casefold()

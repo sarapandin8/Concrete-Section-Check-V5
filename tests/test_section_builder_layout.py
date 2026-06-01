@@ -119,9 +119,9 @@ def test_preset_maps_are_key_based_and_labelled() -> None:
     keys, preset_map, label_map = section_builder._preset_maps([rectangle, i_girder])
 
     assert keys == ["rectangle", "parametric_i_girder"]
-    assert preset_map["parametric_i_girder"]["display_name"] == "Parametric I-Girder"
-    assert label_map["parametric_i_girder"].startswith("Parametric I-Girder")
-    assert label_map["parametric_i_girder"] == "Parametric I-Girder  ·  Girder"
+    assert preset_map["parametric_i_girder"]["display_name"] == "Precast I-Girder"
+    assert label_map["parametric_i_girder"].startswith("Precast I-Girder")
+    assert label_map["parametric_i_girder"] == "Precast I-Girder  ·  Precast Composite Girder"
 
 
 def test_plank_material_modulus_inputs_are_hidden_from_normal_geometry_editor() -> None:
@@ -196,6 +196,22 @@ def test_beam_girder_member_type_filters_out_column_basic_presets() -> None:
     assert "circular_hollow" not in keys
 
 
+def test_girder_presets_are_split_into_composite_and_non_composite_families() -> None:
+    i_girder = preset_by_key("parametric_i_girder")
+    plank = preset_by_key("parametric_plank_girder_interior")
+    general_i = preset_by_key("psc_i_girder")
+
+    assert i_girder["display_name"] == "Precast I-Girder"
+    assert i_girder["category"] == "Precast Composite Girder"
+    assert plank["display_name"] == "Precast Plank Girder — Interior"
+    assert plank["category"] == "Precast Composite Girder"
+    assert general_i["category"] == "General / Non-composite Girder"
+    assert section_builder._girder_section_family(i_girder) == "precast_composite_girder"
+    assert section_builder._recommended_service_basis_for_preset(i_girder) == "Composite transformed"
+    assert section_builder._girder_section_family(general_i) == "general_non_composite_girder"
+    assert section_builder._recommended_service_basis_for_preset(general_i) == "Precast gross"
+
+
 def test_legacy_general_section_member_type_uses_column_pier_filter() -> None:
     rectangle = preset_by_key("rectangle")
     i_girder = preset_by_key("parametric_i_girder")
@@ -213,18 +229,18 @@ def test_section_category_browser_uses_filtered_categories() -> None:
     i_girder = preset_by_key("parametric_i_girder")
 
     categories = section_builder._categories_for_filtered_presets(
-        ["Basic Solid", "Girder", "Box Girder", "Custom"],
+        ["Basic Solid", "Precast Composite Girder", "General / Non-composite Girder", "Custom"],
         [rectangle],
     )
 
     assert categories == ["Basic Solid"]
 
     categories = section_builder._categories_for_filtered_presets(
-        ["Basic Solid", "Girder", "Box Girder", "Custom"],
+        ["Basic Solid", "Precast Composite Girder", "General / Non-composite Girder", "Custom"],
         [i_girder],
     )
 
-    assert categories == ["Girder"]
+    assert categories == ["Precast Composite Girder"]
 
 
 def test_section_builder_source_contains_member_type_preset_filter_notice() -> None:
@@ -271,7 +287,7 @@ def test_build_geometry_ignores_non_geometry_composite_metadata() -> None:
     assert validation.is_valid
     assert validation.errors == []
     assert geometry is not None
-    assert geometry.name == "Parametric Plank Girder — Interior"
+    assert geometry.name == "Precast Plank Girder — Interior"
     assert len(dimensions) > 0
 
 
@@ -312,7 +328,7 @@ def test_i_girder_is_composite_capable_but_geometry_ignores_metadata() -> None:
     assert validation.is_valid
     assert validation.errors == []
     assert geometry is not None
-    assert geometry.name == "Parametric I-Girder"
+    assert geometry.name == "Precast I-Girder"
     assert len(dimensions) > 0
     assert "Tslab_mm" not in geometry.metadata["parameters"]
     assert "Be_mm" not in geometry.metadata["parameters"]

@@ -217,3 +217,50 @@ def test_default_prestress_rows_are_inactive_examples() -> None:
 
     table = _default_prestress_table(load_prestress_steel_database())
     assert table["Active"].tolist() == [False, False]
+
+
+def test_girder_strand_points_are_center_out_not_edge_spread(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Two center strands",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "Row center x_mm": 0.0,
+                "y_mm_from_bottom": 100.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=20.0)
+    points = _girder_strand_point_layout_dataframe(table, geometry=None).sort_values("x_mm")
+
+    assert points["x_mm"].round(6).tolist() == [-25.0, 25.0]
+    assert points["Computed spacing_mm"].tolist() == [50.0, 50.0]
+
+
+def test_prestress_source_contains_compact_strand_editor_and_rerun_guard() -> None:
+    assert "GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS" in PRESTRESS_SOURCE
+    assert "Left debond m" in PRESTRESS_SOURCE
+    assert "Right debond m" in PRESTRESS_SOURCE
+    assert "_store_girder_strand_layout_and_rerun_on_change" in PRESTRESS_SOURCE
+    assert "centerline outward" in PRESTRESS_SOURCE
+    assert "🟨" in PRESTRESS_SOURCE

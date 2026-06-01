@@ -150,6 +150,37 @@ GIRDER_STRAND_LAYOUT_NUMERIC_COLUMNS = [
     "Right debond m",
 ]
 
+# Compact editor columns shown by default. Derived detailing values are still
+# preserved in the backend table and shown in an audit expander.
+GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS = [
+    "Active",
+    "Group ID",
+    "Strand Size",
+    "No. Strands",
+    "y_mm_from_bottom",
+    "Left debond m",
+    "Right debond m",
+    "Pe_transfer/strand_kN",
+    "Pe_construction/strand_kN",
+    "Pe_eff_final/strand_kN",
+    "Note",
+]
+
+GIRDER_STRAND_LAYOUT_AUDIT_COLUMNS = [
+    "Group ID",
+    "Layer",
+    "No. Strands",
+    "Area/Strand_mm2",
+    "Total Aps_mm2",
+    "Row center x_mm",
+    "y_mm_from_bottom",
+    "Edge CL_mm",
+    "Min spacing_mm",
+    "Computed spacing_mm",
+    "Left debond m",
+    "Right debond m",
+]
+
 GIRDER_DEBOND_MODE_OPTIONS = [
     "No debonding",
     "Symmetric left/right",
@@ -1347,10 +1378,11 @@ def _section_horizontal_segment_at_y(geometry: SectionGeometry | None, y_abs_mm:
 def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -> tuple[list[dict[str, Any]], float, list[str]]:
     """Expand one strand row/group into individual strand points.
 
-    The row is treated as a straight horizontal row centered at Row center x.
-    The clear distance from the outermost strand centerline to the available
-    section edge is controlled by Edge CL_mm. This is a layout-aid check only;
-    project-specific code detailing requirements must still be confirmed.
+    Strand rows are placed from the girder centerline outward.  A two-strand
+    row is therefore placed close to the centerline rather than stretched to
+    the outer edges.  The selected strand size controls the practical minimum
+    center-to-center spacing; section geometry is used only to check whether
+    the compact centered row fits with the required edge centerline distance.
     """
 
     messages: list[str] = []
@@ -1370,30 +1402,41 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
     min_spacing = float(props["recommended_min_spacing_mm"])
     spacing = min_spacing if count > 1 else 0.0
 
+    offsets = [(float(i) - (float(count) - 1.0) / 2.0) * spacing for i in range(count)]
+    points_x = [center_x + offset for offset in offsets]
+
     segment = _section_horizontal_segment_at_y(geometry, y_abs)
     if segment is not None:
         left_edge, right_edge = segment
         left_limit = left_edge + edge_cl
         right_limit = right_edge - edge_cl
-        half_available = min(center_x - left_limit, right_limit - center_x)
-        if half_available < -1e-9:
-            messages.append(f"{group}: row center/edge clearance is outside the available section width at this y-level.")
-            half_available = 0.0
-        if count > 1:
-            spacing = max(0.0, 2.0 * half_available / float(count - 1))
-        else:
-            spacing = 0.0
+        available_width = max(0.0, right_limit - left_limit)
+        required_width = spacing * float(count - 1) if count > 1 else 0.0
+        max_count = int(available_width // min_spacing) + 1 if available_width >= 0.0 else 1
+        if center_x < left_limit - 1e-9 or center_x > right_limit + 1e-9:
+            messages.append(f"{group}: row center is outside the available section width after 45 mm edge CL at this y-level.")
+        if points_x and (min(points_x) < left_limit - 1e-9 or max(points_x) > right_limit + 1e-9):
+            messages.append(
+                f"{group}: {count} strands at {spacing:.1f} mm spacing do not fit within the available section width after 45 mm edge CL; "
+                f"reduce the number of strands in this row"
+                + (f" to {max_count} or fewer" if max_count > 0 else "")
+                + " or adjust the row center/section width."
+            )
+        elif count > 1 and required_width > available_width + 1e-9:
+            messages.append(
+                f"{group}: strand row requires {required_width:.1f} mm but only {available_width:.1f} mm is available after edge CL; "
+                f"reduce the number of strands in this row"
+                + (f" to {max_count} or fewer" if max_count > 0 else "")
+                + "."
+            )
     else:
-        # No polygon available; use the minimum spacing so the UI still shows a
-        # practical row layout in a predictable location.
-        messages.append(f"{group}: section width at this y-level could not be resolved; spacing check uses minimum spacing only.")
+        messages.append(f"{group}: section width at this y-level could not be resolved; centered layout uses minimum spacing only.")
 
-    start_x = center_x - spacing * float(count - 1) / 2.0
     points = [
         {
             "Group ID": group,
             "Strand no.": i + 1,
-            "x_mm": start_x + i * spacing,
+            "x_mm": points_x[i],
             "y_mm_abs": y_abs,
             "y_mm_from_bottom": y_from_bottom,
             "Computed spacing_mm": spacing,
@@ -1403,22 +1446,7 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
         }
         for i in range(count)
     ]
-    if count > 1 and spacing + 1e-9 < min_spacing:
-        max_count = 1
-        if segment is not None:
-            try:
-                half_available = max(0.0, half_available)
-                max_count = int(2.0 * half_available // min_spacing) + 1
-            except Exception:
-                max_count = 1
-        messages.append(
-            f"{group}: computed strand spacing {spacing:.1f} mm is less than minimum {min_spacing:.1f} mm; "
-            f"reduce the number of strands in this row"
-            + (f" to {max_count} or fewer" if max_count > 0 else "")
-            + " or adjust row position/section width."
-        )
     return points, spacing, messages
-
 
 def _girder_strand_point_layout_dataframe(table: pd.DataFrame, geometry: SectionGeometry | None) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
@@ -1436,6 +1464,27 @@ def _apply_computed_girder_strand_spacing(table: pd.DataFrame, geometry: Section
         _, spacing, _ = _strand_row_point_layout(row, geometry)
         df.at[index, "Computed spacing_mm"] = spacing
     return df
+
+def _store_girder_strand_layout_and_rerun_on_change(previous_table: pd.DataFrame | None, normalized_table: pd.DataFrame) -> None:
+    """Persist strand edits and rerun once when data_editor output changed.
+
+    The editor immediately normalizes dropdown-controlled area, force defaults,
+    spacing, and debond symmetry.  Rebuilding the editor from the saved table on
+    the next run prevents the common Streamlit behaviour where a cell appears to
+    need a second edit before the normalized value is retained.
+    """
+
+    normalized = pd.DataFrame(normalized_table).reset_index(drop=True)
+    previous = pd.DataFrame(previous_table) if previous_table is not None else pd.DataFrame(columns=normalized.columns)
+    st.session_state["girder_strand_layout_table"] = normalized
+    try:
+        changed = not _dataframes_equal(previous, normalized)
+    except Exception:
+        changed = True
+    if changed:
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
 
 
 def _girder_effective_prestress_preview_dataframe(table: pd.DataFrame, span_length_m: float) -> pd.DataFrame:
@@ -1652,37 +1701,45 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         span_length_m=float(span),
         debond_model=str(debond_model),
     )
+    st.caption(
+        "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, and stage Pe per strand. "
+        "Area, edge CL = 45 mm, minimum spacing, and total Aps are auto-calculated."
+    )
     edited = st.data_editor(
         table,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
-        column_order=GIRDER_STRAND_LAYOUT_COLUMNS,
+        column_order=GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS,
         column_config={
             "Active": st.column_config.CheckboxColumn("Active"),
             "Group ID": st.column_config.TextColumn("Group ID"),
             "Layer": st.column_config.TextColumn("Layer / row"),
-            "Strand Size": st.column_config.SelectboxColumn("Strand size", options=GIRDER_STRAND_SIZE_OPTIONS),
-            "No. Strands": st.column_config.NumberColumn("No. strands", min_value=0, step=1),
+            "Strand Size": st.column_config.SelectboxColumn("🟨 Strand size", options=GIRDER_STRAND_SIZE_OPTIONS),
+            "No. Strands": st.column_config.NumberColumn("🟨 No. strands", min_value=0, step=1),
             "Area/Strand_mm2": st.column_config.NumberColumn("Area/strand (mm²)", disabled=True, format="%.3f"),
             "Total Aps_mm2": st.column_config.NumberColumn("Total Aps (mm²)", disabled=True, format="%.3f"),
             "Row center x_mm": st.column_config.NumberColumn("Row center x (mm)", step=10.0, format="%.3f"),
-            "y_mm_from_bottom": st.column_config.NumberColumn("y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
+            "y_mm_from_bottom": st.column_config.NumberColumn("🟨 y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
             "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", disabled=True, format="%.3f"),
             "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", disabled=True, format="%.3f"),
-            "Computed spacing_mm": st.column_config.NumberColumn("Computed spacing (mm)", disabled=True, format="%.3f"),
-            "Pe_transfer/strand_kN": st.column_config.NumberColumn("Pe_transfer / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
+            "Computed spacing_mm": st.column_config.NumberColumn("Layout spacing (mm)", disabled=True, format="%.3f"),
+            "Pe_transfer/strand_kN": st.column_config.NumberColumn("🟨 Pe_transfer / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
             "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
-            "Pe_eff_final/strand_kN": st.column_config.NumberColumn("Pe_eff_final / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
-            "Left debond m": st.column_config.NumberColumn("Left debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
-            "Right debond m": st.column_config.NumberColumn("Right debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
+            "Pe_eff_final/strand_kN": st.column_config.NumberColumn("🟨 Pe_eff_final / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
+            "Left debond m": st.column_config.NumberColumn("🟨 Left debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
+            "Right debond m": st.column_config.NumberColumn("🟨 Right debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
             "Note": st.column_config.TextColumn("Note"),
         },
         key="girder_strand_layout_editor",
     )
     normalized = _normalize_girder_strand_layout_table(edited, span_length_m=float(span), debond_model=str(debond_model))
     normalized = _apply_computed_girder_strand_spacing(normalized, geometry)
-    st.session_state["girder_strand_layout_table"] = normalized
+    _store_girder_strand_layout_and_rerun_on_change(current, normalized)
+
+    with st.expander("Computed detailing / advanced strand row data", expanded=False):
+        audit_columns = [column for column in GIRDER_STRAND_LAYOUT_AUDIT_COLUMNS if column in normalized.columns]
+        st.dataframe(normalized[audit_columns], use_container_width=True, hide_index=True)
 
     errors, warnings = _validate_girder_strand_layout(normalized, span_length_m=float(span), geometry=geometry)
     metrics = [

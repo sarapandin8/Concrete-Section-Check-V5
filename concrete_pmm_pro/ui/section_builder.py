@@ -436,6 +436,10 @@ def _is_precast_u_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")) == "u_girder"
 
 
+def _is_precast_box_beam(preset: dict[str, Any]) -> bool:
+    return str(preset.get("key", "")) == "box_section_fillet"
+
+
 def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
@@ -459,7 +463,12 @@ def _is_composite_capable_preset(preset: dict[str, Any]) -> bool:
     # for the Precast I-Girder as well as Precast Plank Girder presets.  The deck
     # metadata is still explicit UI input and remains separate from gross
     # section properties and all PMM/prestress solver paths.
-    return _is_parametric_i_girder(preset) or _is_precast_u_girder(preset) or _is_parametric_plank_girder(preset)
+    return (
+        _is_parametric_i_girder(preset)
+        or _is_precast_u_girder(preset)
+        or _is_precast_box_beam(preset)
+        or _is_parametric_plank_girder(preset)
+    )
 
 
 def _girder_section_family(preset: dict[str, Any]) -> str:
@@ -673,6 +682,8 @@ def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> fl
         return float(params.get("B1_mm", 0.0) or 0.0)
     if _is_precast_u_girder(preset):
         return float(params.get("top_" + "width" + "_mm", 0.0) or params.get("B1_mm", 0.0) or 0.0)
+    if _is_precast_box_beam(preset):
+        return float(params.get("width" + "_mm", 0.0) or params.get("B_mm", 0.0) or 0.0)
     if _is_parametric_plank_girder(preset):
         b = float(params.get("B_mm", 0.0) or 0.0)
         b1 = float(params.get("b1_mm", 0.0) or 0.0)
@@ -689,6 +700,8 @@ def _effective_width_top_width_basis_note(preset: dict[str, Any]) -> str:
         return "Auto from I-Girder top flange width B1."
     if _is_precast_u_girder(preset):
         return "Auto from U-Girder top width."
+    if _is_precast_box_beam(preset):
+        return "Auto from Box Beam top slab width."
     if _is_parametric_plank_girder(preset):
         if str(preset.get("key", "")) == "parametric_plank_girder_interior":
             return "Auto from Interior Plank top width B - 2b1."
@@ -1202,7 +1215,7 @@ def _render_section_definition_panel(
         if _is_composite_capable_preset(preset):
             params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
-            if _is_parametric_i_girder(preset) or _is_precast_u_girder(preset):
+            if _is_parametric_i_girder(preset) or _is_precast_u_girder(preset) or _is_precast_box_beam(preset):
                 params.update(_render_precast_composite_girder_metadata_inputs(preset))
 
             params = _render_effective_width_helper(preset, params)

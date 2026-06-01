@@ -201,6 +201,7 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     plank = preset_by_key("parametric_plank_girder_interior")
     general_i = preset_by_key("psc_i_girder")
     u_girder = preset_by_key("u_girder")
+    box_beam = preset_by_key("box_section_fillet")
 
     assert i_girder["display_name"] == "Precast I-Girder"
     assert i_girder["category"] == "Precast Composite Girder"
@@ -209,10 +210,14 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     assert general_i["category"] == "General / Non-composite Girder"
     assert u_girder["display_name"] == "Precast U-Girder"
     assert u_girder["category"] == "Precast Composite Girder"
+    assert box_beam["display_name"] == "Box Beam"
+    assert box_beam["category"] == "Precast Composite Girder"
     assert section_builder._girder_section_family(i_girder) == "precast_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(i_girder) == "Composite transformed"
     assert section_builder._girder_section_family(u_girder) == "precast_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(u_girder) == "Composite transformed"
+    assert section_builder._girder_section_family(box_beam) == "precast_composite_girder"
+    assert section_builder._recommended_service_basis_for_preset(box_beam) == "Composite transformed"
     assert section_builder._girder_section_family(general_i) == "general_non_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(general_i) == "Precast gross"
 

@@ -241,7 +241,7 @@ def box_section_fillet(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
-    name: str = "Box section with fillet",
+    name: str = "Box Beam",
 ) -> SectionGeometry:
     top, bottom, left, right = _resolve_wall_thicknesses(
         t_top_mm=t_top_mm,

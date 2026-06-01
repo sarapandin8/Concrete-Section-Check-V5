@@ -183,8 +183,8 @@
     },
     {
       "key": "box_section_fillet",
-      "display_name": "Box Section with Fillet",
-      "category": "General / Non-composite Girder",
+      "display_name": "Box Beam",
+      "category": "Precast Composite Girder",
       "generator": "box_section_fillet",
       "dimensions_generator": "box_section_fillet",
       "parameters": [

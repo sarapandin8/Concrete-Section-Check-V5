@@ -3351,7 +3351,13 @@ def _clean_girder_stress_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 _BEAM_SLS_LOAD_ANALYSIS_COLUMNS = ("Active", "Station x (m)", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note")
 _DIRECT_BEAM_SLS_BASIS_MAP = {
     "precast gross": "precast_gross",
+    "precast gross section": "precast_gross",
+    "gross": "precast_gross",
+    "gross section": "precast_gross",
     "composite transformed": "composite_transformed",
+    "composite transformed section": "composite_transformed",
+    "transformed composite": "composite_transformed",
+    "composite": "composite_transformed",
 }
 
 
@@ -3529,11 +3535,40 @@ def _beam_sls_load_row_label(row: Mapping[str, object]) -> str:
     return f"{station_label} — {case_name} — {stage} / {basis}"
 
 
+def _beam_sls_normalized_section_basis_text(value: object) -> str:
+    """Normalize imported/edited section-basis text before Analysis routing.
+
+    LOADS.IMPORT1.2 keeps the Loads row as the source of truth, but makes the
+    Analysis tab tolerant of Excel-import whitespace, labels such as
+    ``Composite transformed section``, and simple aliases.  This prevents a
+    valid Service-stage row from silently falling back to precast gross merely
+    because the display text is not an exact dictionary key.
+    """
+
+    if _analysis_value_is_blank(value):
+        return ""
+    text = str(value).replace("\xa0", " ").strip().casefold()
+    text = " ".join(text.replace("_", " ").replace("-", " ").split())
+    if "composite" in text and ("transform" in text or text == "composite"):
+        return "composite transformed"
+    if "precast" in text and "gross" in text:
+        return "precast gross"
+    if text in {"gross", "gross section"}:
+        return "precast gross"
+    return text
+
+
+def _beam_sls_requested_basis_key(row: Mapping[str, object]) -> str | None:
+    """Return the requested Analysis basis key before availability checks."""
+
+    basis_text = _beam_sls_normalized_section_basis_text(row.get("Section Basis"))
+    return _DIRECT_BEAM_SLS_BASIS_MAP.get(basis_text)
+
+
 def _beam_sls_load_basis_key(row: Mapping[str, object], available_basis_names: list[str]) -> str | None:
-    basis_text = str(row.get("Section Basis") or "").strip().casefold()
-    basis_key = _DIRECT_BEAM_SLS_BASIS_MAP.get(basis_text)
-    if basis_key in available_basis_names:
-        return basis_key
+    requested_basis_key = _beam_sls_requested_basis_key(row)
+    if requested_basis_key in available_basis_names:
+        return requested_basis_key
     return None
 
 
@@ -3679,15 +3714,22 @@ def _render_girder_sls_check_case_panel(
                 help="Positive sagging moment gives top compression and bottom tension.",
             )
     else:
+        requested_basis_name = _beam_sls_requested_basis_key(selected_load_row)
         mapped_basis_name = _beam_sls_load_basis_key(selected_load_row, basis_names)
         if mapped_basis_name is not None:
             basis_name = mapped_basis_name
             st.info(f"Using section basis from selected Loads row: {basis_options.labels.get(basis_name, basis_name)}.")
         else:
-            st.warning(
-                "The selected Loads row uses a staged/mixed or unsupported section basis. Choose the basis for this preview explicitly; "
-                "final staged summation is a future milestone."
-            )
+            if requested_basis_name == "composite_transformed" and "composite_transformed" not in basis_names:
+                st.warning(
+                    "The selected Loads row requests Composite transformed section, but composite transformed properties are not active. "
+                    "Enable composite deck/topping metadata in Section Builder or intentionally choose a precast-gross preview below."
+                )
+            else:
+                st.warning(
+                    "The selected Loads row uses a staged/mixed or unsupported section basis. Choose the basis for this preview explicitly; "
+                    "final staged summation is a future milestone."
+                )
             override_key = f"girder_sls_load_basis_override_name_{case_key}"
             if st.session_state.get(override_key) not in basis_names:
                 st.session_state[override_key] = basis_names[0]

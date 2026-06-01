@@ -39,3 +39,17 @@ def test_analysis_preview_groups_beam_girder_sls_rows_into_stage_tabs() -> None:
     assert "Each stage keeps its own code-limit/profile/prestress UI state" in SOURCE
     assert "Station x (m)" in SOURCE
     assert "x={station_text} m" in SOURCE
+
+
+def test_analysis_normalizes_imported_section_basis_text_before_routing() -> None:
+    assert "LOADS.IMPORT1.2" in SOURCE
+    assert "_beam_sls_normalized_section_basis_text" in SOURCE
+    assert "Composite transformed section" in SOURCE
+    assert "_beam_sls_requested_basis_key" in SOURCE
+    assert '"composite transformed section": "composite_transformed"' in SOURCE
+
+
+def test_analysis_warns_when_service_row_requests_composite_but_basis_is_not_active() -> None:
+    assert "requests Composite transformed section, but composite transformed properties are not active" in SOURCE
+    assert "Enable composite deck/topping metadata in Section Builder" in SOURCE
+    assert "intentionally choose a precast-gross preview below" in SOURCE

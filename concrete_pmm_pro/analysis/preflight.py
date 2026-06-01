@@ -12,6 +12,12 @@ from typing import Any
 from concrete_pmm_pro.code_checks import aci_beta1
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisSettings
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar
+from concrete_pmm_pro.core.reinforcement_system import (
+    effective_prestress_for_analysis,
+    effective_rebars_for_analysis,
+    ordinary_rebar_enabled,
+    prestressing_steel_enabled,
+)
 
 
 @dataclass(frozen=True)
@@ -76,24 +82,30 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
     if not strength_load_cases:
         errors.append(f"No active {settings.strength_load_type} load cases are available.")
 
-    included_rebars = rebars if settings.include_rebars else []
-    included_prestress = prestress_elements if settings.include_prestress else []
+    rebar_system_enabled = ordinary_rebar_enabled(session_state, default=True)
+    prestress_system_enabled = prestressing_steel_enabled(session_state, default=True)
+    included_rebars = effective_rebars_for_analysis(rebars, session_state, settings)
+    included_prestress = effective_prestress_for_analysis(prestress_elements, session_state, settings)
     if not included_rebars and not included_prestress:
         errors.append("No active longitudinal reinforcement or bonded prestress elements are available for PMM analysis.")
 
     rebars_valid = _get_session_value(session_state, "rebars_valid_for_analysis", None)
-    if rebars_valid is False and (settings.include_rebars or rebars):
+    if rebar_system_enabled and rebars_valid is False and (settings.include_rebars or rebars):
         errors.append("Rebars are not valid for analysis.")
 
     prestress_valid = _get_session_value(session_state, "prestress_valid_for_analysis", None)
-    if settings.include_prestress and prestress_elements and prestress_valid is False:
+    if prestress_system_enabled and settings.include_prestress and prestress_elements and prestress_valid is False:
         errors.append("Prestress elements are not valid for analysis.")
 
-    if not rebars and prestress_elements:
-        info.append("No active ordinary rebar is defined; PMM analysis will rely on active prestress elements. Check minimum ordinary reinforcement and detailing requirements separately.")
-    elif rebars and not prestress_elements:
-        info.append("No active prestress elements are defined; ULS PMM analysis will proceed as RC-only.")
-    if any(not element.bonded for element in prestress_elements):
+    if not rebar_system_enabled:
+        info.append("Ordinary rebar is disabled for this section; stored rebar rows are preserved but ignored by analysis.")
+    if not prestress_system_enabled:
+        info.append("Prestressing steel is disabled for this section; stored prestress rows are preserved but ignored by analysis.")
+    if not included_rebars and included_prestress:
+        info.append("No active ordinary rebar is included; PMM analysis will rely on active prestress elements. Check minimum ordinary reinforcement and detailing requirements separately.")
+    elif included_rebars and not included_prestress:
+        info.append("No active prestress elements are included; ULS PMM analysis will proceed as RC-only.")
+    if any(not element.bonded for element in included_prestress):
         warnings.append("Unbonded prestress elements are present; unbonded prestress modeling is future work.")
     if not rebar_materials:
         warnings.append("Project-defined rebar material list is empty.")
@@ -106,11 +118,14 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
         [
             f"Active ULS load cases: {uls_count}.",
             f"SLS load cases stored: {sls_count}.",
-            f"Rebars: {len(rebars)}.",
-            f"Total As = {_total_as(rebars):,.1f} mm^2.",
-            f"Prestress elements: {len(prestress_elements)}.",
-            f"Total Aps = {_total_aps(prestress_elements):,.1f} mm^2.",
-            f"Total Pe_eff = {_total_pe_eff(prestress_elements):,.1f} N.",
+            f"Stored rebars: {len(rebars)}; included rebars: {len(included_rebars)}.",
+            f"Included As = {_total_as(included_rebars):,.1f} mm^2.",
+            f"Total As = {_total_as(included_rebars):,.1f} mm^2.",
+            f"Stored prestress elements: {len(prestress_elements)}; included prestress elements: {len(included_prestress)}.",
+            f"Included Aps = {_total_aps(included_prestress):,.1f} mm^2.",
+            f"Total Aps = {_total_aps(included_prestress):,.1f} mm^2.",
+            f"Included Pe_eff = {_total_pe_eff(included_prestress):,.1f} N.",
+            f"Total Pe_eff = {_total_pe_eff(included_prestress):,.1f} N.",
         ]
     )
     if sls_count:
@@ -138,8 +153,8 @@ def build_analysis_input_from_session_state(session_state: Any) -> AnalysisInput
         concrete_material=_get_session_value(session_state, "concrete_material"),
         rebar_materials=list(_get_session_value(session_state, "rebar_materials", []) or []),
         prestress_materials=list(_get_session_value(session_state, "prestress_materials", []) or []),
-        rebars=list(_get_session_value(session_state, "rebars", []) or []),
-        prestress_elements=list(_get_session_value(session_state, "prestress_elements", []) or []),
+        rebars=effective_rebars_for_analysis(list(_get_session_value(session_state, "rebars", []) or []), session_state, settings),
+        prestress_elements=effective_prestress_for_analysis(list(_get_session_value(session_state, "prestress_elements", []) or []), session_state, settings),
         load_cases=load_cases,
         settings=settings,
     )

@@ -480,15 +480,16 @@ def _serviceability_analysis_input_from_session() -> AnalysisInput | None:
     concrete_material = st.session_state.get("concrete_material")
     if section_geometry is None or concrete_material is None:
         return None
+    settings = _settings_from_session()
     return AnalysisInput(
         section_geometry=section_geometry,
         concrete_material=concrete_material,
         rebar_materials=list(st.session_state.get("rebar_materials", []) or []),
         prestress_materials=list(st.session_state.get("prestress_materials", []) or []),
-        rebars=list(st.session_state.get("rebars", []) or []),
-        prestress_elements=list(st.session_state.get("prestress_elements", []) or []),
+        rebars=effective_rebars_for_analysis(list(st.session_state.get("rebars", []) or []), st.session_state, settings),
+        prestress_elements=effective_prestress_for_analysis(list(st.session_state.get("prestress_elements", []) or []), st.session_state, settings),
         load_cases=list(st.session_state.get("load_cases", []) or []),
-        settings=_settings_from_session(),
+        settings=settings,
     )
 
 
@@ -1742,14 +1743,18 @@ def _render_input_summary() -> None:
         for load_case in st.session_state.get("load_cases", [])
         if load_case.active and load_case.load_type == settings.strength_load_type
     ]
-    rebars = st.session_state.get("rebars", [])
-    prestress_elements = st.session_state.get("prestress_elements", [])
+    stored_rebars = list(st.session_state.get("rebars", []) or [])
+    stored_prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
+    rebars = effective_rebars_for_analysis(stored_rebars, st.session_state, settings)
+    prestress_elements = effective_prestress_for_analysis(stored_prestress_elements, st.session_state, settings)
     total_as = sum(rebar.area_mm2 for rebar in rebars)
     total_aps = sum(element.total_area_mm2 for element in prestress_elements)
     total_pe = sum(element.pe_eff_n * element.count for element in prestress_elements)
     bonded_prestress_elements = [element for element in prestress_elements if element.bonded]
     unbonded_prestress_elements = [element for element in prestress_elements if not element.bonded]
-    prototype_label = "RC + Bonded Prestress PMM Prototype" if settings.include_prestress and bonded_prestress_elements else "RC PMM Prototype"
+    rebar_system_enabled = ordinary_rebar_enabled(st.session_state, default=True)
+    prestress_system_enabled = prestressing_steel_enabled(st.session_state, default=True)
+    prototype_label = "RC + Bonded Prestress PMM Prototype" if settings.include_prestress and prestress_system_enabled and bonded_prestress_elements else "RC PMM Prototype"
     prestress_check_summary = check_prestress_elements_for_analysis(prestress_elements)
 
     st.subheader("Analysis Workspace Overview")
@@ -1772,8 +1777,11 @@ def _render_input_summary() -> None:
         {
             "title": "Rebar / Prestress",
             "value": f"{len(rebars):,} / {len(prestress_elements):,}",
-            "detail": f"Bonded PS {len(bonded_prestress_elements):,}; unbonded ignored {len(unbonded_prestress_elements):,}",
-            "status": "warning" if unbonded_prestress_elements else "neutral",
+            "detail": (
+                f"Included. Stored {len(stored_rebars):,} / {len(stored_prestress_elements):,}; "
+                f"Bonded PS {len(bonded_prestress_elements):,}; unbonded ignored {len(unbonded_prestress_elements):,}"
+            ),
+            "status": "warning" if unbonded_prestress_elements or not rebar_system_enabled or not prestress_system_enabled else "neutral",
         },
         {
             "title": "Solver Mode",
@@ -1784,6 +1792,10 @@ def _render_input_summary() -> None:
     ]
     _render_analysis_summary_strip(overview_cards, columns=4)
 
+    if not rebar_system_enabled:
+        st.info("Ordinary rebar is disabled for this section; stored rebar rows are preserved but ignored by analysis.")
+    if not prestress_system_enabled:
+        st.info("Prestressing steel is disabled for this section; stored prestress rows are preserved but ignored by analysis.")
     if unbonded_prestress_elements:
         st.warning("Unbonded prestress elements are present and are ignored by the current PMM/SLS solvers.")
     if not settings.subtract_rebar_displaced_concrete:
@@ -1797,8 +1809,8 @@ def _render_input_summary() -> None:
         cols = st.columns(4)
         cols[0].metric("Section available", "Yes" if section_geometry is not None else "No")
         cols[1].metric("Strength load cases", f"{len(load_cases):,}")
-        cols[2].metric("Rebars", f"{len(rebars):,}")
-        cols[3].metric("Prestress elements", f"{len(prestress_elements):,}")
+        cols[2].metric("Rebars", f"{len(rebars):,} included", f"stored {len(stored_rebars):,}")
+        cols[3].metric("Prestress elements", f"{len(prestress_elements):,} included", f"stored {len(stored_prestress_elements):,}")
 
         ps_count_cols = st.columns(2)
         ps_count_cols[0].metric("Bonded prestress elements", f"{len(bonded_prestress_elements):,}")
@@ -1813,7 +1825,7 @@ def _render_input_summary() -> None:
             cols2[0].metric("Concrete material", "Missing")
             cols2[1].metric("Concrete f'c", "N/A")
             cols2[2].metric("beta1", "N/A")
-        cols2[3].metric("Include prestress", "Yes" if settings.include_prestress else "No")
+        cols2[3].metric("Section systems", f"Rebar {'ON' if rebar_system_enabled else 'OFF'} / PS {'ON' if prestress_system_enabled else 'OFF'}")
 
         cols3 = st.columns(3)
         cols3[0].metric("Total As", f"{total_as:,.1f} mm^2")

@@ -504,3 +504,22 @@ def test_project_session_round_trip_preserves_girder_strand_layout_metadata() ->
     assert restored["girder_strand_layout_table"].iloc[0]["Group ID"] == "Row 2"
     assert restored["girder_strand_layout_table"].iloc[0]["Right debond m"] == 3.0
     assert restored["girder_prestress_system_settings"]["debond_model"] == "Left/right independent"
+
+
+def test_project_io_preserves_section_reinforcement_system_flags() -> None:
+    session = {
+        "section_has_ordinary_rebar": False,
+        "section_has_prestressing_steel": True,
+        "reinforcement_flags_preset_key": "parametric_i_girder",
+    }
+
+    project = project_from_session_state(session)
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert project.metadata["section_has_ordinary_rebar"] is False
+    assert project.metadata["section_has_prestressing_steel"] is True
+    assert project.metadata["reinforcement_flags_preset_key"] == "parametric_i_girder"
+    assert restored["section_has_ordinary_rebar"] is False
+    assert restored["section_has_prestressing_steel"] is True
+    assert restored["reinforcement_flags_preset_key"] == "parametric_i_girder"

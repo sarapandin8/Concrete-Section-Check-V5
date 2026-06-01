@@ -11,6 +11,11 @@ from pydantic import ValidationError
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
 from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
+from concrete_pmm_pro.core.reinforcement_system import (
+    ORDINARY_REBAR_FLAG_KEY,
+    PRESTRESSING_STEEL_FLAG_KEY,
+    REINFORCEMENT_FLAGS_PRESET_KEY,
+)
 from concrete_pmm_pro.core.models import LoadCase, PrestressElement, Rebar
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
@@ -184,7 +189,13 @@ def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str,
 
 def project_from_session_state(session_state: Any) -> ProjectModel:
     metadata = dict(_get_session_value(session_state, "project_metadata", {}) or {})
-    for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis"):
+    for flag_name in (
+        "rebars_valid_for_analysis",
+        "prestress_valid_for_analysis",
+        ORDINARY_REBAR_FLAG_KEY,
+        PRESTRESSING_STEEL_FLAG_KEY,
+        REINFORCEMENT_FLAGS_PRESET_KEY,
+    ):
         flag_value = _get_session_value(session_state, flag_name, None)
         if flag_value is not None:
             metadata[flag_name] = flag_value
@@ -527,7 +538,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     )
     session_state["custom_stress_check_points_table"] = stress_check_points_to_dataframe(project.custom_stress_check_points)
 
-    for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis"):
+    for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis", ORDINARY_REBAR_FLAG_KEY, PRESTRESSING_STEEL_FLAG_KEY):
         if flag_name in project.metadata:
             session_state[flag_name] = bool(project.metadata[flag_name])
+    if REINFORCEMENT_FLAGS_PRESET_KEY in project.metadata:
+        session_state[REINFORCEMENT_FLAGS_PRESET_KEY] = project.metadata[REINFORCEMENT_FLAGS_PRESET_KEY]
     session_state["project_metadata"] = dict(project.metadata)

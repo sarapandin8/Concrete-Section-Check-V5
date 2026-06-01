@@ -12,6 +12,7 @@ import streamlit as st
 from shapely.geometry import Point, Polygon
 
 from concrete_pmm_pro.core.models import Rebar, SectionGeometry
+from concrete_pmm_pro.core.reinforcement_system import ordinary_rebar_enabled, prestressing_steel_enabled
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.visualization import create_section_preview
 
@@ -624,6 +625,20 @@ def render_rebar_page() -> None:
 
     st.caption("Define ordinary reinforcement coordinates, bar sizes, and materials used by the active section analysis.")
 
+    if not ordinary_rebar_enabled(st.session_state, default=True):
+        st.info(
+            "Ordinary rebar is disabled for the current section in Section Builder. "
+            "Stored Rebar table data is preserved, but ordinary rebar is ignored by analysis until you enable it again."
+        )
+        with st.expander("Stored Rebar table preview", expanded=False):
+            table = st.session_state.get("rebar_table")
+            if table is None:
+                st.caption("No stored Rebar table is available yet.")
+            else:
+                st.dataframe(_ensure_rebar_table_columns(pd.DataFrame(table)), use_container_width=True, hide_index=True)
+        st.session_state["rebars_valid_for_analysis"] = True
+        return
+
     if "rebar_table" not in st.session_state:
         st.session_state["rebar_table"] = _default_rebar_table(rebar_db)
     st.session_state["rebar_table"] = _ensure_rebar_table_columns(st.session_state["rebar_table"])
@@ -690,7 +705,7 @@ def render_rebar_page() -> None:
                 geometry_errors,
                 geometry is not None,
                 valid_for_analysis,
-                active_prestress_count=len(st.session_state.get("prestress_elements", []) or []),
+                active_prestress_count=(len(st.session_state.get("prestress_elements", []) or []) if prestressing_steel_enabled(st.session_state, default=True) else 0),
             )
             st.markdown(
                 '<div class="cpmm-rebar-note">Coordinates are in mm. x is positive to the right; y is positive upward in the section preview.</div>',
@@ -710,7 +725,7 @@ def render_rebar_page() -> None:
                 st.session_state.get("section_dimensions", []),
                 "symbol_value",
                 st.session_state["rebars"],
-                st.session_state.get("prestress_elements", []),
+                st.session_state.get("prestress_elements", []) if prestressing_steel_enabled(st.session_state, default=True) else [],
             )
             preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=36, b=10))
             st.plotly_chart(

@@ -17,6 +17,14 @@ from concrete_pmm_pro.core.concrete_materials import (
     ensure_concrete_material_library,
 )
 from concrete_pmm_pro.core.models import ConcreteMaterial
+from concrete_pmm_pro.core.reinforcement_system import (
+    ORDINARY_REBAR_FLAG_KEY,
+    PRESTRESSING_STEEL_FLAG_KEY,
+    REINFORCEMENT_FLAGS_PRESET_KEY,
+    default_section_reinforcement_flags,
+    ordinary_rebar_enabled,
+    prestressing_steel_enabled,
+)
 from concrete_pmm_pro.geometry import default_registry
 from concrete_pmm_pro.geometry.effective_width import (
     EffectiveWidthInput,
@@ -499,6 +507,72 @@ def _recommended_service_basis_for_preset(preset: dict[str, Any]) -> str:
     if _girder_section_family(preset) == "precast_composite_girder":
         return "Composite transformed"
     return "Precast gross"
+
+
+def _default_reinforcement_flags_for_preset(preset: dict[str, Any]) -> tuple[bool, bool]:
+    settings = _analysis_mode_from_session_state()
+    return default_section_reinforcement_flags(
+        member_type=settings.member_type,
+        section_category=str(preset.get("category", "")),
+        section_preset_key=str(preset.get("key", "")),
+        girder_section_family=_girder_section_family(preset),
+    )
+
+
+def _ensure_reinforcement_flags_for_preset(preset: dict[str, Any]) -> None:
+    preset_key = str(preset.get("key", ""))
+    default_rebar, default_prestress = _default_reinforcement_flags_for_preset(preset)
+    if (
+        st.session_state.get(REINFORCEMENT_FLAGS_PRESET_KEY) != preset_key
+        or ORDINARY_REBAR_FLAG_KEY not in st.session_state
+        or PRESTRESSING_STEEL_FLAG_KEY not in st.session_state
+    ):
+        st.session_state[ORDINARY_REBAR_FLAG_KEY] = default_rebar
+        st.session_state[PRESTRESSING_STEEL_FLAG_KEY] = default_prestress
+        st.session_state[REINFORCEMENT_FLAGS_PRESET_KEY] = preset_key
+
+
+def _render_reinforcement_prestress_system_panel(preset: dict[str, Any]) -> None:
+    """Render section-level rebar/prestress participation switches."""
+
+    _ensure_reinforcement_flags_for_preset(preset)
+    default_rebar, default_prestress = _default_reinforcement_flags_for_preset(preset)
+    family_label = _girder_section_family_label(preset)
+    st.markdown("##### Reinforcement / Prestress System")
+    st.markdown(
+        '<div class="cpmm-section-note">Choose which internal steel systems belong to this section. '
+        'Disabling a system preserves the existing input table but excludes it from previews and analysis input assembly.</div>',
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.checkbox(
+            "Ordinary rebar in this section",
+            value=ordinary_rebar_enabled(st.session_state, default=default_rebar),
+            key=ORDINARY_REBAR_FLAG_KEY,
+            help="When disabled, stored Rebar rows are kept but ignored by PMM/SLS analysis and hidden from the default section preview.",
+        )
+    with col2:
+        st.checkbox(
+            "Prestressing steel in this section",
+            value=prestressing_steel_enabled(st.session_state, default=default_prestress),
+            key=PRESTRESSING_STEEL_FLAG_KEY,
+            help="When disabled, stored Prestress rows/strand layout data are kept but ignored by analysis and hidden from the default section preview.",
+        )
+
+    rebar_status = "Enabled" if ordinary_rebar_enabled(st.session_state, default=default_rebar) else "Disabled"
+    ps_status = "Enabled" if prestressing_steel_enabled(st.session_state, default=default_prestress) else "Disabled"
+    st.markdown(
+        _kv_panel_html(
+            [
+                ("Selected section family", family_label),
+                ("Ordinary rebar", rebar_status),
+                ("Prestressing steel", ps_status),
+                ("Default for this preset", f"Rebar {'ON' if default_rebar else 'OFF'} / Prestress {'ON' if default_prestress else 'OFF'}"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
@@ -1176,6 +1250,7 @@ def _render_section_definition_panel(
 
         _render_member_type_section_guidance(preset)
         _render_axis_convention_card()
+        _render_reinforcement_prestress_system_panel(preset)
 
         with st.expander("Browse by geometry family", expanded=False):
             st.caption(
@@ -1273,6 +1348,8 @@ def _store_valid_section_state(preset: dict[str, Any], params: dict[str, Any], g
     st.session_state["section_category"] = str(preset.get("category", ""))
     st.session_state["girder_section_family"] = _girder_section_family(preset)
     st.session_state["girder_service_default_basis"] = _recommended_service_basis_for_preset(preset)
+    st.session_state["section_has_ordinary_rebar"] = ordinary_rebar_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[0])
+    st.session_state["section_has_prestressing_steel"] = prestressing_steel_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[1])
     st.session_state["section_parameters"] = params
     st.session_state["section_geometry"] = geometry
     st.session_state["section_dimensions"] = dimensions
@@ -1307,8 +1384,10 @@ def _render_section_preview_panel(
     label_mode: str,
     validation: ValidationResult,
 ) -> None:
-    rebars = st.session_state.get("rebars", [])
-    prestress_elements = st.session_state.get("prestress_elements", [])
+    stored_rebars = st.session_state.get("rebars", [])
+    stored_prestress_elements = st.session_state.get("prestress_elements", [])
+    rebars = list(stored_rebars or []) if ordinary_rebar_enabled(st.session_state, default=True) else []
+    prestress_elements = list(stored_prestress_elements or []) if prestressing_steel_enabled(st.session_state, default=True) else []
 
     with st.container(border=True):
         st.markdown("#### Live Section Preview")

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from shapely.geometry import LineString, Point, Polygon
 
 from concrete_pmm_pro.core.models import PrestressElement, SectionGeometry
+from concrete_pmm_pro.core.reinforcement_system import ordinary_rebar_enabled, prestressing_steel_enabled
 from concrete_pmm_pro.core.units import kN_to_N
 from concrete_pmm_pro.data.prestress_tendon_products import (
     DEFAULT_STRAND_AREA_MM2,
@@ -2426,6 +2427,26 @@ def render_prestress_page() -> None:
     st.markdown(_PRESTRESS_PAGE_CSS, unsafe_allow_html=True)
     prestress_db = _combined_prestress_database(load_prestress_steel_database(), st.session_state.get("prestress_materials", []))
 
+    if not prestressing_steel_enabled(st.session_state, default=True):
+        st.info(
+            "Prestressing steel is disabled for the current section in Section Builder. "
+            "Stored Prestress table and girder strand/debonding data are preserved, but prestress is ignored by analysis until you enable it again."
+        )
+        with st.expander("Stored Prestress table preview", expanded=False):
+            table = st.session_state.get("prestress_table")
+            if table is None:
+                st.caption("No stored Prestress table is available yet.")
+            else:
+                st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+        with st.expander("Stored girder strand/debonding metadata", expanded=False):
+            strand_table = st.session_state.get("girder_strand_layout_table")
+            if strand_table is None:
+                st.caption("No stored strand layout table is available yet.")
+            else:
+                st.dataframe(pd.DataFrame(strand_table), use_container_width=True, hide_index=True)
+        st.session_state["prestress_valid_for_analysis"] = True
+        return
+
     if "prestress_table" not in st.session_state:
         st.session_state["prestress_table"] = _default_prestress_table(prestress_db)
     st.session_state["prestress_table"] = normalize_prestress_table_for_effective_input_sync(pd.DataFrame(st.session_state["prestress_table"]), prestress_db)
@@ -2559,7 +2580,7 @@ def render_prestress_page() -> None:
                 "Use a girder preset or the generic prestress table if this member intentionally has prestressing."
             )
 
-    active_rebar_count = len(st.session_state.get("rebars", []) or [])
+    active_rebar_count = len(st.session_state.get("rebars", []) or []) if ordinary_rebar_enabled(st.session_state, default=True) else 0
 
     with summary_slot.container():
         _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis, active_rebar_count)
@@ -2588,7 +2609,7 @@ def render_prestress_page() -> None:
                     geometry,
                     st.session_state.get("section_dimensions", []),
                     "symbol_value",
-                    st.session_state.get("rebars", []),
+                    st.session_state.get("rebars", []) if ordinary_rebar_enabled(st.session_state, default=True) else [],
                     result.elements,
                 ),
                 use_container_width=True,

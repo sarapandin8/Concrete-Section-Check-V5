@@ -212,3 +212,42 @@ def test_check_analysis_readiness_errors_when_no_longitudinal_reinforcement() ->
 
     assert result.ready is False
     assert any("No active longitudinal reinforcement" in error for error in result.errors)
+
+
+def test_section_rebar_flag_disables_rebars_without_deleting_prestress() -> None:
+    session = _valid_session()
+    session["section_has_ordinary_rebar"] = False
+
+    analysis_input = build_analysis_input_from_session_state(session)
+    readiness = check_analysis_readiness(session)
+
+    assert analysis_input is not None
+    assert analysis_input.rebars == []
+    assert len(analysis_input.prestress_elements) == 1
+    assert any("Ordinary rebar is disabled" in item for item in readiness.info)
+
+
+def test_section_prestress_flag_disables_prestress_without_deleting_rebars() -> None:
+    session = _valid_session()
+    session["section_has_prestressing_steel"] = False
+
+    analysis_input = build_analysis_input_from_session_state(session)
+    readiness = check_analysis_readiness(session)
+
+    assert analysis_input is not None
+    assert len(analysis_input.rebars) == 1
+    assert analysis_input.prestress_elements == []
+    assert any("Prestressing steel is disabled" in item for item in readiness.info)
+
+
+def test_section_flags_can_make_pmm_not_ready_when_both_systems_disabled() -> None:
+    session = _valid_session()
+    session["section_has_ordinary_rebar"] = False
+    session["section_has_prestressing_steel"] = False
+
+    readiness = check_analysis_readiness(session)
+    analysis_input = build_analysis_input_from_session_state(session)
+
+    assert readiness.ready is False
+    assert analysis_input is None
+    assert any("No active longitudinal reinforcement" in error for error in readiness.errors)

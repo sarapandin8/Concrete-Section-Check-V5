@@ -9,6 +9,7 @@ from typing import Any
 import re
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from pydantic import ValidationError
 from shapely.geometry import Point, Polygon
@@ -16,6 +17,7 @@ from shapely.geometry import Point, Polygon
 from concrete_pmm_pro.core.models import PrestressElement, SectionGeometry
 from concrete_pmm_pro.core.units import kN_to_N
 from concrete_pmm_pro.data.prestress_tendon_products import (
+    DEFAULT_STRAND_AREA_MM2,
     DEFAULT_STRAND_DIAMETER_MM,
     DEFAULT_STRAND_EP_MPA,
     DEFAULT_STRAND_FPY_MPA,
@@ -110,6 +112,52 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
         "Effective prestress after losses for final service. Do not also include prestress in Loads resultant.",
     ),
 ]
+
+GIRDER_STRAND_LAYOUT_COLUMNS = [
+    "Active",
+    "Group ID",
+    "Layer",
+    "Strand Size",
+    "No. Strands",
+    "Area/Strand_mm2",
+    "Total Aps_mm2",
+    "x_mm",
+    "y_mm_from_bottom",
+    "Pe_transfer/strand_kN",
+    "Pe_construction/strand_kN",
+    "Pe_eff_final/strand_kN",
+    "Left debond m",
+    "Right debond m",
+    "Note",
+]
+
+GIRDER_STRAND_LAYOUT_NUMERIC_COLUMNS = [
+    "No. Strands",
+    "Area/Strand_mm2",
+    "Total Aps_mm2",
+    "x_mm",
+    "y_mm_from_bottom",
+    "Pe_transfer/strand_kN",
+    "Pe_construction/strand_kN",
+    "Pe_eff_final/strand_kN",
+    "Left debond m",
+    "Right debond m",
+]
+
+GIRDER_DEBOND_MODE_OPTIONS = [
+    "No debonding",
+    "Symmetric left/right",
+    "Left/right independent",
+]
+
+GIRDER_PRESTRESS_SYSTEM_DEFAULTS = {
+    "girder_system": "Simple supported precast girder",
+    "prestress_type": "Pretensioned straight strands",
+    "span_length_m": 30.0,
+    "station_convention": "x = 0 at left support, x = L at right support",
+    "debond_model": "Left/right independent",
+}
+
 
 
 @dataclass(frozen=True)
@@ -933,6 +981,446 @@ def _render_girder_prestress_force_state_inputs(
     )
 
 
+
+def _girder_prestress_system_settings_from_session() -> dict[str, Any]:
+    """Return normalized simple-supported girder prestress-system settings.
+
+    GIRDER.PS3A intentionally defines the longitudinal convention and span
+    metadata needed by debonding preview only. It does not compute losses or
+    alter Analysis stress equations.
+    """
+
+    current = st.session_state.get("girder_prestress_system_settings", {}) or {}
+    settings = dict(GIRDER_PRESTRESS_SYSTEM_DEFAULTS)
+    settings.update({key: current.get(key, default) for key, default in GIRDER_PRESTRESS_SYSTEM_DEFAULTS.items()})
+    span = _to_float(settings.get("span_length_m"))
+    settings["span_length_m"] = 30.0 if span is None or span <= 0.0 else span
+    if settings.get("debond_model") not in GIRDER_DEBOND_MODE_OPTIONS:
+        settings["debond_model"] = "Left/right independent"
+    return settings
+
+
+def _default_girder_strand_layout_table() -> pd.DataFrame:
+    """Return a small starter strand-group layout for simple-supported girders.
+
+    Rows are editable and are not connected to solver forces in this milestone.
+    They provide a practical commercial-software style starting point for
+    strand rows/layers and left/right debond lengths.
+    """
+
+    rows = [
+        {
+            "Active": True,
+            "Group ID": "Row 1",
+            "Layer": "Bottom row",
+            "Strand Size": "15.2 mm low-relaxation strand",
+            "No. Strands": 12,
+            "Area/Strand_mm2": DEFAULT_STRAND_AREA_MM2,
+            "Total Aps_mm2": 12 * DEFAULT_STRAND_AREA_MM2,
+            "x_mm": 0.0,
+            "y_mm_from_bottom": 100.0,
+            "Pe_transfer/strand_kN": 0.0,
+            "Pe_construction/strand_kN": 0.0,
+            "Pe_eff_final/strand_kN": 0.0,
+            "Left debond m": 0.0,
+            "Right debond m": 0.0,
+            "Note": "Fully bonded starter row",
+        },
+        {
+            "Active": True,
+            "Group ID": "Row 2",
+            "Layer": "Second row",
+            "Strand Size": "15.2 mm low-relaxation strand",
+            "No. Strands": 8,
+            "Area/Strand_mm2": DEFAULT_STRAND_AREA_MM2,
+            "Total Aps_mm2": 8 * DEFAULT_STRAND_AREA_MM2,
+            "x_mm": 0.0,
+            "y_mm_from_bottom": 150.0,
+            "Pe_transfer/strand_kN": 0.0,
+            "Pe_construction/strand_kN": 0.0,
+            "Pe_eff_final/strand_kN": 0.0,
+            "Left debond m": 2.0,
+            "Right debond m": 2.0,
+            "Note": "Example symmetric debond row",
+        },
+        {
+            "Active": True,
+            "Group ID": "Row 3",
+            "Layer": "Third row",
+            "Strand Size": "15.2 mm low-relaxation strand",
+            "No. Strands": 4,
+            "Area/Strand_mm2": DEFAULT_STRAND_AREA_MM2,
+            "Total Aps_mm2": 4 * DEFAULT_STRAND_AREA_MM2,
+            "x_mm": 0.0,
+            "y_mm_from_bottom": 200.0,
+            "Pe_transfer/strand_kN": 0.0,
+            "Pe_construction/strand_kN": 0.0,
+            "Pe_eff_final/strand_kN": 0.0,
+            "Left debond m": 4.0,
+            "Right debond m": 4.0,
+            "Note": "Example longer debond row",
+        },
+    ]
+    return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+
+
+def _strand_layout_existing_rows_by_group(table: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if table is None:
+        return []
+    df = pd.DataFrame(table)
+    if df.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        row_dict = row.to_dict()
+        if any(not _is_blank(row_dict.get(column)) for column in GIRDER_STRAND_LAYOUT_COLUMNS if column in df.columns):
+            rows.append(row_dict)
+    return rows
+
+
+def _normalize_girder_strand_layout_table(
+    table: pd.DataFrame | None,
+    *,
+    span_length_m: float,
+    debond_model: str = "Left/right independent",
+) -> pd.DataFrame:
+    """Normalize the editable strand layout/debonding table.
+
+    This table is metadata for the Beam/Girder SLS workflow. GIRDER.PS3A does
+    not use it to change PMM, SLS stress kernels, or prestress force-state
+    calculations yet.
+    """
+
+    existing = _strand_layout_existing_rows_by_group(table)
+    if not existing:
+        existing = _default_girder_strand_layout_table().to_dict(orient="records")
+    rows: list[dict[str, Any]] = []
+    for i, current in enumerate(existing, start=1):
+        active = _to_bool_default_true(current.get("Active"))
+        group_id = str(current.get("Group ID") or f"Row {i}").strip() or f"Row {i}"
+        no_strands = _to_float(current.get("No. Strands"))
+        no_strands = 0.0 if no_strands is None or no_strands < 0 else float(int(round(no_strands)))
+        area_per = _to_float(current.get("Area/Strand_mm2"))
+        area_per = DEFAULT_STRAND_AREA_MM2 if area_per is None or area_per <= 0.0 else area_per
+        total_aps = no_strands * area_per
+        left_debond = _to_float(current.get("Left debond m"))
+        right_debond = _to_float(current.get("Right debond m"))
+        left_debond = 0.0 if left_debond is None or left_debond < 0.0 else min(float(left_debond), span_length_m)
+        if debond_model == "No debonding":
+            left_debond = 0.0
+            right_debond = 0.0
+        elif debond_model == "Symmetric left/right":
+            right_debond = left_debond
+        else:
+            right_debond = 0.0 if right_debond is None or right_debond < 0.0 else min(float(right_debond), span_length_m)
+        y_from_bottom = _to_float(current.get("y_mm_from_bottom"))
+        x_mm = _to_float(current.get("x_mm"))
+        rows.append(
+            {
+                "Active": active,
+                "Group ID": group_id,
+                "Layer": str(current.get("Layer") or "").strip(),
+                "Strand Size": str(current.get("Strand Size") or "15.2 mm low-relaxation strand").strip(),
+                "No. Strands": int(no_strands),
+                "Area/Strand_mm2": area_per,
+                "Total Aps_mm2": total_aps,
+                "x_mm": 0.0 if x_mm is None else x_mm,
+                "y_mm_from_bottom": 0.0 if y_from_bottom is None else y_from_bottom,
+                "Pe_transfer/strand_kN": _to_float(current.get("Pe_transfer/strand_kN")) or 0.0,
+                "Pe_construction/strand_kN": _to_float(current.get("Pe_construction/strand_kN")) or 0.0,
+                "Pe_eff_final/strand_kN": _to_float(current.get("Pe_eff_final/strand_kN")) or 0.0,
+                "Left debond m": left_debond,
+                "Right debond m": right_debond,
+                "Note": str(current.get("Note") or "").strip(),
+            }
+        )
+    return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+
+
+def _active_girder_strand_layout_rows(table: pd.DataFrame | None) -> pd.DataFrame:
+    df = pd.DataFrame(table)
+    if df.empty:
+        return pd.DataFrame(columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+    if "Active" in df.columns:
+        df = df.loc[df["Active"].map(_to_bool_default_true)].copy()
+    return df.reset_index(drop=True)
+
+
+def _station_candidates_from_debonding(table: pd.DataFrame, span_length_m: float) -> list[float]:
+    stations = {0.0, span_length_m, span_length_m / 2.0}
+    for _, row in _active_girder_strand_layout_rows(table).iterrows():
+        left = _to_float(row.get("Left debond m")) or 0.0
+        right = _to_float(row.get("Right debond m")) or 0.0
+        for x in (left, span_length_m - right):
+            if 0.0 <= x <= span_length_m:
+                stations.add(round(x, 6))
+    return sorted(stations)
+
+
+def _strand_group_effective_at_station(row: pd.Series, x_m: float, span_length_m: float) -> bool:
+    left = _to_float(row.get("Left debond m")) or 0.0
+    right = _to_float(row.get("Right debond m")) or 0.0
+    return x_m >= left - 1e-9 and x_m <= span_length_m - right + 1e-9
+
+
+def _girder_effective_prestress_preview_dataframe(table: pd.DataFrame, span_length_m: float) -> pd.DataFrame:
+    """Return station preview of strand count, Pe(x), and yps(x).
+
+    The preview uses a deliberately simple debonding rule: a group contributes
+    only between its left and right debond cutoff stations. Transfer/development
+    length transition is not modeled in this milestone.
+    """
+
+    rows: list[dict[str, Any]] = []
+    active = _active_girder_strand_layout_rows(table)
+    for x_m in _station_candidates_from_debonding(active, span_length_m):
+        effective = active.loc[active.apply(lambda row: _strand_group_effective_at_station(row, x_m, span_length_m), axis=1)]
+        total_strands = 0
+        total_aps = 0.0
+        weighted_y = 0.0
+        pe_transfer = 0.0
+        pe_construction = 0.0
+        pe_final = 0.0
+        for _, row in effective.iterrows():
+            no_strands = int(_to_float(row.get("No. Strands")) or 0)
+            aps = float(_to_float(row.get("Total Aps_mm2")) or 0.0)
+            y = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
+            total_strands += no_strands
+            total_aps += aps
+            weighted_y += aps * y
+            pe_transfer += no_strands * float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
+            pe_construction += no_strands * float(_to_float(row.get("Pe_construction/strand_kN")) or 0.0)
+            pe_final += no_strands * float(_to_float(row.get("Pe_eff_final/strand_kN")) or 0.0)
+        yps = weighted_y / total_aps if total_aps > 0.0 else None
+        rows.append(
+            {
+                "x_m": x_m,
+                "Effective strands": total_strands,
+                "Aps_eff_mm2": total_aps,
+                "Pe_transfer_eff_kN": pe_transfer,
+                "Pe_construction_eff_kN": pe_construction,
+                "Pe_eff_final_eff_kN": pe_final,
+                "yps_eff_mm_from_bottom": yps,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float, geometry: SectionGeometry | None) -> tuple[list[str], list[str]]:
+    warnings: list[str] = []
+    errors: list[str] = []
+    active = _active_girder_strand_layout_rows(table)
+    if active.empty:
+        warnings.append("No active strand group is defined for the simple-supported girder layout.")
+        return errors, warnings
+    section_depth = None
+    if geometry is not None:
+        try:
+            polygon = to_shapely_polygon(geometry)
+            miny, maxy = polygon.bounds[1], polygon.bounds[3]
+            section_depth = maxy - miny
+        except Exception:
+            section_depth = None
+    for _, row in active.iterrows():
+        group = str(row.get("Group ID") or "strand group")
+        count = int(_to_float(row.get("No. Strands")) or 0)
+        if count <= 0:
+            errors.append(f"{group}: No. Strands must be greater than zero.")
+        left = float(_to_float(row.get("Left debond m")) or 0.0)
+        right = float(_to_float(row.get("Right debond m")) or 0.0)
+        if left + right >= span_length_m:
+            errors.append(f"{group}: left + right debond length leaves no bonded zone within the span.")
+        if left > span_length_m or right > span_length_m:
+            errors.append(f"{group}: debond length must not exceed the span length.")
+        y = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
+        if y < 0.0:
+            errors.append(f"{group}: y from bottom must not be negative.")
+        if section_depth is not None and y > section_depth:
+            warnings.append(f"{group}: y from bottom is outside the current section depth ({section_depth:.1f} mm).")
+        pe_transfer = float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
+        pe_final = float(_to_float(row.get("Pe_eff_final/strand_kN")) or 0.0)
+        if pe_transfer > 0.0 and pe_final > pe_transfer:
+            warnings.append(f"{group}: final effective Pe per strand exceeds transfer Pe per strand; confirm losses/force states.")
+    support_preview = _girder_effective_prestress_preview_dataframe(active, span_length_m)
+    if not support_preview.empty:
+        first = support_preview.iloc[0]
+        if float(first.get("Pe_transfer_eff_kN") or 0.0) <= 0.0:
+            warnings.append("Transfer Pe at x=0 is zero in the debonding preview; support transfer stress may still need manual review.")
+    return errors, warnings
+
+
+def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: SectionGeometry | None) -> go.Figure:
+    fig = go.Figure()
+    bottom_y = _section_bottom_y_from_geometry(geometry)
+    if geometry is not None:
+        try:
+            polygon = to_shapely_polygon(geometry)
+            x, y = polygon.exterior.xy
+            fig.add_trace(go.Scatter(x=list(x), y=list(y), mode="lines", name="Section outline"))
+        except Exception:
+            pass
+    active = _active_girder_strand_layout_rows(table)
+    if not active.empty:
+        marker_sizes = [max(8.0, min(28.0, 6.0 + 1.2 * float(_to_float(v) or 0.0))) for v in active["No. Strands"]]
+        fig.add_trace(
+            go.Scatter(
+                x=[float(_to_float(v) or 0.0) for v in active["x_mm"]],
+                y=[bottom_y + float(_to_float(v) or 0.0) for v in active["y_mm_from_bottom"]],
+                mode="markers+text",
+                text=[str(v) for v in active["Group ID"]],
+                textposition="top center",
+                marker={"size": marker_sizes},
+                name="Strand groups",
+                hovertemplate="%{text}<br>x=%{x:.1f} mm<br>y=%{y:.1f} mm<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        height=360,
+        margin={"l": 20, "r": 20, "t": 30, "b": 20},
+        xaxis_title="section x (mm)",
+        yaxis_title="section y (mm)",
+        showlegend=True,
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    return fig
+
+
+def _plot_girder_longitudinal_debonding_layout(table: pd.DataFrame, span_length_m: float) -> go.Figure:
+    fig = go.Figure()
+    active = _active_girder_strand_layout_rows(table)
+    for i, (_, row) in enumerate(active.iterrows(), start=1):
+        group = str(row.get("Group ID") or f"Row {i}")
+        left = float(_to_float(row.get("Left debond m")) or 0.0)
+        right = float(_to_float(row.get("Right debond m")) or 0.0)
+        bonded_start = min(max(left, 0.0), span_length_m)
+        bonded_end = max(min(span_length_m - right, span_length_m), 0.0)
+        y = len(active) - i + 1
+        fig.add_trace(go.Scatter(x=[0.0, span_length_m], y=[y, y], mode="lines", name=f"{group} span", line={"dash": "dot"}))
+        if bonded_end >= bonded_start:
+            fig.add_trace(
+                go.Scatter(
+                    x=[bonded_start, bonded_end],
+                    y=[y, y],
+                    mode="lines+markers",
+                    name=f"{group} bonded",
+                    line={"width": 7},
+                    hovertemplate=f"{escape(group)}<br>bonded: {bonded_start:.3f} m to {bonded_end:.3f} m<extra></extra>",
+                )
+            )
+    fig.update_layout(
+        height=max(260, 64 + 44 * max(len(active), 1)),
+        margin={"l": 20, "r": 20, "t": 30, "b": 30},
+        xaxis_title="station x from left support (m)",
+        yaxis={"showticklabels": False, "title": "strand group"},
+        showlegend=False,
+    )
+    return fig
+
+
+def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | None) -> None:
+    """Render GIRDER.PS3A strand layout/debonding workflow.
+
+    This is intentionally UI/metadata only. It prepares commercial-style
+    strand layout data for later station-based effective prestress and SLS
+    stress graphs, but does not change current Analysis results.
+    """
+
+    st.markdown("#### Simple-Supported Girder Strand Layout & Debonding")
+    st.markdown(
+        '<div class="cpmm-prestress-table-note">'
+        "GIRDER.PS3A defines pretensioned strand groups and left/right debonded lengths for simple-supported precast girders. "
+        "Debonded strands are internal prestress metadata, not external Loads. Automatic losses and transfer/development length transition are future milestones."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    settings = _girder_prestress_system_settings_from_session()
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.text_input("Girder system", value=settings["girder_system"], disabled=True, key="girder_prestress_system_label")
+    with col2:
+        st.text_input("Prestress type", value=settings["prestress_type"], disabled=True, key="girder_prestress_type_label")
+    with col3:
+        span = st.number_input(
+            "Span length L (m)",
+            min_value=0.1,
+            value=float(settings["span_length_m"]),
+            step=1.0,
+            format="%.3f",
+            key="girder_prestress_span_length_m_input",
+        )
+    with col4:
+        debond_model = st.selectbox(
+            "Debonding model",
+            GIRDER_DEBOND_MODE_OPTIONS,
+            index=GIRDER_DEBOND_MODE_OPTIONS.index(settings["debond_model"]),
+            key="girder_prestress_debond_model_input",
+        )
+    settings["span_length_m"] = float(span)
+    settings["debond_model"] = str(debond_model)
+    st.session_state["girder_prestress_system_settings"] = settings
+
+    current = st.session_state.get("girder_strand_layout_table")
+    table = _normalize_girder_strand_layout_table(
+        pd.DataFrame(current) if current is not None else None,
+        span_length_m=float(span),
+        debond_model=str(debond_model),
+    )
+    edited = st.data_editor(
+        table,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_order=GIRDER_STRAND_LAYOUT_COLUMNS,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Group ID": st.column_config.TextColumn("Group ID"),
+            "Layer": st.column_config.TextColumn("Layer / row"),
+            "Strand Size": st.column_config.TextColumn("Strand size"),
+            "No. Strands": st.column_config.NumberColumn("No. strands", min_value=0, step=1),
+            "Area/Strand_mm2": st.column_config.NumberColumn("Area/strand (mm²)", min_value=0.0, step=1.0, format="%.3f"),
+            "Total Aps_mm2": st.column_config.NumberColumn("Total Aps (mm²)", disabled=True, format="%.3f"),
+            "x_mm": st.column_config.NumberColumn("x from section center (mm)", step=10.0, format="%.3f"),
+            "y_mm_from_bottom": st.column_config.NumberColumn("y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
+            "Pe_transfer/strand_kN": st.column_config.NumberColumn("Pe_transfer / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
+            "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
+            "Pe_eff_final/strand_kN": st.column_config.NumberColumn("Pe_eff_final / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
+            "Left debond m": st.column_config.NumberColumn("Left debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
+            "Right debond m": st.column_config.NumberColumn("Right debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="girder_strand_layout_editor",
+    )
+    normalized = _normalize_girder_strand_layout_table(edited, span_length_m=float(span), debond_model=str(debond_model))
+    st.session_state["girder_strand_layout_table"] = normalized
+
+    errors, warnings = _validate_girder_strand_layout(normalized, span_length_m=float(span), geometry=geometry)
+    metrics = [
+        PrestressMetric("Active strand groups", str(len(_active_girder_strand_layout_rows(normalized))), "Rows used by debond preview", "info", strong=True),
+        PrestressMetric("Total strands", f"{int((_active_girder_strand_layout_rows(normalized)['No. Strands']).sum())}" if not _active_girder_strand_layout_rows(normalized).empty else "0", "Active groups only", "info"),
+        PrestressMetric("Span convention", "x = 0 → L", "Left support to right support", "neutral"),
+        PrestressMetric("Debonding QA", "OK" if not errors else "Review", f"{len(errors)} error(s), {len(warnings)} warning(s)", "ready" if not errors else "danger", strong=True),
+    ]
+    st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
+    if errors:
+        for message in errors:
+            st.error(message)
+    if warnings:
+        with st.expander("Strand layout / debonding warnings", expanded=False):
+            for message in warnings:
+                st.warning(message)
+
+    tab_layout, tab_debond, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Effective prestress preview"])
+    with tab_layout:
+        st.plotly_chart(_plot_girder_strand_cross_section_layout(normalized, geometry), use_container_width=True)
+    with tab_debond:
+        st.plotly_chart(_plot_girder_longitudinal_debonding_layout(normalized, float(span)), use_container_width=True)
+    with tab_effective:
+        st.caption(
+            "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Loss calculation is a future milestone."
+        )
+        preview = _girder_effective_prestress_preview_dataframe(normalized, float(span))
+        st.dataframe(preview, use_container_width=True, hide_index=True)
+
 def _dataframes_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
     left_norm = pd.DataFrame(left).reset_index(drop=True).astype("object")
     right_norm = pd.DataFrame(right).reset_index(drop=True).astype("object")
@@ -1714,6 +2202,7 @@ def render_prestress_page() -> None:
 
     with main_col:
         _render_girder_prestress_force_state_inputs(result.elements, geometry)
+        _render_girder_strand_layout_and_debonding_ui(geometry)
 
     active_rebar_count = len(st.session_state.get("rebars", []) or [])
 

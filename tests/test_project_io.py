@@ -460,3 +460,47 @@ def test_project_session_round_trip_preserves_girder_prestress_force_states_meta
     assert table.iloc[0]["Prestress State"] == "Pe_transfer / P_release"
     assert table.iloc[0]["Pe_kN"] == pytest.approx(3500.0)
     assert table.iloc[1]["Prestress State"] == "Pe_eff_final"
+
+
+def test_project_session_round_trip_preserves_girder_strand_layout_metadata() -> None:
+    session_state = {
+        "girder_prestress_system_settings": {
+            "girder_system": "Simple supported precast girder",
+            "prestress_type": "Pretensioned straight strands",
+            "span_length_m": 32.0,
+            "station_convention": "x = 0 at left support, x = L at right support",
+            "debond_model": "Left/right independent",
+        },
+        "girder_strand_layout_table": [
+            {
+                "Active": True,
+                "Group ID": "Row 2",
+                "Layer": "Second row",
+                "Strand Size": "15.2 mm low-relaxation strand",
+                "No. Strands": 8,
+                "Area/Strand_mm2": 140.0,
+                "Total Aps_mm2": 1120.0,
+                "x_mm": 0.0,
+                "y_mm_from_bottom": 150.0,
+                "Pe_transfer/strand_kN": 150.0,
+                "Pe_construction/strand_kN": 140.0,
+                "Pe_eff_final/strand_kN": 120.0,
+                "Left debond m": 2.0,
+                "Right debond m": 3.0,
+                "Note": "debonded row",
+            }
+        ],
+    }
+
+    project = project_from_session_state(session_state)
+    assert "girder_strand_layout_table" in project.metadata
+    assert project.metadata["girder_strand_layout_table"][0]["Left debond m"] == 2.0
+    assert project.metadata["girder_prestress_system_settings"]["span_length_m"] == 32.0
+
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert "girder_strand_layout_table" in restored
+    assert restored["girder_strand_layout_table"].iloc[0]["Group ID"] == "Row 2"
+    assert restored["girder_strand_layout_table"].iloc[0]["Right debond m"] == 3.0
+    assert restored["girder_prestress_system_settings"]["debond_model"] == "Left/right independent"

@@ -100,6 +100,51 @@ def _girder_prestress_force_states_metadata_from_session(session_state: Any) -> 
     return rows
 
 
+
+
+def _girder_strand_layout_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
+    """Serialize GIRDER.PS3A strand layout/debonding metadata."""
+
+    table = _get_session_value(session_state, "girder_strand_layout_table", None)
+    if table is None:
+        return []
+    df = pd.DataFrame(table)
+    if df.empty:
+        return []
+    columns = [
+        "Active",
+        "Group ID",
+        "Layer",
+        "Strand Size",
+        "No. Strands",
+        "Area/Strand_mm2",
+        "Total Aps_mm2",
+        "x_mm",
+        "y_mm_from_bottom",
+        "Pe_transfer/strand_kN",
+        "Pe_construction/strand_kN",
+        "Pe_eff_final/strand_kN",
+        "Left debond m",
+        "Right debond m",
+        "Note",
+    ]
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        entry = {column: _clean_table_value(row.get(column)) for column in columns if column in df.columns}
+        if any(not _is_blank(value) for value in entry.values()):
+            rows.append(entry)
+    return rows
+
+
+def _girder_prestress_system_settings_metadata_from_session(session_state: Any) -> dict[str, Any]:
+    """Serialize simple-supported girder prestress/debonding system settings."""
+
+    settings = _get_session_value(session_state, "girder_prestress_system_settings", None)
+    if not isinstance(settings, dict):
+        return {}
+    allowed = {"girder_system", "prestress_type", "span_length_m", "station_convention", "debond_model"}
+    return {key: _clean_table_value(value) for key, value in settings.items() if key in allowed and not _is_blank(value)}
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -152,6 +197,12 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     girder_prestress_force_states = _girder_prestress_force_states_metadata_from_session(session_state)
     if girder_prestress_force_states:
         metadata["girder_prestress_force_states_table"] = girder_prestress_force_states
+    girder_strand_layout = _girder_strand_layout_metadata_from_session(session_state)
+    if girder_strand_layout:
+        metadata["girder_strand_layout_table"] = girder_strand_layout
+    girder_prestress_system_settings = _girder_prestress_system_settings_metadata_from_session(session_state)
+    if girder_prestress_system_settings:
+        metadata["girder_prestress_system_settings"] = girder_prestress_system_settings
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -463,6 +514,12 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     girder_prestress_force_states = project.metadata.get("girder_prestress_force_states_table")
     if isinstance(girder_prestress_force_states, list):
         session_state["girder_prestress_force_states_table"] = pd.DataFrame(girder_prestress_force_states)
+    girder_strand_layout = project.metadata.get("girder_strand_layout_table")
+    if isinstance(girder_strand_layout, list):
+        session_state["girder_strand_layout_table"] = pd.DataFrame(girder_strand_layout)
+    girder_prestress_system_settings = project.metadata.get("girder_prestress_system_settings")
+    if isinstance(girder_prestress_system_settings, dict):
+        session_state["girder_prestress_system_settings"] = dict(girder_prestress_system_settings)
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

@@ -9,8 +9,8 @@ def test_analysis_preview_can_read_beam_girder_sls_rows_from_loads_page() -> Non
     assert "_beam_sls_load_rows_from_session_state" in SOURCE
     assert 'st.session_state.get("beam_sls_loads_table")' in SOURCE
     assert "From Loads page — SLS Girder Service Loads" in SOURCE
-    assert "SLS action source" in SOURCE
-    assert "SLS load row from Loads page" in SOURCE
+    assert "Load source for {stage_label}" in SOURCE
+    assert "manual input is a stage-level override/fallback" in SOURCE
 
 
 def test_loads_to_analysis_preview_uses_n_and_mx_without_double_counting_live_load() -> None:
@@ -28,10 +28,12 @@ def test_loads_to_analysis_preview_respects_direct_section_basis_only() -> None:
     assert "Preview section basis for selected Loads row" in SOURCE
 
 
-def test_analysis_preview_groups_beam_girder_sls_rows_into_stage_tabs() -> None:
+def test_analysis_preview_groups_beam_girder_sls_rows_into_always_on_stage_tabs() -> None:
+    assert "ANALYSIS.SLS1" in SOURCE
     assert "LOADS.SLS2B" in SOURCE
     assert "_beam_sls_stage_tab_specs" in SOURCE
     assert "SLS stage check tabs" in SOURCE
+    assert "Stage checks are always available" in SOURCE
     assert "{stage_label} load case from Loads page" in SOURCE
     assert "Transfer stage" in SOURCE
     assert "Construction stage" in SOURCE
@@ -39,6 +41,14 @@ def test_analysis_preview_groups_beam_girder_sls_rows_into_stage_tabs() -> None:
     assert "Each stage keeps its own code-limit/profile/prestress UI state" in SOURCE
     assert "Station x (m)" in SOURCE
     assert "x={station_text} m" in SOURCE
+
+
+def test_analysis_stage_tabs_keep_manual_override_as_stage_fallback() -> None:
+    assert "Manual override" in SOURCE
+    assert "Use manual override for a trial check or import stage loads first" in SOURCE
+    assert "commercial workflow should normally read the matching stage row from Loads" in SOURCE
+    assert "_beam_sls_default_basis_for_stage" in SOURCE
+    assert 'stage_label == "Service stage" and "composite_transformed" in available_basis_names' in SOURCE
 
 
 def test_analysis_normalizes_imported_section_basis_text_before_routing() -> None:

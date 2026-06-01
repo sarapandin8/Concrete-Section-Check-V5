@@ -3653,6 +3653,16 @@ def _beam_sls_stage_default_code_limit_stage(stage_label: str) -> str:
     return "User-defined"
 
 
+def _beam_sls_default_basis_for_stage(stage_label: str, available_basis_names: list[str]) -> str:
+    """Return a safe stage default basis for manual SLS override panels."""
+
+    if stage_label == "Service stage" and "composite_transformed" in available_basis_names:
+        return "composite_transformed"
+    if "precast_gross" in available_basis_names:
+        return "precast_gross"
+    return available_basis_names[0]
+
+
 def _initialize_girder_code_limit_stage_for_case(title: str, stage_label: str) -> None:
     """Initialize code-limit stage to match the active SLS stage tab without overriding user edits."""
 
@@ -3686,7 +3696,7 @@ def _render_girder_sls_check_case_panel(
         input_cols = st.columns(3)
         basis_key = f"girder_service_stress_basis_name_{case_key}"
         if st.session_state.get(basis_key) not in basis_names:
-            st.session_state[basis_key] = basis_names[0]
+            st.session_state[basis_key] = _beam_sls_default_basis_for_stage(stage_label, basis_names)
         with input_cols[0]:
             basis_name = st.selectbox(
                 "Section basis for stress preview",
@@ -4626,34 +4636,37 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.session_state["girder_service_stress_basis_name"] = basis_names[0]
 
     beam_sls_rows = _beam_sls_load_rows_from_session_state()
-    source_options = ["Manual input"]
-    if beam_sls_rows:
-        source_options.append("From Loads page — SLS Girder Service Loads")
-    if st.session_state.get("girder_sls_action_source") not in source_options:
-        st.session_state["girder_sls_action_source"] = source_options[0]
-    action_source = st.radio(
-        "SLS action source",
-        source_options,
-        horizontal=True,
-        key="girder_sls_action_source",
-        help="Use manual trial actions or read N/Mx from the active Beam/Girder SLS table on the Loads page.",
+
+    # ANALYSIS.SLS1: always show the three stage tabs immediately in the
+    # Beam/Girder SLS workspace.  The Loads page is the default stage source,
+    # while manual trial input is a per-stage fallback/override instead of the
+    # top-level workflow gate used by earlier milestones.
+    # Compatibility phrase retained for regression/search context: From Loads page — SLS Girder Service Loads.
+    # Legacy phrase retained for historical tests only: SLS action source.
+    st.markdown("##### SLS stage check tabs")
+    st.caption(
+        "Stage checks are always available. Each stage defaults to the matching Loads page row when available; "
+        "manual input is a stage-level override/fallback. Each stage keeps its own code-limit/profile/prestress UI state."
     )
+    stage_tabs = st.tabs([label for _, label, _ in _beam_sls_stage_tab_specs()])
+    for tab, (stage_key, stage_label, stage_note) in zip(stage_tabs, _beam_sls_stage_tab_specs(), strict=False):
+        with tab:
+            stage_rows = _beam_sls_rows_for_stage(beam_sls_rows, stage_label)
+            st.caption(stage_note)
 
-    # LOADS.SLS2B: stage-specific subtabs replace the single "SLS load row from Loads page" selector.
+            source_options = ["From Loads page", "Manual override"] if stage_rows else ["Manual override"]
+            source_key = f"girder_sls_action_source_{stage_key}"
+            if st.session_state.get(source_key) not in source_options:
+                st.session_state[source_key] = source_options[0]
+            stage_source = st.radio(
+                f"Load source for {stage_label}",
+                source_options,
+                horizontal=True,
+                key=source_key,
+                help="Use the matching stage row from Loads by default; switch to manual override only for a trial check or missing imported row.",
+            )
 
-    if action_source.startswith("From Loads page"):
-        st.markdown("##### SLS stage check tabs")
-        st.caption(
-            "Select the stage tab that matches the Loads page row. Each stage keeps its own code-limit/profile/prestress UI state."
-        )
-        stage_tabs = st.tabs([label for _, label, _ in _beam_sls_stage_tab_specs()])
-        for tab, (stage_key, stage_label, stage_note) in zip(stage_tabs, _beam_sls_stage_tab_specs(), strict=False):
-            with tab:
-                stage_rows = _beam_sls_rows_for_stage(beam_sls_rows, stage_label)
-                st.caption(stage_note)
-                if not stage_rows:
-                    st.info(f"No active {stage_label.lower()} row is available from the Loads page.")
-                    continue
+            if stage_source == "From Loads page" and stage_rows:
                 row_labels = [_beam_sls_load_row_label(row) for row in stage_rows]
                 row_by_label = dict(zip(row_labels, stage_rows, strict=False))
                 row_key = f"girder_sls_load_row_label_{stage_key}"
@@ -4680,16 +4693,20 @@ def _render_beam_girder_service_stress_preview() -> None:
                     basis_options=basis_options,
                     basis_names=basis_names,
                 )
-    else:
-        _render_girder_sls_check_case_panel(
-            case_title="Manual input",
-            case_key="manual",
-            stage_label="Service stage",
-            selected_load_row=None,
-            section_geometry=section_geometry,
-            basis_options=basis_options,
-            basis_names=basis_names,
-        )
+            else:
+                if not stage_rows:
+                    st.info(f"No active {stage_label.lower()} row is available from the Loads page. Use manual override for a trial check or import stage loads first.")
+                else:
+                    st.info("Manual override is for trial checks only. The commercial workflow should normally read the matching stage row from Loads.")
+                _render_girder_sls_check_case_panel(
+                    case_title=stage_label,
+                    case_key=f"{stage_key}_manual",
+                    stage_label=stage_label,
+                    selected_load_row=None,
+                    section_geometry=section_geometry,
+                    basis_options=basis_options,
+                    basis_names=basis_names,
+                )
 
     with st.expander("Advanced manual service-stage stress preview (legacy)", expanded=False):
         st.markdown("#### Manual Service Stage Stress Preview")

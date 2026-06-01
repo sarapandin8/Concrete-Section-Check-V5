@@ -19,6 +19,8 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "15.2 mm low-relaxation strand" in PRESTRESS_SOURCE
     assert "Individual strands" in PRESTRESS_SOURCE
     assert "Computed spacing_mm" in PRESTRESS_SOURCE
+    assert "3db minimum spacing" in PRESTRESS_SOURCE
+    assert "reduce the number of strands in this row" in PRESTRESS_SOURCE
     assert "Transfer/development length transition is not modeled" in PRESTRESS_SOURCE
     assert "does not change current Analysis results" in PRESTRESS_SOURCE
 
@@ -118,8 +120,51 @@ def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> No
     assert set(table["Strand Size"]) == {"12.7 mm low-relaxation strand"}
     assert table.loc[0, "Area/Strand_mm2"] == 98.7
     assert table.loc[0, "Total Aps_mm2"] == 12 * 98.7
-    assert table.loc[0, "Edge CL_mm"] == 50.0
+    assert table.loc[0, "Edge CL_mm"] == 45.0
     assert table.loc[0, "Min spacing_mm"] == 50.0
+
+
+def test_girder_strand_size_controls_spacing_and_edge_clearance(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _validate_girder_strand_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "15.2 row",
+                "Strand Size": "15.2 mm low-relaxation strand",
+                "No. Strands": 8,
+                "Edge CL_mm": 50.0,
+                "Min spacing_mm": 50.0,
+                "y_mm_from_bottom": 100.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=20.0)
+    assert table.loc[0, "Edge CL_mm"] == 45.0
+    assert table.loc[0, "Min spacing_mm"] == 55.0
+
+    errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=None)
+    assert errors == []
+    assert all("less than minimum" not in warning for warning in warnings)
 
 
 def test_girder_strand_layout_ui_is_gated_to_beam_girder_preset(monkeypatch) -> None:

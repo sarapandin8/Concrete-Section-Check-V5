@@ -176,7 +176,7 @@ GIRDER_STRAND_SIZE_PROPERTIES = {
         "fpu_mpa": 1860.0,
         "fpy_mpa": 1670.0,
         "ep_mpa": DEFAULT_STRAND_EP_MPA,
-        "recommended_edge_cl_mm": 50.0,
+        "recommended_edge_cl_mm": 45.0,
         "recommended_min_spacing_mm": 50.0,
     },
     "15.2 mm low-relaxation strand": {
@@ -185,8 +185,8 @@ GIRDER_STRAND_SIZE_PROPERTIES = {
         "fpu_mpa": 1860.0,
         "fpy_mpa": 1670.0,
         "ep_mpa": DEFAULT_STRAND_EP_MPA,
-        "recommended_edge_cl_mm": 50.0,
-        "recommended_min_spacing_mm": 50.0,
+        "recommended_edge_cl_mm": 45.0,
+        "recommended_min_spacing_mm": 55.0,
     },
 }
 
@@ -1252,12 +1252,13 @@ def _normalize_girder_strand_layout_table(
         x_mm = _to_float(current.get("Row center x_mm"))
         if x_mm is None:
             x_mm = _to_float(current.get("x_mm"))
-        edge_cl = _to_float(current.get("Edge CL_mm"))
-        if edge_cl is None or edge_cl <= 0.0:
-            edge_cl = float(strand_props["recommended_edge_cl_mm"])
-        min_spacing = _to_float(current.get("Min spacing_mm"))
-        if min_spacing is None or min_spacing <= 0.0:
-            min_spacing = float(strand_props["recommended_min_spacing_mm"])
+        # Detailing aids are controlled by the selected standard strand size.
+        # Current default convention: edge CL = 45 mm for both sizes; practical
+        # minimum strand spacing = 50 mm for 12.7 mm strand and 55 mm for
+        # 15.2 mm strand. These values are rounded-up detailing defaults that
+        # satisfy the 3db minimum spacing check for the two supported sizes.
+        edge_cl = float(strand_props["recommended_edge_cl_mm"])
+        min_spacing = float(strand_props["recommended_min_spacing_mm"])
         pe_transfer = _to_float(current.get("Pe_transfer/strand_kN"))
         pe_construction = _to_float(current.get("Pe_construction/strand_kN"))
         pe_final = _to_float(current.get("Pe_eff_final/strand_kN"))
@@ -1364,10 +1365,9 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
     if center_x_value is None:
         center_x_value = _to_float(row.get("x_mm"))
     center_x = float(0.0 if center_x_value is None else center_x_value)
-    edge_value = _to_float(row.get("Edge CL_mm"))
-    edge_cl = float(edge_value if edge_value is not None and edge_value > 0.0 else _strand_size_properties(row.get("Strand Size"))["recommended_edge_cl_mm"])
-    spacing_value = _to_float(row.get("Min spacing_mm"))
-    min_spacing = float(spacing_value if spacing_value is not None and spacing_value > 0.0 else _strand_size_properties(row.get("Strand Size"))["recommended_min_spacing_mm"])
+    props = _strand_size_properties(row.get("Strand Size"))
+    edge_cl = float(props["recommended_edge_cl_mm"])
+    min_spacing = float(props["recommended_min_spacing_mm"])
     spacing = min_spacing if count > 1 else 0.0
 
     segment = _section_horizontal_segment_at_y(geometry, y_abs)
@@ -1404,7 +1404,19 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
         for i in range(count)
     ]
     if count > 1 and spacing + 1e-9 < min_spacing:
-        messages.append(f"{group}: computed strand spacing {spacing:.1f} mm is less than minimum {min_spacing:.1f} mm.")
+        max_count = 1
+        if segment is not None:
+            try:
+                half_available = max(0.0, half_available)
+                max_count = int(2.0 * half_available // min_spacing) + 1
+            except Exception:
+                max_count = 1
+        messages.append(
+            f"{group}: computed strand spacing {spacing:.1f} mm is less than minimum {min_spacing:.1f} mm; "
+            f"reduce the number of strands in this row"
+            + (f" to {max_count} or fewer" if max_count > 0 else "")
+            + " or adjust row position/section width."
+        )
     return points, spacing, messages
 
 
@@ -1656,8 +1668,8 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             "Total Aps_mm2": st.column_config.NumberColumn("Total Aps (mm²)", disabled=True, format="%.3f"),
             "Row center x_mm": st.column_config.NumberColumn("Row center x (mm)", step=10.0, format="%.3f"),
             "y_mm_from_bottom": st.column_config.NumberColumn("y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
-            "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", min_value=0.0, step=5.0, format="%.3f"),
-            "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", min_value=0.0, step=5.0, format="%.3f"),
+            "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", disabled=True, format="%.3f"),
+            "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", disabled=True, format="%.3f"),
             "Computed spacing_mm": st.column_config.NumberColumn("Computed spacing (mm)", disabled=True, format="%.3f"),
             "Pe_transfer/strand_kN": st.column_config.NumberColumn("Pe_transfer / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
             "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),

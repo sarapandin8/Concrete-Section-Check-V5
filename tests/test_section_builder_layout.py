@@ -381,3 +381,15 @@ def test_section_builder_source_contains_axis_convention_for_load_tables() -> No
     assert "major/minor labels are intentionally avoided" in source
     assert "Mux" in source
     assert "Vuy" in source
+
+
+def test_section_builder_does_not_reassign_widget_backed_reinforcement_flags_after_render() -> None:
+    """Regression guard for Streamlit widget-key mutation in REBAR.SYSTEM1.1."""
+
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+    start = source.index("def _store_valid_section_state")
+    end = source.index("def _clear_section_geometry_state", start)
+    function_source = source[start:end]
+
+    assert 'st.session_state["section_has_ordinary_rebar"] =' not in function_source
+    assert 'st.session_state["section_has_prestressing_steel"] =' not in function_source

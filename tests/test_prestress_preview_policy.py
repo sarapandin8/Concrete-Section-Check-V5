@@ -26,3 +26,17 @@ def test_combined_reinforcement_preview_is_explicit_and_collapsed():
     assert "Coordination view only" in REBAR_SOURCE
     assert "prestress_combined_reinforcement_preview" in PRESTRESS_SOURCE
     assert "rebar_combined_reinforcement_preview" in REBAR_SOURCE
+
+
+def test_prestress_page_keeps_advanced_table_and_product_tools_collapsed_for_girder_workflow():
+    assert "Section-level tendon / prestress table" in PRESTRESS_SOURCE
+    assert "section_table_expanded = not girder_prestress_layout_active" in PRESTRESS_SOURCE
+    assert "Tendon Product Creation / product database" in PRESTRESS_SOURCE
+    assert "_render_tendon_product_tools()" in PRESTRESS_SOURCE
+
+
+def test_prestress_force_status_distinguishes_reference_only_rows():
+    assert "Force status" in PRESTRESS_SOURCE
+    assert "Reference only" in PRESTRESS_SOURCE
+    assert "no active Pe assigned" in PRESTRESS_SOURCE
+    assert "Active prestress rows are reference/passive only" in PRESTRESS_SOURCE

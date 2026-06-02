@@ -283,6 +283,34 @@ def _has_active_prestress_force(elements: list[PrestressElement]) -> bool:
     return False
 
 
+def _prestress_force_state_label(elements: list[PrestressElement]) -> PrestressMetric:
+    """Return a user-facing status for active versus reference-only prestress rows."""
+
+    if not elements:
+        return PrestressMetric(
+            "Force status",
+            "No active rows",
+            detail="prestress not used",
+            status="neutral",
+            strong=True,
+        )
+    if _has_active_prestress_force(elements):
+        return PrestressMetric(
+            "Force status",
+            "Active Pe available",
+            detail="used by analysis",
+            status="ready",
+            strong=True,
+        )
+    return PrestressMetric(
+        "Force status",
+        "Reference only",
+        detail="no active Pe assigned",
+        status="warning",
+        strong=True,
+    )
+
+
 
 @dataclass(frozen=True)
 class PrestressParseResult:
@@ -2265,6 +2293,7 @@ def _build_prestress_summary_metrics(
     if not result.elements and active_rebar_count == 0:
         warning_count += 1
     return [
+        _prestress_force_state_label(result.elements),
         PrestressMetric("Valid elements", f"{len(result.elements):,}", detail="used in analysis", status="info"),
         PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
         PrestressMetric("Total Pe_eff", f"{total_pe_kn:,.1f} kN", detail="valid rows only"),
@@ -2296,6 +2325,7 @@ def _build_prestress_status_rows(
     unbonded_count = sum(1 for element in result.elements if not element.bonded)
     return [
         PrestressMetric("Overall readiness", "Ready" if valid_for_analysis else "Not ready", status="ready" if valid_for_analysis else "danger", strong=True),
+        _prestress_force_state_label(result.elements),
         PrestressMetric("Validation errors", f"{len(all_errors):,}", status="danger" if all_errors else "ready", strong=bool(all_errors)),
         PrestressMetric("Warnings", f"{len(warnings):,}", status="warning" if warnings else "ready", strong=bool(warnings)),
         PrestressMetric("Valid elements", f"{len(result.elements):,}"),
@@ -2402,6 +2432,10 @@ def _render_validation(
         )
     elif not result.elements:
         warnings.append("No active longitudinal reinforcement is defined. Activate ordinary rebar or prestress before final analysis.")
+    elif not _has_active_prestress_force(result.elements):
+        contextual_notes.append(
+            "Active prestress rows are reference/passive only. They are preserved and previewable, but they do not add Pe to analysis until Pe_eff, fpe, or initial stress is assigned."
+        )
     if not geometry_available:
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
     st.markdown(
@@ -2522,113 +2556,117 @@ def render_prestress_page() -> None:
 
     summary_slot = st.empty()
     main_col, side_col = st.columns([0.68, 0.32], gap="large")
+    girder_prestress_layout_active = _is_girder_prestress_layout_workflow_active()
 
     with main_col:
-        st.markdown("#### Prestress Input Workflow")
-        input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
-        if input_mode != "Manual table":
-            st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
+        section_table_expanded = not girder_prestress_layout_active
+        with st.expander("Section-level tendon / prestress table", expanded=section_table_expanded):
+            st.markdown("#### Prestress Input Workflow")
+            input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
+            if input_mode != "Manual table":
+                st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
 
-        _render_tendon_product_tools()
+            with st.expander("Tendon Product Creation / product database", expanded=False):
+                _render_tendon_product_tools()
 
-        st.markdown("#### Advanced Prestress Table")
-        st.markdown(
-            '<div class="cpmm-prestress-quiet-note">'
-            "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, and count. "
-            "Product/material reference fields are preserved in the backing table and shown below as read-only details."
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="cpmm-prestress-table-note">'
-            "Editing Product updates Area/material metadata through the existing product-sync logic. "
-            "Breaking Load and Duct ID remain reference data only; they are not used as Pe_eff or steel diameter."
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
-        product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
-        st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
-        show_full_engineering_columns = st.checkbox(
-            "Show full engineering columns",
-            value=False,
-            help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
-            key="prestress_show_full_engineering_columns",
-        )
-        editor_table = _prestress_table_for_editor(st.session_state["prestress_table"])
-        editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(editor_table)
-        editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
-        edited_df = st.data_editor(
-            editor_table,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            column_order=editor_column_order,
-            column_config={
-                "Active": st.column_config.CheckboxColumn("Active"),
-                "Label": st.column_config.TextColumn("Label"),
-                "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
-                "Product": st.column_config.SelectboxColumn(
-                    "Product",
-                    options=product_options,
-                    help=(
-                        "Select a prestress product. Standard tendons are listed as Tendon 6-1 to Tendon 6-55; "
-                        "single strands and PT/PS bars follow. Legacy labels such as 6-12 are still accepted."
+            st.markdown("#### Advanced Prestress Table")
+            st.markdown(
+                '<div class="cpmm-prestress-quiet-note">'
+                "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, and count. "
+                "Product/material reference fields are preserved in the backing table and shown below as read-only details."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="cpmm-prestress-table-note">'
+                "Editing Product updates Area/material metadata through the existing product-sync logic. "
+                "Breaking Load and Duct ID remain reference data only; they are not used as Pe_eff or steel diameter."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
+            product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+            st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
+            show_full_engineering_columns = st.checkbox(
+                "Show full engineering columns",
+                value=False,
+                help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
+                key="prestress_show_full_engineering_columns",
+            )
+            editor_table = _prestress_table_for_editor(st.session_state["prestress_table"])
+            editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(editor_table)
+            editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
+            edited_df = st.data_editor(
+                editor_table,
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                column_order=editor_column_order,
+                column_config={
+                    "Active": st.column_config.CheckboxColumn("Active"),
+                    "Label": st.column_config.TextColumn("Label"),
+                    "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
+                    "Product": st.column_config.SelectboxColumn(
+                        "Product",
+                        options=product_options,
+                        help=(
+                            "Select a prestress product. Standard tendons are listed as Tendon 6-1 to Tendon 6-55; "
+                            "single strands and PT/PS bars follow. Legacy labels such as 6-12 are still accepted."
+                        ),
                     ),
-                ),
-                "x_mm": st.column_config.NumberColumn("x_mm"),
-                "y_mm": st.column_config.NumberColumn("y_mm"),
-                "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
-                "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
-                "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
-                "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
-                "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
-                "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
-                "Input Mode": st.column_config.SelectboxColumn(
-                    "Input Mode",
-                    options=INPUT_MODE_EDITOR_OPTIONS,
-                    help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
-                ),
-                "Pe_eff_kN": st.column_config.NumberColumn(
-                    "Pe_eff_kN",
-                    help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
-                ),
-                "fpe_MPa": st.column_config.NumberColumn(
-                    "fpe_MPa",
-                    help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
-                ),
-                "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
-                "loss_percent": st.column_config.NumberColumn("loss_percent"),
-                "Bonded": st.column_config.CheckboxColumn("Bonded"),
-                "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
-                "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
-                "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
-                "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
-                "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
-                "Note": st.column_config.TextColumn(
-                    "Remarks",
-                    help="Optional engineering remark for this prestress row. It is not used in calculation.",
-                ),
-            },
-            key=editor_key,
-        )
-        edited_df = normalize_prestress_table_for_effective_input_sync(edited_df, prestress_db)
-        if not _dataframes_equal(edited_df, pd.DataFrame(st.session_state["prestress_table"])):
+                    "x_mm": st.column_config.NumberColumn("x_mm"),
+                    "y_mm": st.column_config.NumberColumn("y_mm"),
+                    "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
+                    "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
+                    "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
+                    "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
+                    "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
+                    "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
+                    "Input Mode": st.column_config.SelectboxColumn(
+                        "Input Mode",
+                        options=INPUT_MODE_EDITOR_OPTIONS,
+                        help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
+                    ),
+                    "Pe_eff_kN": st.column_config.NumberColumn(
+                        "Pe_eff_kN",
+                        help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
+                    ),
+                    "fpe_MPa": st.column_config.NumberColumn(
+                        "fpe_MPa",
+                        help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
+                    ),
+                    "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
+                    "loss_percent": st.column_config.NumberColumn("loss_percent"),
+                    "Bonded": st.column_config.CheckboxColumn("Bonded"),
+                    "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
+                    "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
+                    "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
+                    "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
+                    "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
+                    "Note": st.column_config.TextColumn(
+                        "Remarks",
+                        help="Optional engineering remark for this prestress row. It is not used in calculation.",
+                    ),
+                },
+                key=editor_key,
+            )
+            edited_df = normalize_prestress_table_for_effective_input_sync(edited_df, prestress_db)
+            if not _dataframes_equal(edited_df, pd.DataFrame(st.session_state["prestress_table"])):
+                st.session_state["prestress_table"] = edited_df
+                st.session_state["prestress_editor_revision"] += 1
+                st.rerun()
             st.session_state["prestress_table"] = edited_df
-            st.session_state["prestress_editor_revision"] += 1
-            st.rerun()
-        st.session_state["prestress_table"] = edited_df
 
-        if not show_full_engineering_columns:
-            with st.expander("Product / material reference details", expanded=False):
-                st.markdown(
-                    '<div class="cpmm-prestress-quiet-note">'
-                    "Read-only reference view for material/product fields hidden from the compact editor. "
-                    "Turn on full engineering columns above only when you intentionally need to edit reference/material fields."
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(_prestress_reference_detail_dataframe(edited_df), use_container_width=True, hide_index=True)
+            if not show_full_engineering_columns:
+                with st.expander("Product / material reference details", expanded=False):
+                    st.markdown(
+                        '<div class="cpmm-prestress-quiet-note">'
+                        "Read-only reference view for material/product fields hidden from the compact editor. "
+                        "Turn on full engineering columns above only when you intentionally need to edit reference/material fields."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.dataframe(_prestress_reference_detail_dataframe(edited_df), use_container_width=True, hide_index=True)
 
     result = prestress_elements_from_dataframe(edited_df, prestress_db)
     geometry = st.session_state.get("section_geometry")

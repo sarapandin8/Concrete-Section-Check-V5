@@ -389,3 +389,13 @@ def test_rebar_system_flags_are_not_reassigned_after_checkbox_creation() -> None
     assert "Do not write to Streamlit widget-owned reinforcement flag keys here" in source
     assert 'st.session_state["section_has_ordinary_rebar"] = ordinary_rebar_enabled' not in source
     assert 'st.session_state["section_has_prestressing_steel"] = prestressing_steel_enabled' not in source
+
+
+def test_section_builder_preview_is_geometry_only_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Section Builder preview is locked to geometry only" in source
+    assert "preview_rebars: list[Any] = []" in source
+    assert "preview_prestress_elements: list[Any] = []" in source
+    assert "Rebar/prestress display" in source
+    assert "Hidden in Section Builder" in source

@@ -1370,17 +1370,14 @@ def _geometry_status_rows(
     geometry: Any | None,
     dimensions: list[Any],
     validation: ValidationResult,
-    rebar_count: int,
-    prestress_count: int,
 ) -> list[tuple[str, str]]:
     geometry_ready = geometry is not None and validation.is_valid
     return [
         ("Geometry", "Ready" if geometry_ready else "Not Ready"),
-        ("Preview", "Available" if geometry_ready else "Not Available"),
+        ("Preview", "Geometry only" if geometry_ready else "Not Available"),
         ("Validation", _validation_label(validation)),
         ("Dimension guides", f"{len(dimensions):,}"),
-        ("Rebars shown", f"{rebar_count:,}"),
-        ("Prestress elements shown", f"{prestress_count:,}"),
+        ("Rebar/prestress display", "Hidden in Section Builder"),
     ]
 
 
@@ -1390,10 +1387,13 @@ def _render_section_preview_panel(
     label_mode: str,
     validation: ValidationResult,
 ) -> None:
-    stored_rebars = st.session_state.get("rebars", [])
-    stored_prestress_elements = st.session_state.get("prestress_elements", [])
-    rebars = list(stored_rebars or []) if ordinary_rebar_enabled(st.session_state, default=True) else []
-    prestress_elements = list(stored_prestress_elements or []) if prestressing_steel_enabled(st.session_state, default=True) else []
+    # Section Builder is intentionally a geometry/section-definition workspace.
+    # Rebar and prestressing steel are edited and previewed on their own pages.
+    # Keeping this preview geometry-only avoids confusing stale reinforcement
+    # layouts with the active section definition while still preserving stored
+    # rebar/prestress data for analysis when enabled by section flags.
+    preview_rebars: list[Any] = []
+    preview_prestress_elements: list[Any] = []
 
     with st.container(border=True):
         st.markdown("#### Live Section Preview")
@@ -1403,8 +1403,8 @@ def _render_section_preview_panel(
                     geometry,
                     dimensions,
                     label_mode,
-                    rebars,
-                    prestress_elements,
+                    preview_rebars,
+                    preview_prestress_elements,
                 ),
                 use_container_width=True,
                 key="section_builder_preview",
@@ -1412,8 +1412,12 @@ def _render_section_preview_panel(
         else:
             st.info("Preview is paused until geometry inputs are valid.")
 
+        st.caption(
+            "Section Builder preview is locked to geometry only. "
+            "Ordinary rebar and prestressing steel are previewed on the Rebar and Prestress pages."
+        )
         st.markdown(
-            _kv_panel_html(_geometry_status_rows(geometry, dimensions, validation, len(rebars), len(prestress_elements))),
+            _kv_panel_html(_geometry_status_rows(geometry, dimensions, validation)),
             unsafe_allow_html=True,
         )
         _render_validation_panel(validation)

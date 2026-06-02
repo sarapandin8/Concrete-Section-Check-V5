@@ -17,6 +17,7 @@ from concrete_pmm_pro.core.reinforcement_system import (
     effective_rebars_for_analysis,
     ordinary_rebar_enabled,
     prestressing_steel_enabled,
+    section_level_prestress_ignored_for_girder,
 )
 
 
@@ -101,6 +102,10 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
         info.append("Ordinary rebar is disabled for this section; stored rebar rows are preserved but ignored by analysis.")
     if not prestress_system_enabled:
         info.append("Prestressing steel is disabled for this section; stored prestress rows are preserved but ignored by analysis.")
+    elif section_level_prestress_ignored_for_girder(session_state) and prestress_elements:
+        info.append(
+            "Section-level tendon/prestress rows are ignored for this girder workflow; use the dedicated girder strand layout/force-state inputs instead."
+        )
     if not included_rebars and included_prestress:
         info.append("No active ordinary rebar is included; PMM analysis will rely on active prestress elements. Check minimum ordinary reinforcement and detailing requirements separately.")
     elif included_rebars and not included_prestress:

@@ -251,3 +251,31 @@ def test_section_flags_can_make_pmm_not_ready_when_both_systems_disabled() -> No
     assert readiness.ready is False
     assert analysis_input is None
     assert any("No active longitudinal reinforcement" in error for error in readiness.errors)
+
+
+def test_precast_girder_ignores_legacy_section_level_prestress_rows() -> None:
+    session = _valid_session()
+    session["analysis_mode_settings"] = {"member_type": "beam_girder"}
+    session["girder_section_family"] = "precast_composite_girder"
+    session["section_preset_key"] = "box_section_fillet"
+    session["section_has_ordinary_rebar"] = True
+    session["section_has_prestressing_steel"] = True
+
+    analysis_input = build_analysis_input_from_session_state(session)
+    readiness = check_analysis_readiness(session)
+
+    assert analysis_input is not None
+    assert len(analysis_input.rebars) == 1
+    assert analysis_input.prestress_elements == []
+    assert any("Section-level tendon/prestress rows are ignored" in item for item in readiness.info)
+
+
+def test_column_workflow_still_uses_section_level_prestress_rows_when_enabled() -> None:
+    session = _valid_session()
+    session["analysis_mode_settings"] = {"member_type": "column_pier_pmm"}
+    session["section_has_prestressing_steel"] = True
+
+    analysis_input = build_analysis_input_from_session_state(session)
+
+    assert analysis_input is not None
+    assert len(analysis_input.prestress_elements) == 1

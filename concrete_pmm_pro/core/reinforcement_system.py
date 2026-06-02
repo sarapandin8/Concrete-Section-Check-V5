@@ -17,6 +17,21 @@ ORDINARY_REBAR_FLAG_KEY = "section_has_ordinary_rebar"
 PRESTRESSING_STEEL_FLAG_KEY = "section_has_prestressing_steel"
 REINFORCEMENT_FLAGS_PRESET_KEY = "reinforcement_flags_preset_key"
 
+# Section-level prestress rows are a generic/legacy input model.  Precast
+# girder workflows use the dedicated strand-layout/debonding metadata instead,
+# so PS1/PS2-style section rows must be ignored by analysis for these presets.
+GIRDER_SECTION_LEVEL_PRESTRESS_IGNORED_PRESET_KEYS = frozenset(
+    {
+        "parametric_i_girder",
+        "u_girder",
+        "box_section_fillet",
+        "parametric_plank_girder_interior",
+        "parametric_plank_girder_exterior",
+        "psc_i_girder",
+        "single_cell_box_girder",
+    }
+)
+
 
 def _get_value(source: Any, key: str, default: Any = None) -> Any:
     if hasattr(source, "get"):
@@ -70,6 +85,40 @@ def default_section_reinforcement_flags(
     return True, False
 
 
+
+
+def _member_type_from_source(source: Any) -> str:
+    settings = _get_value(source, "analysis_mode_settings", None)
+    if settings is not None:
+        if hasattr(settings, "member_type"):
+            return str(getattr(settings, "member_type") or "").strip().casefold()
+        if hasattr(settings, "get"):
+            return str(settings.get("member_type") or "").strip().casefold()
+    return str(_get_value(source, "member_type", "") or "").strip().casefold()
+
+
+def section_level_prestress_ignored_for_girder(source: Any) -> bool:
+    """Return True when legacy section-level prestress rows are ignored.
+
+    Precast/simple-supported girder workflows use the dedicated strand layout and
+    force-state inputs.  The old section-level tendon table may remain in saved
+    projects for compatibility, but it must not be assembled into PMM/SLS
+    AnalysisInput for girder presets because that can silently double-count or
+    reintroduce stale PS1/PS2 reference rows.
+    """
+
+    if _member_type_from_source(source) != "beam_girder":
+        return False
+    family = str(_get_value(source, "girder_section_family", "") or "").strip().casefold()
+    category = str(_get_value(source, "section_category", "") or "").strip().casefold()
+    preset = str(_get_value(source, "section_preset_key", "") or "").strip().casefold()
+    return (
+        family == "precast_composite_girder"
+        or category == "precast composite girder"
+        or preset in GIRDER_SECTION_LEVEL_PRESTRESS_IGNORED_PRESET_KEYS
+    )
+
+
 def ordinary_rebar_enabled(source: Any, *, default: bool = True) -> bool:
     return _to_bool(_get_value(source, ORDINARY_REBAR_FLAG_KEY, None), default)
 
@@ -98,6 +147,8 @@ def effective_prestress_for_analysis(
     if settings is not None and not settings.include_prestress:
         return []
     if not prestressing_steel_enabled(source, default=True):
+        return []
+    if section_level_prestress_ignored_for_girder(source):
         return []
     return list(prestress_elements)
 

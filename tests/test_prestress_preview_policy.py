@@ -28,9 +28,11 @@ def test_combined_reinforcement_preview_is_explicit_and_collapsed():
     assert "rebar_combined_reinforcement_preview" in REBAR_SOURCE
 
 
-def test_prestress_page_keeps_advanced_table_and_product_tools_collapsed_for_girder_workflow():
-    assert "Section-level tendon / prestress table" in PRESTRESS_SOURCE
-    assert "section_table_expanded = not girder_prestress_layout_active" in PRESTRESS_SOURCE
+def test_prestress_page_hides_section_level_table_for_precast_girder_workflow():
+    assert "Section-level tendon/prestress table is hidden and ignored" in PRESTRESS_SOURCE
+    assert "The legacy section-level tendon/prestress table is hidden and ignored" in PRESTRESS_SOURCE
+    assert "Girder Strand Preview" in PRESTRESS_SOURCE
+    assert "Legacy PS1/PS2 section-level previews are hidden" in PRESTRESS_SOURCE
     assert "Tendon Product Creation / product database" in PRESTRESS_SOURCE
     assert "_render_tendon_product_tools()" in PRESTRESS_SOURCE
 

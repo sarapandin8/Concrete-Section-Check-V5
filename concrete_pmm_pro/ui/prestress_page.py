@@ -317,6 +317,18 @@ def _prestress_force_state_label(elements: list[PrestressElement]) -> PrestressM
     )
 
 
+def _empty_prestress_parse_result(info: list[str] | None = None) -> "PrestressParseResult":
+    """Return an empty section-level prestress parse result.
+
+    Precast girder workflows use the dedicated strand-layout/debonding table.
+    Section-level tendon rows may still exist in old projects, but they are
+    hidden and ignored in this workflow so legacy PS1/PS2 rows cannot pollute
+    the main prestress status or preview.
+    """
+
+    return PrestressParseResult(elements=[], errors=[], warnings=[], info=list(info or []))
+
+
 
 @dataclass(frozen=True)
 class PrestressParseResult:
@@ -2407,7 +2419,29 @@ def _build_prestress_status_rows(
     geometry_available: bool,
     valid_for_analysis: bool,
     active_rebar_count: int = 0,
+    *,
+    girder_workflow: bool = False,
 ) -> list[PrestressMetric]:
+    if girder_workflow:
+        rows = [
+            PrestressMetric(
+                "Overall readiness",
+                "Ready" if geometry_available else "Not ready",
+                detail="girder strand workflow",
+                status="ready" if geometry_available else "danger",
+                strong=True,
+            ),
+            PrestressMetric(
+                "Section-level tendon table",
+                "Hidden / ignored",
+                detail="precast girder uses strand layout",
+                status="neutral",
+                strong=True,
+            ),
+        ]
+        rows.extend(_girder_strand_layout_status_metrics())
+        return rows
+
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
     if not result.elements and active_rebar_count == 0:
@@ -2476,6 +2510,26 @@ def _girder_strand_layout_status_metrics() -> list[PrestressMetric]:
         PrestressMetric("Layout Pe_transfer", f"{pe_transfer:,.1f} kN", detail="not yet auto-linked"),
         PrestressMetric("Layout Pe_eff_final", f"{pe_final:,.1f} kN", detail="not yet auto-linked"),
     ]
+
+def _build_girder_prestress_summary_metrics() -> list[PrestressMetric]:
+    rows = [
+        PrestressMetric(
+            "Prestress workflow",
+            "Girder strand layout",
+            detail="simple-supported precast girder",
+            status="info",
+            strong=True,
+        ),
+        PrestressMetric(
+            "Section-level table",
+            "Hidden / ignored",
+            detail="no PS1/PS2 in main workflow",
+            status="neutral",
+        ),
+    ]
+    rows.extend(_girder_strand_layout_status_metrics())
+    return rows
+
 
 def _render_prestress_summary_strip(
     result: PrestressParseResult,
@@ -2567,7 +2621,13 @@ def _render_validation(
     all_errors = [*result.errors, *geometry_errors]
     warnings = list(result.warnings)
     contextual_notes: list[str] = []
-    if not result.elements and active_rebar_count > 0:
+    girder_workflow = _is_girder_prestress_layout_workflow_active()
+    if girder_workflow:
+        contextual_notes.append(
+            "Precast girder workflow uses the Simple-Supported Girder Strand Layout & Debonding table. "
+            "Section-level tendon/prestress rows are hidden and ignored here."
+        )
+    elif not result.elements and active_rebar_count > 0:
         contextual_notes.append(
             "No active prestress elements. The section will be analyzed as RC-only unless prestress rows are activated."
         )
@@ -2581,7 +2641,14 @@ def _render_validation(
         warnings.append("Section geometry is not available yet; geometry validation will run after a valid section is generated.")
     st.markdown(
         _status_panel_html(
-            _build_prestress_status_rows(result, geometry_errors, geometry_available, valid_for_analysis, active_rebar_count)
+            _build_prestress_status_rows(
+                result,
+                geometry_errors,
+                geometry_available,
+                valid_for_analysis,
+                active_rebar_count,
+                girder_workflow=girder_workflow,
+            )
         ),
         unsafe_allow_html=True,
     )
@@ -2699,120 +2766,134 @@ def render_prestress_page() -> None:
     main_col, side_col = st.columns([0.68, 0.32], gap="large")
     girder_prestress_layout_active = _is_girder_prestress_layout_workflow_active()
 
+    edited_df = pd.DataFrame(st.session_state["prestress_table"])
     with main_col:
-        section_table_expanded = not girder_prestress_layout_active
-        with st.expander("Section-level tendon / prestress table", expanded=section_table_expanded):
-            st.markdown("#### Prestress Input Workflow")
-            input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
-            if input_mode != "Manual table":
-                st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
+        if girder_prestress_layout_active:
+            st.markdown("#### Precast Girder Prestress Workflow")
+            st.info(
+                "This precast girder section uses the Simple-Supported Girder Strand Layout & Debonding workflow. "
+                "The legacy section-level tendon/prestress table is hidden and ignored for this section family."
+            )
+        else:
+            with st.expander("Section-level tendon / prestress table", expanded=True):
+                st.markdown("#### Prestress Input Workflow")
+                input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
+                if input_mode != "Manual table":
+                    st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
 
-            with st.expander("Tendon Product Creation / product database", expanded=False):
-                _render_tendon_product_tools()
+                with st.expander("Tendon Product Creation / product database", expanded=False):
+                    _render_tendon_product_tools()
 
-            st.markdown("#### Advanced Prestress Table")
-            st.markdown(
-                '<div class="cpmm-prestress-quiet-note">'
-                "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, and count. "
-                "Product/material reference fields are preserved in the backing table and shown below as read-only details."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                '<div class="cpmm-prestress-table-note">'
-                "Editing Product updates Area/material metadata through the existing product-sync logic. "
-                "Breaking Load and Duct ID remain reference data only; they are not used as Pe_eff or steel diameter."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
-            product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
-            st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
-            show_full_engineering_columns = st.checkbox(
-                "Show full engineering columns",
-                value=False,
-                help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
-                key="prestress_show_full_engineering_columns",
-            )
-            editor_table = _prestress_table_for_editor(st.session_state["prestress_table"])
-            editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(editor_table)
-            editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
-            edited_df = st.data_editor(
-                editor_table,
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=True,
-                column_order=editor_column_order,
-                column_config={
-                    "Active": st.column_config.CheckboxColumn("Active"),
-                    "Label": st.column_config.TextColumn("Label"),
-                    "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
-                    "Product": st.column_config.SelectboxColumn(
-                        "Product",
-                        options=product_options,
-                        help=(
-                            "Select a prestress product. Standard tendons are listed as Tendon 6-1 to Tendon 6-55; "
-                            "single strands and PT/PS bars follow. Legacy labels such as 6-12 are still accepted."
+                st.markdown("#### Advanced Prestress Table")
+                st.markdown(
+                    '<div class="cpmm-prestress-quiet-note">'
+                    "Compact editor for the fields that normally control analysis: location, product, area, effective prestress, bonded state, and count. "
+                    "Product/material reference fields are preserved in the backing table and shown below as read-only details."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    '<div class="cpmm-prestress-table-note">'
+                    "Editing Product updates Area/material metadata through the existing product-sync logic. "
+                    "Breaking Load and Duct ID remain reference data only; they are not used as Pe_eff or steel diameter."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
+                product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
+                st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
+                show_full_engineering_columns = st.checkbox(
+                    "Show full engineering columns",
+                    value=False,
+                    help="Use only when editing catalog/material reference fields such as fpy, fpu, Ep, duct reference, or strand metadata.",
+                    key="prestress_show_full_engineering_columns",
+                )
+                editor_table = _prestress_table_for_editor(st.session_state["prestress_table"])
+                editor_column_order = None if show_full_engineering_columns else _compact_column_order_for_table(editor_table)
+                editor_key = f"prestress_data_editor_{st.session_state['prestress_editor_revision']}"
+                edited_df = st.data_editor(
+                    editor_table,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    hide_index=True,
+                    column_order=editor_column_order,
+                    column_config={
+                        "Active": st.column_config.CheckboxColumn("Active"),
+                        "Label": st.column_config.TextColumn("Label"),
+                        "Steel Type": st.column_config.SelectboxColumn("Steel Type", options=STEEL_TYPE_OPTIONS),
+                        "Product": st.column_config.SelectboxColumn(
+                            "Product",
+                            options=product_options,
+                            help=(
+                                "Select a prestress product. Standard tendons are listed as Tendon 6-1 to Tendon 6-55; "
+                                "single strands and PT/PS bars follow. Legacy labels such as 6-12 are still accepted."
+                            ),
                         ),
-                    ),
-                    "x_mm": st.column_config.NumberColumn("x_mm"),
-                    "y_mm": st.column_config.NumberColumn("y_mm"),
-                    "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
-                    "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
-                    "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
-                    "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
-                    "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
-                    "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
-                    "Input Mode": st.column_config.SelectboxColumn(
-                        "Input Mode",
-                        options=INPUT_MODE_EDITOR_OPTIONS,
-                        help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
-                    ),
-                    "Pe_eff_kN": st.column_config.NumberColumn(
-                        "Pe_eff_kN",
-                        help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
-                    ),
-                    "fpe_MPa": st.column_config.NumberColumn(
-                        "fpe_MPa",
-                        help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
-                    ),
-                    "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
-                    "loss_percent": st.column_config.NumberColumn("loss_percent"),
-                    "Bonded": st.column_config.CheckboxColumn("Bonded"),
-                    "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
-                    "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
-                    "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
-                    "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
-                    "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
-                    "Note": st.column_config.TextColumn(
-                        "Remarks",
-                        help="Optional engineering remark for this prestress row. It is not used in calculation.",
-                    ),
-                },
-                key=editor_key,
-            )
-            edited_df = normalize_prestress_table_for_effective_input_sync(edited_df, prestress_db)
-            if not _dataframes_equal(edited_df, pd.DataFrame(st.session_state["prestress_table"])):
+                        "x_mm": st.column_config.NumberColumn("x_mm"),
+                        "y_mm": st.column_config.NumberColumn("y_mm"),
+                        "Area_mm2": st.column_config.NumberColumn("Area_mm2"),
+                        "Diameter_mm": st.column_config.NumberColumn("Diameter_mm"),
+                        "Eq Steel Dia_mm": st.column_config.NumberColumn("Eq Steel Dia_mm", disabled=True),
+                        "fpy_MPa": st.column_config.NumberColumn("fpy_MPa"),
+                        "fpu_MPa": st.column_config.NumberColumn("fpu_MPa"),
+                        "Ep_MPa": st.column_config.NumberColumn("Ep_MPa"),
+                        "Input Mode": st.column_config.SelectboxColumn(
+                            "Input Mode",
+                            options=INPUT_MODE_EDITOR_OPTIONS,
+                            help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
+                        ),
+                        "Pe_eff_kN": st.column_config.NumberColumn(
+                            "Pe_eff_kN",
+                            help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
+                        ),
+                        "fpe_MPa": st.column_config.NumberColumn(
+                            "fpe_MPa",
+                            help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
+                        ),
+                        "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
+                        "loss_percent": st.column_config.NumberColumn("loss_percent"),
+                        "Bonded": st.column_config.CheckboxColumn("Bonded"),
+                        "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
+                        "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),
+                        "Breaking Load_kN": st.column_config.NumberColumn("Breaking Load_kN", disabled=True),
+                        "Duct Type": st.column_config.TextColumn("Duct Type", disabled=True),
+                        "Duct ID_mm": st.column_config.NumberColumn("Duct ID_mm", disabled=True),
+                        "Note": st.column_config.TextColumn(
+                            "Remarks",
+                            help="Optional engineering remark for this prestress row. It is not used in calculation.",
+                        ),
+                    },
+                    key=editor_key,
+                )
+                edited_df = normalize_prestress_table_for_effective_input_sync(edited_df, prestress_db)
+                if not _dataframes_equal(edited_df, pd.DataFrame(st.session_state["prestress_table"])):
+                    st.session_state["prestress_table"] = edited_df
+                    st.session_state["prestress_editor_revision"] += 1
+                    st.rerun()
                 st.session_state["prestress_table"] = edited_df
-                st.session_state["prestress_editor_revision"] += 1
-                st.rerun()
-            st.session_state["prestress_table"] = edited_df
 
-            if not show_full_engineering_columns:
-                with st.expander("Product / material reference details", expanded=False):
-                    st.markdown(
-                        '<div class="cpmm-prestress-quiet-note">'
-                        "Read-only reference view for material/product fields hidden from the compact editor. "
-                        "Turn on full engineering columns above only when you intentionally need to edit reference/material fields."
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.dataframe(_prestress_reference_detail_dataframe(edited_df), use_container_width=True, hide_index=True)
+                if not show_full_engineering_columns:
+                    with st.expander("Product / material reference details", expanded=False):
+                        st.markdown(
+                            '<div class="cpmm-prestress-quiet-note">'
+                            "Read-only reference view for material/product fields hidden from the compact editor. "
+                            "Turn on full engineering columns above only when you intentionally need to edit reference/material fields."
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.dataframe(_prestress_reference_detail_dataframe(edited_df), use_container_width=True, hide_index=True)
 
-    result = prestress_elements_from_dataframe(edited_df, prestress_db)
     geometry = st.session_state.get("section_geometry")
-    geometry_errors = validate_prestress_against_geometry(result.elements, geometry)
-    valid_for_analysis = prestress_valid_for_analysis(result, geometry_errors)
+    if girder_prestress_layout_active:
+        result = _empty_prestress_parse_result([
+            "Section-level tendon/prestress table is hidden and ignored for this precast girder workflow."
+        ])
+        geometry_errors = []
+        valid_for_analysis = True
+    else:
+        result = prestress_elements_from_dataframe(edited_df, prestress_db)
+        geometry_errors = validate_prestress_against_geometry(result.elements, geometry)
+        valid_for_analysis = prestress_valid_for_analysis(result, geometry_errors)
     st.session_state["prestress_elements"] = result.elements
     st.session_state["prestress_valid_for_analysis"] = valid_for_analysis
 
@@ -2830,21 +2911,29 @@ def render_prestress_page() -> None:
     active_rebar_count = len(st.session_state.get("rebars", []) or []) if ordinary_rebar_enabled(st.session_state, default=True) else 0
 
     with summary_slot.container():
-        _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis, active_rebar_count)
+        if girder_prestress_layout_active:
+            st.markdown(_metric_strip_html(_build_girder_prestress_summary_metrics()), unsafe_allow_html=True)
+        else:
+            _render_prestress_summary_strip(result, geometry_errors, valid_for_analysis, active_rebar_count)
 
     with side_col:
         _render_validation(result, geometry_errors, geometry is not None, valid_for_analysis, active_rebar_count)
-        _render_prestress_section_preview_panel(geometry, result)
+        if girder_prestress_layout_active:
+            st.markdown("#### Girder Strand Preview")
+            st.caption("Use the Cross-section layout tab in the strand/debonding workflow. Legacy PS1/PS2 section-level previews are hidden for precast girders.")
+        else:
+            _render_prestress_section_preview_panel(geometry, result)
         _render_engineering_notes()
 
-    invalid_rows_df = _invalid_prestress_rows_dataframe(edited_df, result.errors)
-    if not invalid_rows_df.empty:
-        st.markdown("#### Rows Excluded from Analysis")
-        st.warning(
-            "Rows listed below have validation errors and are not included in Valid elements, Total Aps, Total Pe_eff, Prestress Summary, or PMM/SLS analysis."
-        )
-        st.dataframe(invalid_rows_df, use_container_width=True, hide_index=True)
+    if not girder_prestress_layout_active:
+        invalid_rows_df = _invalid_prestress_rows_dataframe(edited_df, result.errors)
+        if not invalid_rows_df.empty:
+            st.markdown("#### Rows Excluded from Analysis")
+            st.warning(
+                "Rows listed below have validation errors and are not included in Valid elements, Total Aps, Total Pe_eff, Prestress Summary, or PMM/SLS analysis."
+            )
+            st.dataframe(invalid_rows_df, use_container_width=True, hide_index=True)
 
-    st.markdown("#### Prestress Summary")
-    st.caption("Only valid active prestress rows used by analysis are shown here. Rows with validation errors are excluded until corrected.")
-    st.dataframe(prestress_summary_dataframe(result.elements), use_container_width=True, hide_index=True)
+        st.markdown("#### Prestress Summary")
+        st.caption("Only valid active prestress rows used by analysis are shown here. Rows with validation errors are excluded until corrected.")
+        st.dataframe(prestress_summary_dataframe(result.elements), use_container_width=True, hide_index=True)

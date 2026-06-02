@@ -208,36 +208,36 @@
         },
         {
           "name": "t_top_mm",
-          "label": "t_top / top slab (mm)",
+          "label": "Void top cover / top solid depth (mm)",
           "type": "number",
-          "default": 120,
+          "default": 230,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_bottom_mm",
-          "label": "t_bottom / bottom slab (mm)",
+          "label": "Void bottom cover / bottom solid depth (mm)",
           "type": "number",
-          "default": 120,
+          "default": 230,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_left_mm",
-          "label": "t_left web/solid zone (mm)",
+          "label": "Void left offset / web-solid width (mm)",
           "type": "number",
-          "default": 270,
+          "default": 320,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_right_mm",
-          "label": "t_right web/solid zone (mm)",
+          "label": "Void right offset / web-solid width (mm)",
           "type": "number",
-          "default": 270,
+          "default": 320,
           "min": 1,
           "max": 5000,
           "step": 5
@@ -246,14 +246,14 @@
           "name": "r_inner_mm",
           "label": "Inner void chamfer Ci (mm)",
           "type": "number",
-          "default": 70,
+          "default": 60,
           "min": 0,
           "max": 5000,
           "step": 5
         },
         {
           "name": "r_outer_mm",
-          "label": "Outer corner radius Ro (mm)",
+          "label": "Outer corner radius Ro (legacy, keep 0) (mm)",
           "type": "number",
           "default": 0,
           "min": 0,
@@ -261,7 +261,7 @@
           "step": 5
         }
       ],
-      "description": "Interior precast composite box beam with side break lines and straight-chamfered internal void corners."
+      "description": "Interior precast composite box beam using the drawing-based side break profile and straight-chamfered internal void."
     },
     {
       "key": "precast_box_beam_exterior",
@@ -290,36 +290,36 @@
         },
         {
           "name": "t_top_mm",
-          "label": "t_top / top slab (mm)",
+          "label": "Void top cover / top solid depth (mm)",
           "type": "number",
-          "default": 120,
+          "default": 230,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_bottom_mm",
-          "label": "t_bottom / bottom slab (mm)",
+          "label": "Void bottom cover / bottom solid depth (mm)",
           "type": "number",
-          "default": 120,
+          "default": 230,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_left_mm",
-          "label": "t_left web/solid zone (mm)",
+          "label": "Void left offset / web-solid width (mm)",
           "type": "number",
-          "default": 270,
+          "default": 320,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_right_mm",
-          "label": "t_right exterior solid zone (mm)",
+          "label": "Void right offset / web-solid width (mm)",
           "type": "number",
-          "default": 315,
+          "default": 320,
           "min": 1,
           "max": 5000,
           "step": 5
@@ -328,14 +328,14 @@
           "name": "r_inner_mm",
           "label": "Inner void chamfer Ci (mm)",
           "type": "number",
-          "default": 70,
+          "default": 60,
           "min": 0,
           "max": 5000,
           "step": 5
         },
         {
           "name": "r_outer_mm",
-          "label": "Outer corner radius Ro (mm)",
+          "label": "Outer corner radius Ro (legacy, keep 0) (mm)",
           "type": "number",
           "default": 0,
           "min": 0,
@@ -343,7 +343,7 @@
           "step": 5
         }
       ],
-      "description": "Exterior precast composite box beam with one straight outside face and chamfered internal void corners."
+      "description": "Exterior precast composite box beam using a straight outside face and drawing-based side break profile on the interior side."
     },
     {
       "key": "parametric_i_girder",

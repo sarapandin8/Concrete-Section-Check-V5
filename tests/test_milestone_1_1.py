@@ -81,6 +81,55 @@ def test_precast_box_beam_exterior_uses_straight_outside_face_and_chamfered_void
     assert geometry.metadata["exterior_side"] == "right"
 
 
+
+
+def test_precast_box_beam_interior_uses_drawing_based_outer_profile() -> None:
+    geometry = box_section_fillet(
+        width_mm=990,
+        height_mm=700,
+        t_top_mm=230,
+        t_bottom_mm=230,
+        t_left_mm=320,
+        t_right_mm=320,
+        r_inner_mm=60,
+        r_outer_mm=0,
+    )
+
+    result = validate_section_geometry(geometry)
+
+    assert result.is_valid, result.errors
+    outer = [(round(p.x, 3), round(p.y, 3)) for p in geometry.outer_polygon]
+    assert (-495.0, -350.0) in outer
+    assert (495.0, -350.0) in outer
+    assert (-450.0, 350.0) in outer
+    assert (450.0, 350.0) in outer
+    assert not ((-495.0, 350.0) in outer or (495.0, 350.0) in outer)
+    assert len(geometry.holes[0]) == 8
+
+
+def test_precast_box_beam_exterior_keeps_right_outside_face_straight() -> None:
+    geometry = precast_box_beam_exterior(
+        width_mm=990,
+        height_mm=700,
+        t_top_mm=230,
+        t_bottom_mm=230,
+        t_left_mm=320,
+        t_right_mm=320,
+        r_inner_mm=60,
+        r_outer_mm=0,
+    )
+
+    result = validate_section_geometry(geometry)
+
+    assert result.is_valid, result.errors
+    outer = [(round(p.x, 3), round(p.y, 3)) for p in geometry.outer_polygon]
+    assert (495.0, -350.0) in outer
+    assert (495.0, 350.0) in outer
+    assert (-450.0, 350.0) in outer
+    assert not (-495.0, 350.0) in outer
+    assert geometry.metadata["exterior_side"] == "right"
+
+
 def test_circular_hollow_rejects_invalid_inner_diameter() -> None:
     with pytest.raises(ValueError, match="D_inner"):
         circular_hollow(outer_diameter_mm=800, inner_diameter_mm=800)

@@ -115,52 +115,67 @@ def _precast_box_beam_outer_points(
     side_recess_mm: float = 45.0,
     exterior_side: str | None = None,
 ) -> list[Point2D]:
-    """Return a practical precast box beam outer profile.
+    """Return a drawing-based precast box beam outer profile.
 
-    The default shape follows the user's interior/exterior box beam sketches: a
-    generally rectangular precast box with straight side break lines rather than
-    rounded fillets.  ``exterior_side='right'`` keeps the right outside face
-    straight for exterior beams while the opposite face keeps the interior-style
-    side break.
+    The box-beam sketches used for this project show a full bottom width and
+    a top edge inset from the side by about 45 mm.  The side face then breaks
+    outward with a short straight chamfer before continuing down to the bottom
+    corner.  This is intentionally *not* a filleted/rounded box section.
+
+    ``exterior_side='right'`` keeps the right outside face straight for an
+    exterior box beam while the opposite side keeps the interior-style break.
+    Coordinates are returned counter-clockwise starting at the bottom-left
+    corner.
     """
 
-    w = width_mm / 2.0
-    d = height_mm / 2.0
-    recess = max(0.0, min(float(side_recess_mm), width_mm * 0.12, height_mm * 0.25))
-    y_lower = -d + min(height_mm * 0.22, 155.0)
-    y_mid_lower = -d + min(height_mm * 0.34, 240.0)
-    y_mid_upper = d - min(height_mm * 0.34, 240.0)
-    y_upper = d - min(height_mm * 0.22, 155.0)
+    w = float(width_mm) / 2.0
+    d = float(height_mm) / 2.0
+    inset = max(0.0, min(float(side_recess_mm), width_mm * 0.12, height_mm * 0.25))
 
-    def right_profile(straight: bool) -> list[Point2D]:
-        if straight or recess <= 0.0:
-            return [_point(w, -d), _point(w, d)]
-        return [
-            _point(w, -d),
-            _point(w, y_lower),
-            _point(w - recess, y_mid_lower),
-            _point(w - recess, y_mid_upper),
-            _point(w, y_upper),
-            _point(w, d),
-        ]
-
-    def left_profile(straight: bool) -> list[Point2D]:
-        if straight or recess <= 0.0:
-            return [_point(-w, d), _point(-w, -d)]
-        return [
-            _point(-w, d),
-            _point(-w, y_upper),
-            _point(-w + recess, y_mid_upper),
-            _point(-w + recess, y_mid_lower),
-            _point(-w, y_lower),
-            _point(-w, -d),
-        ]
+    # Match the user drawing proportion: the break sits in the upper half of
+    # the section, below the top flange but well above the prestressing rows.
+    y_break_top = d - min(max(height_mm * 0.24, 150.0), height_mm * 0.36)
+    y_break_bottom = y_break_top - min(max(height_mm * 0.07, 45.0), height_mm * 0.12)
+    y_break_bottom = max(y_break_bottom, -d + height_mm * 0.35)
 
     exterior = (exterior_side or "").strip().casefold()
-    points: list[Point2D] = []
-    points.extend(right_profile(straight=exterior == "right"))
-    # Add the top edge by continuing through the left profile from top to bottom.
-    points.extend(left_profile(straight=exterior == "left"))
+
+    points: list[Point2D] = [_point(-w, -d), _point(w, -d)]
+
+    # Right side: either straight exterior face or drawing-style interior break.
+    if exterior == "right" or inset <= 0.0:
+        points.append(_point(w, d))
+    else:
+        points.extend(
+            [
+                _point(w, y_break_bottom),
+                _point(w - inset, y_break_top),
+                _point(w - inset, d),
+            ]
+        )
+
+    # Top edge.  Exterior right keeps the full outside face; interior uses
+    # inset top corners both sides.
+    if exterior == "right":
+        points.append(_point(-w + inset, d))
+    else:
+        points.append(_point(-w + inset, d))
+
+    # Left side: either straight exterior face or drawing-style interior break.
+    if exterior == "left" or inset <= 0.0:
+        points.append(_point(-w, -d))
+    else:
+        points.extend(
+            [
+                _point(-w + inset, y_break_top),
+                _point(-w, y_break_bottom),
+                _point(-w, -d),
+            ]
+        )
+
+    # Drop duplicated closing point; SectionGeometry polygons are implicitly closed.
+    if len(points) > 1 and points[-1].x == points[0].x and points[-1].y == points[0].y:
+        points.pop()
     return points
 
 

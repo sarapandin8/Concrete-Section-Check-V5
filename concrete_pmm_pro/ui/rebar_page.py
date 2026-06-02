@@ -813,13 +813,7 @@ def render_rebar_page() -> None:
                 unsafe_allow_html=True,
             )
 
-    summary_col, preview_col = st.columns([0.58, 0.42], gap="large")
-    with summary_col:
-        st.subheader("Rebar Summary")
-        st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
-
-    if geometry is not None:
-        with preview_col:
+        if geometry is not None:
             st.subheader("Section Preview with Rebar")
             preview_fig = create_section_preview(
                 geometry,
@@ -834,3 +828,6 @@ def render_rebar_page() -> None:
                 use_container_width=True,
                 key="rebar_section_preview",
             )
+
+    st.subheader("Rebar Summary")
+    st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)

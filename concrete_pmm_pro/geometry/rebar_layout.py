@@ -4,8 +4,8 @@ The helpers in this module are intentionally pure-Python / geometry-only so the
 Rebar UI can preview generated layouts without changing the PMM solver.  The
 first supported workflow is a conservative perimeter layout for column/pier/
 wall/pylon style sections: offset the current section outline inward by a bar
-center distance and place bars at approximately uniform spacing along that
-inner perimeter.
+center distance, place bars at geometric corner/control points first, and fill
+bars along each segment at approximately the target spacing.
 """
 
 from __future__ import annotations
@@ -74,6 +74,125 @@ def _point_is_effectively_inside(section: Polygon, point: Point, tolerance_mm: f
     return section.buffer(tolerance_mm).covers(point)
 
 
+def _normalize_vector(dx: float, dy: float) -> tuple[float, float] | None:
+    length = math.hypot(dx, dy)
+    if length <= 1.0e-9:
+        return None
+    return dx / length, dy / length
+
+
+def _turn_angle_degrees(prev_point: tuple[float, float], point: tuple[float, float], next_point: tuple[float, float]) -> float:
+    """Return the absolute change in tangent direction at a ring vertex.
+
+    Rectangular/polygonal corners typically produce about 90 degrees.  Vertices
+    from a discretized circle produce only a few degrees, so they are not treated
+    as mandatory corner bars.
+    """
+    incoming = _normalize_vector(point[0] - prev_point[0], point[1] - prev_point[1])
+    outgoing = _normalize_vector(next_point[0] - point[0], next_point[1] - point[1])
+    if incoming is None or outgoing is None:
+        return 0.0
+    cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+    dot = max(-1.0, min(1.0, incoming[0] * outgoing[0] + incoming[1] * outgoing[1]))
+    return abs(math.degrees(math.atan2(cross, dot)))
+
+
+def _corner_vertex_indices(coords: list[tuple[float, float]], threshold_degrees: float = 30.0) -> list[int]:
+    """Find polygon/kink vertices where mandatory control bars should be placed."""
+    if len(coords) < 3:
+        return []
+    indices: list[int] = []
+    for index, point in enumerate(coords):
+        prev_point = coords[index - 1]
+        next_point = coords[(index + 1) % len(coords)]
+        if _turn_angle_degrees(prev_point, point, next_point) >= threshold_degrees:
+            indices.append(index)
+    return indices
+
+
+def _ring_vertex_distances(coords: list[tuple[float, float]]) -> list[float]:
+    distances = [0.0]
+    for index in range(1, len(coords)):
+        previous = coords[index - 1]
+        current = coords[index]
+        distances.append(distances[-1] + math.hypot(current[0] - previous[0], current[1] - previous[1]))
+    return distances
+
+
+def _dedup_distances(distances: Iterable[float], perimeter_length_mm: float, tolerance_mm: float = 1.0e-5) -> list[float]:
+    unique: list[float] = []
+    for value in sorted((float(distance) % perimeter_length_mm for distance in distances)):
+        if not unique or abs(value - unique[-1]) > tolerance_mm:
+            unique.append(value)
+    if len(unique) > 1 and abs((unique[0] + perimeter_length_mm) - unique[-1]) <= tolerance_mm:
+        unique.pop()
+    return unique
+
+
+def _uniform_distances(perimeter_length_mm: float, target_spacing_mm: float, min_bars: int) -> tuple[list[float], float]:
+    generated_count = max(int(min_bars), int(math.ceil(perimeter_length_mm / target_spacing_mm)))
+    actual_spacing_mm = perimeter_length_mm / generated_count
+    return [index * perimeter_length_mm / generated_count for index in range(generated_count)], actual_spacing_mm
+
+
+def _corner_controlled_distances(
+    layout_polygon: Polygon,
+    *,
+    target_spacing_mm: float,
+    min_bars: int,
+    corner_angle_threshold_degrees: float = 30.0,
+) -> tuple[list[float], float, int]:
+    """Place mandatory bars at offset-polygon corners and fill each segment.
+
+    Returns generated distances along the offset perimeter, the maximum segment
+    spacing used, and the number of detected control/corner points.  If no real
+    corners are detected, the caller should use uniform spacing logic instead.
+    """
+    perimeter = layout_polygon.exterior
+    perimeter_length_mm = float(perimeter.length)
+    coords = [(float(x), float(y)) for x, y in list(perimeter.coords)[:-1]]
+    control_indices = _corner_vertex_indices(coords, threshold_degrees=corner_angle_threshold_degrees)
+    if len(control_indices) < 2:
+        distances, actual_spacing = _uniform_distances(perimeter_length_mm, target_spacing_mm, min_bars)
+        return distances, actual_spacing, 0
+
+    vertex_distances = _ring_vertex_distances(coords)
+    control_distances = [vertex_distances[index] for index in control_indices]
+    control_distances = _dedup_distances(control_distances, perimeter_length_mm)
+    if len(control_distances) < 2:
+        distances, actual_spacing = _uniform_distances(perimeter_length_mm, target_spacing_mm, min_bars)
+        return distances, actual_spacing, 0
+
+    segment_lengths: list[float] = []
+    for index, start in enumerate(control_distances):
+        end = control_distances[(index + 1) % len(control_distances)]
+        if end <= start:
+            end += perimeter_length_mm
+        segment_lengths.append(end - start)
+
+    segment_intervals = [max(1, int(math.ceil(length / target_spacing_mm))) for length in segment_lengths]
+    # Points generated by segment intervals include each control point exactly
+    # once plus intermediate bars within each segment.  Increase intervals on
+    # the longest current spacing segments when a user asks for a higher minimum
+    # bar count than the spacing rule would produce.
+    while sum(segment_intervals) < int(min_bars):
+        spacing_by_segment = [segment_lengths[i] / max(1, segment_intervals[i]) for i in range(len(segment_lengths))]
+        index_to_increase = max(range(len(spacing_by_segment)), key=spacing_by_segment.__getitem__)
+        segment_intervals[index_to_increase] += 1
+
+    generated_distances: list[float] = []
+    max_spacing = 0.0
+    for segment_index, start in enumerate(control_distances):
+        intervals = segment_intervals[segment_index]
+        length = segment_lengths[segment_index]
+        step = length / intervals
+        max_spacing = max(max_spacing, step)
+        for j in range(intervals):
+            generated_distances.append(start + j * step)
+
+    return _dedup_distances(generated_distances, perimeter_length_mm), max_spacing, len(control_distances)
+
+
 def generate_perimeter_rebar_layout(
     geometry: SectionGeometry | None,
     *,
@@ -137,23 +256,33 @@ def generate_perimeter_rebar_layout(
     if perimeter_length_mm <= 0:
         return PerimeterRebarLayoutResult(table=empty_table, errors=("Generated offset perimeter has zero length.",))
 
-    generated_count = max(int(min_bars), int(math.ceil(perimeter_length_mm / target_spacing_mm)))
-    actual_spacing_mm = perimeter_length_mm / generated_count
+    distances, actual_spacing_mm, control_count = _corner_controlled_distances(
+        layout_polygon,
+        target_spacing_mm=float(target_spacing_mm),
+        min_bars=int(min_bars),
+    )
+    generated_count = len(distances)
+    if control_count:
+        info.append(
+            f"Corner-controlled layout: {control_count} section corner/control bar(s) placed before filling intermediate bars."
+        )
+    else:
+        info.append("No geometric corner/control points were detected; uniform perimeter layout is used.")
+
     if actual_spacing_mm > target_spacing_mm * 1.15:
         warnings.append(
-            f"Actual generated spacing is {actual_spacing_mm:.1f} mm, more than 15% above the target {target_spacing_mm:.1f} mm."
+            f"Maximum generated spacing is {actual_spacing_mm:.1f} mm, more than 15% above the target {target_spacing_mm:.1f} mm."
         )
     if actual_spacing_mm < max(25.0, diameter_mm):
         warnings.append(
-            f"Actual generated spacing is {actual_spacing_mm:.1f} mm; review bar clear spacing/detailing requirements."
+            f"Minimum generated spacing may be close; maximum segment spacing is {actual_spacing_mm:.1f} mm. Review clear spacing/detailing requirements."
         )
 
     rows: list[dict[str, object]] = []
     outside_count = 0
     prefix = str(label_prefix or "B").strip() or "B"
-    for index in range(generated_count):
-        distance = index * perimeter_length_mm / generated_count
-        point = perimeter.interpolate(distance)
+    for index, distance in enumerate(distances):
+        point = perimeter.interpolate(distance % perimeter_length_mm)
         if not _point_is_effectively_inside(section, point):
             outside_count += 1
         rows.append(
@@ -166,7 +295,7 @@ def generate_perimeter_rebar_layout(
                 "Diameter_mm": float(diameter_mm),
                 "Material": str(material or "SD40"),
                 "Count": 1,
-                "Note": f"Auto perimeter: offset={edge_offset_mm:g} mm, target spacing={target_spacing_mm:g} mm",
+                "Note": f"Auto perimeter: corner-controlled, offset={edge_offset_mm:g} mm, target spacing={target_spacing_mm:g} mm",
             }
         )
 
@@ -174,7 +303,7 @@ def generate_perimeter_rebar_layout(
         errors.append(f"{outside_count} generated bar point(s) are outside concrete; use manual input or adjust the offset.")
 
     info.append(
-        f"Generated {generated_count} bar(s) along an inward offset perimeter; actual spacing ≈ {actual_spacing_mm:.1f} mm."
+        f"Generated {generated_count} bar(s) along an inward offset perimeter; maximum segment spacing ≈ {actual_spacing_mm:.1f} mm."
     )
     info.append(f"Bar center offset from concrete edge = {edge_offset_mm:.1f} mm.")
 

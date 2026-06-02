@@ -117,3 +117,41 @@ def test_rebar_page_exposes_auto_perimeter_preview_apply_workflow() -> None:
     assert "Target spacing (mm)" in source
     assert "Apply generated perimeter layout to Rebar table" in source
     assert "does not silently overwrite manual bars" in source
+
+
+def test_perimeter_rebar_layout_places_mandatory_corner_control_bars() -> None:
+    from concrete_pmm_pro.geometry.rebar_layout import generate_perimeter_rebar_layout
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-300.0, y=-300.0),
+            Point2D(x=300.0, y=-300.0),
+            Point2D(x=300.0, y=300.0),
+            Point2D(x=-300.0, y=300.0),
+        ]
+    )
+
+    result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size="DB20",
+        diameter_mm=20.0,
+        material="SD40",
+        edge_offset_mm=75.0,
+        target_spacing_mm=150.0,
+        min_bars=4,
+        label_prefix="B",
+    )
+
+    generated_points = {(round(row.x_mm, 3), round(row.y_mm, 3)) for row in result.table.itertuples()}
+    assert {(-225.0, -225.0), (225.0, -225.0), (225.0, 225.0), (-225.0, 225.0)} <= generated_points
+    assert any("Corner-controlled layout" in info for info in result.info)
+
+
+def test_rebar_preview_is_rendered_inside_status_column_before_summary() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "rebar_page.py").read_text(encoding="utf-8")
+
+    status_column_index = source.index("with status_col:")
+    preview_index = source.index("Section Preview with Rebar")
+    summary_index = source.index("Rebar Summary")
+
+    assert status_column_index < preview_index < summary_index

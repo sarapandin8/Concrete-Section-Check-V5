@@ -25,6 +25,7 @@ GIRDER_SECTION_LEVEL_PRESTRESS_IGNORED_PRESET_KEYS = frozenset(
         "parametric_i_girder",
         "u_girder",
         "box_section_fillet",
+        "precast_box_beam_exterior",
         "parametric_plank_girder_interior",
         "parametric_plank_girder_exterior",
         "psc_i_girder",

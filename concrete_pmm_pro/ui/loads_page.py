@@ -59,6 +59,7 @@ PRECAST_COMPOSITE_GIRDER_PRESET_KEYS = {
     "parametric_i_girder",
     "u_girder",
     "box_section_fillet",
+    "precast_box_beam_exterior",
     "parametric_plank_girder_interior",
     "parametric_plank_girder_exterior",
 }

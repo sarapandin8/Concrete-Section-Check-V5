@@ -445,7 +445,7 @@ def _is_precast_u_girder(preset: dict[str, Any]) -> bool:
 
 
 def _is_precast_box_beam(preset: dict[str, Any]) -> bool:
-    return str(preset.get("key", "")) == "box_section_fillet"
+    return str(preset.get("key", "")) in {"box_section_fillet", "precast_box_beam_exterior"}
 
 
 def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:

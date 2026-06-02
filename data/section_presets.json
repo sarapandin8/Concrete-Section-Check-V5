@@ -183,7 +183,7 @@
     },
     {
       "key": "box_section_fillet",
-      "display_name": "Box Beam",
+      "display_name": "Precast Box Beam – Interior",
       "category": "Precast Composite Girder",
       "generator": "box_section_fillet",
       "dimensions_generator": "box_section_fillet",
@@ -192,7 +192,7 @@
           "name": "width_mm",
           "label": "Width B (mm)",
           "type": "number",
-          "default": 1200,
+          "default": 990,
           "min": 1,
           "max": 30000,
           "step": 10
@@ -201,52 +201,52 @@
           "name": "height_mm",
           "label": "Height H (mm)",
           "type": "number",
-          "default": 900,
+          "default": 700,
           "min": 1,
           "max": 30000,
           "step": 10
         },
         {
           "name": "t_top_mm",
-          "label": "t_top (mm)",
+          "label": "t_top / top slab (mm)",
           "type": "number",
-          "default": 150,
+          "default": 120,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_bottom_mm",
-          "label": "t_bottom (mm)",
+          "label": "t_bottom / bottom slab (mm)",
           "type": "number",
-          "default": 170,
+          "default": 120,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_left_mm",
-          "label": "t_left (mm)",
+          "label": "t_left web/solid zone (mm)",
           "type": "number",
-          "default": 140,
+          "default": 270,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "t_right_mm",
-          "label": "t_right (mm)",
+          "label": "t_right web/solid zone (mm)",
           "type": "number",
-          "default": 160,
+          "default": 270,
           "min": 1,
           "max": 5000,
           "step": 5
         },
         {
           "name": "r_inner_mm",
-          "label": "Inner chamfer Ci (mm)",
+          "label": "Inner void chamfer Ci (mm)",
           "type": "number",
-          "default": 100,
+          "default": 70,
           "min": 0,
           "max": 5000,
           "step": 5
@@ -261,7 +261,89 @@
           "step": 5
         }
       ],
-      "description": "Precast composite box beam with straight-chamfered internal void corners."
+      "description": "Interior precast composite box beam with side break lines and straight-chamfered internal void corners."
+    },
+    {
+      "key": "precast_box_beam_exterior",
+      "display_name": "Precast Box Beam – Exterior",
+      "category": "Precast Composite Girder",
+      "generator": "precast_box_beam_exterior",
+      "dimensions_generator": "precast_box_beam_exterior",
+      "parameters": [
+        {
+          "name": "width_mm",
+          "label": "Width B (mm)",
+          "type": "number",
+          "default": 990,
+          "min": 1,
+          "max": 30000,
+          "step": 10
+        },
+        {
+          "name": "height_mm",
+          "label": "Height H (mm)",
+          "type": "number",
+          "default": 700,
+          "min": 1,
+          "max": 30000,
+          "step": 10
+        },
+        {
+          "name": "t_top_mm",
+          "label": "t_top / top slab (mm)",
+          "type": "number",
+          "default": 120,
+          "min": 1,
+          "max": 5000,
+          "step": 5
+        },
+        {
+          "name": "t_bottom_mm",
+          "label": "t_bottom / bottom slab (mm)",
+          "type": "number",
+          "default": 120,
+          "min": 1,
+          "max": 5000,
+          "step": 5
+        },
+        {
+          "name": "t_left_mm",
+          "label": "t_left web/solid zone (mm)",
+          "type": "number",
+          "default": 270,
+          "min": 1,
+          "max": 5000,
+          "step": 5
+        },
+        {
+          "name": "t_right_mm",
+          "label": "t_right exterior solid zone (mm)",
+          "type": "number",
+          "default": 315,
+          "min": 1,
+          "max": 5000,
+          "step": 5
+        },
+        {
+          "name": "r_inner_mm",
+          "label": "Inner void chamfer Ci (mm)",
+          "type": "number",
+          "default": 70,
+          "min": 0,
+          "max": 5000,
+          "step": 5
+        },
+        {
+          "name": "r_outer_mm",
+          "label": "Outer corner radius Ro (mm)",
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 5000,
+          "step": 5
+        }
+      ],
+      "description": "Exterior precast composite box beam with one straight outside face and chamfered internal void corners."
     },
     {
       "key": "parametric_i_girder",

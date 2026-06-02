@@ -202,6 +202,7 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     general_i = preset_by_key("psc_i_girder")
     u_girder = preset_by_key("u_girder")
     box_beam = preset_by_key("box_section_fillet")
+    exterior_box_beam = preset_by_key("precast_box_beam_exterior")
 
     assert i_girder["display_name"] == "Precast I-Girder"
     assert i_girder["category"] == "Precast Composite Girder"
@@ -210,8 +211,10 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     assert general_i["category"] == "General / Non-composite Girder"
     assert u_girder["display_name"] == "Precast U-Girder"
     assert u_girder["category"] == "Precast Composite Girder"
-    assert box_beam["display_name"] == "Box Beam"
+    assert box_beam["display_name"] == "Precast Box Beam – Interior"
     assert box_beam["category"] == "Precast Composite Girder"
+    assert exterior_box_beam["display_name"] == "Precast Box Beam – Exterior"
+    assert exterior_box_beam["category"] == "Precast Composite Girder"
     assert any(param["name"] == "r_inner_mm" and "chamfer" in param["label"].lower() for param in box_beam["parameters"])
     assert not any(param["name"] == "n_fillet" for param in box_beam["parameters"])
     assert section_builder._girder_section_family(i_girder) == "precast_composite_girder"
@@ -220,6 +223,8 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     assert section_builder._recommended_service_basis_for_preset(u_girder) == "Composite transformed"
     assert section_builder._girder_section_family(box_beam) == "precast_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(box_beam) == "Composite transformed"
+    assert section_builder._girder_section_family(exterior_box_beam) == "precast_composite_girder"
+    assert section_builder._recommended_service_basis_for_preset(exterior_box_beam) == "Composite transformed"
     assert section_builder._girder_section_family(general_i) == "general_non_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(general_i) == "Precast gross"
 

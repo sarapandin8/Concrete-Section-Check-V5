@@ -11,6 +11,7 @@ from concrete_pmm_pro.geometry.generators import (
     box_section_fillet,
     box_section_fillet_dimensions,
     circular_hollow,
+    precast_box_beam_exterior,
     psc_i_girder,
     rectangular_hollow,
     single_cell_box_girder,
@@ -56,6 +57,28 @@ def test_box_section_fillet_uses_inner_chamfer() -> None:
     assert summary.area_mm2 > 0
     assert len(geometry.holes[0]) == 8
     assert geometry.metadata["inner_chamfer_mm"] == pytest.approx(80)
+
+
+def test_precast_box_beam_exterior_uses_straight_outside_face_and_chamfered_void() -> None:
+    geometry = precast_box_beam_exterior(
+        width_mm=990,
+        height_mm=700,
+        t_top_mm=120,
+        t_bottom_mm=120,
+        t_left_mm=270,
+        t_right_mm=315,
+        r_inner_mm=70,
+        r_outer_mm=0,
+    )
+
+    result = validate_section_geometry(geometry)
+    summary = summarize_geometry(geometry)
+
+    assert result.is_valid, result.errors
+    assert summary.area_mm2 > 0
+    assert len(geometry.holes[0]) == 8
+    assert geometry.metadata["preset"] == "precast_box_beam_exterior"
+    assert geometry.metadata["exterior_side"] == "right"
 
 
 def test_circular_hollow_rejects_invalid_inner_diameter() -> None:

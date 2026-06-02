@@ -108,6 +108,61 @@ def _rounded_rectangle_points(width_mm: float, height_mm: float, radius_mm: floa
         segments_per_corner,
     )
 
+def _precast_box_beam_outer_points(
+    width_mm: float,
+    height_mm: float,
+    *,
+    side_recess_mm: float = 45.0,
+    exterior_side: str | None = None,
+) -> list[Point2D]:
+    """Return a practical precast box beam outer profile.
+
+    The default shape follows the user's interior/exterior box beam sketches: a
+    generally rectangular precast box with straight side break lines rather than
+    rounded fillets.  ``exterior_side='right'`` keeps the right outside face
+    straight for exterior beams while the opposite face keeps the interior-style
+    side break.
+    """
+
+    w = width_mm / 2.0
+    d = height_mm / 2.0
+    recess = max(0.0, min(float(side_recess_mm), width_mm * 0.12, height_mm * 0.25))
+    y_lower = -d + min(height_mm * 0.22, 155.0)
+    y_mid_lower = -d + min(height_mm * 0.34, 240.0)
+    y_mid_upper = d - min(height_mm * 0.34, 240.0)
+    y_upper = d - min(height_mm * 0.22, 155.0)
+
+    def right_profile(straight: bool) -> list[Point2D]:
+        if straight or recess <= 0.0:
+            return [_point(w, -d), _point(w, d)]
+        return [
+            _point(w, -d),
+            _point(w, y_lower),
+            _point(w - recess, y_mid_lower),
+            _point(w - recess, y_mid_upper),
+            _point(w, y_upper),
+            _point(w, d),
+        ]
+
+    def left_profile(straight: bool) -> list[Point2D]:
+        if straight or recess <= 0.0:
+            return [_point(-w, d), _point(-w, -d)]
+        return [
+            _point(-w, d),
+            _point(-w, y_upper),
+            _point(-w + recess, y_mid_upper),
+            _point(-w + recess, y_mid_lower),
+            _point(-w, y_lower),
+            _point(-w, -d),
+        ]
+
+    exterior = (exterior_side or "").strip().casefold()
+    points: list[Point2D] = []
+    points.extend(right_profile(straight=exterior == "right"))
+    # Add the top edge by continuing through the left profile from top to bottom.
+    points.extend(left_profile(straight=exterior == "left"))
+    return points
+
 
 def _require_positive(name: str, value: float) -> None:
     if value <= 0:
@@ -274,7 +329,7 @@ def box_section_fillet(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
-    name: str = "Box Beam",
+    name: str = "Precast Box Beam – Interior",
 ) -> SectionGeometry:
     top, bottom, left, right = _resolve_wall_thicknesses(
         t_top_mm=t_top_mm,
@@ -310,7 +365,11 @@ def box_section_fillet(
 
     return SectionGeometry(
         name=name,
-        outer_polygon=_rounded_rectangle_points(width_mm, height_mm, outer_radius, n_fillet),
+        outer_polygon=(
+            _rounded_rectangle_points(width_mm, height_mm, outer_radius, n_fillet)
+            if outer_radius > 0.0
+            else _precast_box_beam_outer_points(width_mm, height_mm)
+        ),
         holes=[list(reversed(_chamfered_rectangle_from_bounds(*inner_bounds, inner_chamfer)))],
         metadata={
             "preset": "box_section_fillet",
@@ -321,6 +380,70 @@ def box_section_fillet(
             "r_inner_mm": inner_chamfer,
             "r_outer_mm": outer_radius,
             "n_fillet": n_fillet,
+        },
+    )
+
+
+def precast_box_beam_exterior(
+    width_mm: float,
+    height_mm: float,
+    t_top_mm: float | None = None,
+    t_bottom_mm: float | None = None,
+    t_left_mm: float | None = None,
+    t_right_mm: float | None = None,
+    r_inner_mm: float | None = None,
+    r_outer_mm: float = 0.0,
+    n_fillet: int = 12,
+    wall_thickness_mm: float | None = None,
+    fillet_radius_mm: float | None = None,
+    name: str = "Precast Box Beam – Exterior",
+) -> SectionGeometry:
+    """Exterior precast box beam with one straight outside face and chamfered void."""
+
+    top, bottom, left, right = _resolve_wall_thicknesses(
+        t_top_mm=t_top_mm,
+        t_bottom_mm=t_bottom_mm,
+        t_left_mm=t_left_mm,
+        t_right_mm=t_right_mm,
+        wall_thickness_mm=wall_thickness_mm,
+    )
+    inner_chamfer = float(fillet_radius_mm if r_inner_mm is None and fillet_radius_mm is not None else r_inner_mm or 0.0)
+    outer_radius = float(r_outer_mm)
+    _require_non_negative("inner_chamfer_mm", inner_chamfer)
+    _require_non_negative("r_outer_mm", outer_radius)
+    if n_fillet < 4:
+        raise ValueError("Invalid geometry: n_fillet must be at least 4.")
+    inner_bounds = _inner_rect_bounds(
+        width_mm=width_mm,
+        height_mm=height_mm,
+        t_top_mm=top,
+        t_bottom_mm=bottom,
+        t_left_mm=left,
+        t_right_mm=right,
+    )
+    inner_width = inner_bounds[2] - inner_bounds[0]
+    inner_height = inner_bounds[3] - inner_bounds[1]
+    if outer_radius * 2.0 > min(width_mm, height_mm):
+        raise ValueError("Invalid geometry: outer fillet radius is too large for the section dimensions.")
+    if inner_chamfer * 2.0 > min(inner_width, inner_height):
+        raise ValueError("Invalid geometry: inner chamfer is too large for inner void.")
+
+    return SectionGeometry(
+        name=name,
+        outer_polygon=(
+            _rounded_rectangle_points(width_mm, height_mm, outer_radius, n_fillet)
+            if outer_radius > 0.0
+            else _precast_box_beam_outer_points(width_mm, height_mm, exterior_side="right")
+        ),
+        holes=[list(reversed(_chamfered_rectangle_from_bounds(*inner_bounds, inner_chamfer)))],
+        metadata={
+            "preset": "precast_box_beam_exterior",
+            "wall_thicknesses_mm": {"top": top, "bottom": bottom, "left": left, "right": right},
+            "inner_chamfer_mm": inner_chamfer,
+            "r_inner_mm": inner_chamfer,
+            "r_outer_mm": outer_radius,
+            "n_fillet": n_fillet,
+            "exterior_side": "right",
         },
     )
 
@@ -1081,6 +1204,7 @@ def register_builtin_generators(registry: GeometryRegistry) -> None:
         "circular_hollow": (circular_hollow, circular_hollow_dimensions),
         "rectangular_hollow": (rectangular_hollow, rectangular_hollow_dimensions),
         "box_section_fillet": (box_section_fillet, box_section_fillet_dimensions),
+        "precast_box_beam_exterior": (precast_box_beam_exterior, box_section_fillet_dimensions),
         "psc_i_girder": (psc_i_girder, psc_i_girder_dimensions),
         "parametric_i_girder": (parametric_i_girder, parametric_i_girder_dimensions),
         "parametric_plank_girder_interior": (parametric_plank_girder_interior, parametric_plank_girder_interior_dimensions),

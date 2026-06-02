@@ -36,7 +36,7 @@ def test_rectangular_hollow_with_different_wall_thicknesses() -> None:
     assert summary.area_mm2 == pytest.approx(1000 * 800 - expected_inner_area)
 
 
-def test_box_section_fillet_with_inner_fillet() -> None:
+def test_box_section_fillet_uses_inner_chamfer() -> None:
     geometry = box_section_fillet(
         width_mm=1200,
         height_mm=900,
@@ -54,7 +54,8 @@ def test_box_section_fillet_with_inner_fillet() -> None:
 
     assert result.is_valid, result.errors
     assert summary.area_mm2 > 0
-    assert len(geometry.holes[0]) > 4
+    assert len(geometry.holes[0]) == 8
+    assert geometry.metadata["inner_chamfer_mm"] == pytest.approx(80)
 
 
 def test_circular_hollow_rejects_invalid_inner_diameter() -> None:
@@ -198,7 +199,7 @@ def test_dimension_labels_include_parameter_symbols() -> None:
     assert "t_top = 150 mm" in labels
     assert "t_bottom = 200 mm" in labels
     assert "t_left = 180 mm" in labels
-    assert "Ri = 100 mm" in labels
+    assert "Ci = 100 mm" in labels
     assert "Ro = 0 mm" in labels
 
 

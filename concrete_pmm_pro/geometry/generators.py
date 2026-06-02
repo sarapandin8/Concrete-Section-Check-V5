@@ -65,6 +65,39 @@ def _rounded_rectangle_from_bounds(
     return points
 
 
+
+
+def _chamfered_rectangle_from_bounds(
+    left: float,
+    bottom: float,
+    right: float,
+    top: float,
+    chamfer_mm: float,
+) -> list[Point2D]:
+    """Return a rectangular ring with straight chamfered corners.
+
+    The points are ordered counter-clockwise around the rectangle.  This is
+    used for Box Beam voids where the inside corners are detailed as chamfers,
+    not circular fillets.
+    """
+    width = right - left
+    height = top - bottom
+    chamfer = float(chamfer_mm)
+    if chamfer <= 0.0:
+        return _rectangle_from_bounds(left, bottom, right, top)
+    if chamfer * 2.0 > min(width, height):
+        raise ValueError("Invalid geometry: inner chamfer is too large for the selected void dimensions.")
+    return [
+        _point(left + chamfer, bottom),
+        _point(right - chamfer, bottom),
+        _point(right, bottom + chamfer),
+        _point(right, top - chamfer),
+        _point(right - chamfer, top),
+        _point(left + chamfer, top),
+        _point(left, top - chamfer),
+        _point(left, bottom + chamfer),
+    ]
+
 def _rounded_rectangle_points(width_mm: float, height_mm: float, radius_mm: float, segments_per_corner: int = 12) -> list[Point2D]:
     return _rounded_rectangle_from_bounds(
         -width_mm / 2.0,
@@ -250,9 +283,13 @@ def box_section_fillet(
         t_right_mm=t_right_mm,
         wall_thickness_mm=wall_thickness_mm,
     )
-    inner_radius = float(fillet_radius_mm if r_inner_mm is None and fillet_radius_mm is not None else r_inner_mm or 0.0)
+    # Historically this preset used a circular inner fillet parameter.  For the
+    # Precast Box Beam workflow the inside void corners are now modeled as
+    # straight chamfers.  Keep the legacy argument name for project-file
+    # compatibility, but interpret it as the inner chamfer size.
+    inner_chamfer = float(fillet_radius_mm if r_inner_mm is None and fillet_radius_mm is not None else r_inner_mm or 0.0)
     outer_radius = float(r_outer_mm)
-    _require_non_negative("r_inner_mm", inner_radius)
+    _require_non_negative("inner_chamfer_mm", inner_chamfer)
     _require_non_negative("r_outer_mm", outer_radius)
     if n_fillet < 4:
         raise ValueError("Invalid geometry: n_fillet must be at least 4.")
@@ -268,17 +305,20 @@ def box_section_fillet(
     inner_height = inner_bounds[3] - inner_bounds[1]
     if outer_radius * 2.0 > min(width_mm, height_mm):
         raise ValueError("Invalid geometry: outer fillet radius is too large for the section dimensions.")
-    if inner_radius * 2.0 > min(inner_width, inner_height):
-        raise ValueError("Invalid geometry: fillet radius is too large for inner void.")
+    if inner_chamfer * 2.0 > min(inner_width, inner_height):
+        raise ValueError("Invalid geometry: inner chamfer is too large for inner void.")
 
     return SectionGeometry(
         name=name,
         outer_polygon=_rounded_rectangle_points(width_mm, height_mm, outer_radius, n_fillet),
-        holes=[list(reversed(_rounded_rectangle_from_bounds(*inner_bounds, inner_radius, n_fillet)))],
+        holes=[list(reversed(_chamfered_rectangle_from_bounds(*inner_bounds, inner_chamfer)))],
         metadata={
             "preset": "box_section_fillet",
             "wall_thicknesses_mm": {"top": top, "bottom": bottom, "left": left, "right": right},
-            "r_inner_mm": inner_radius,
+            "inner_chamfer_mm": inner_chamfer,
+            # Legacy metadata alias retained so older project snapshots that look
+            # for r_inner_mm still have a meaningful value.
+            "r_inner_mm": inner_chamfer,
             "r_outer_mm": outer_radius,
             "n_fillet": n_fillet,
         },
@@ -880,17 +920,17 @@ def box_section_fillet_dimensions(
         t_right_mm=t_right_mm,
         wall_thickness_mm=wall_thickness_mm,
     )
-    inner_radius = float(fillet_radius_mm if r_inner_mm is None and fillet_radius_mm is not None else r_inner_mm or 0.0)
+    inner_chamfer = float(fillet_radius_mm if r_inner_mm is None and fillet_radius_mm is not None else r_inner_mm or 0.0)
     dims = rectangular_hollow_dimensions(width_mm, height_mm, top, bottom, left, right, **kwargs)
-    if inner_radius > 0:
+    if inner_chamfer > 0:
         dims.append(
             _dim(
-                "Ri",
-                _point(width_mm / 2.0 - right - inner_radius, height_mm / 2.0 - top),
-                _point(width_mm / 2.0 - right, height_mm / 2.0 - top - inner_radius),
-                _point(width_mm / 2.0 - right, height_mm / 2.0 - top),
-                "radial",
-                inner_radius,
+                "Ci",
+                _point(width_mm / 2.0 - right - inner_chamfer, height_mm / 2.0 - top),
+                _point(width_mm / 2.0 - right, height_mm / 2.0 - top - inner_chamfer),
+                _point(width_mm / 2.0 - right + inner_chamfer * 0.35, height_mm / 2.0 - top - inner_chamfer * 0.35),
+                "aligned",
+                inner_chamfer,
             )
         )
     dims.append(

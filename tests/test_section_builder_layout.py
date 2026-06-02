@@ -212,6 +212,8 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     assert u_girder["category"] == "Precast Composite Girder"
     assert box_beam["display_name"] == "Box Beam"
     assert box_beam["category"] == "Precast Composite Girder"
+    assert any(param["name"] == "r_inner_mm" and "chamfer" in param["label"].lower() for param in box_beam["parameters"])
+    assert not any(param["name"] == "n_fillet" for param in box_beam["parameters"])
     assert section_builder._girder_section_family(i_girder) == "precast_composite_girder"
     assert section_builder._recommended_service_basis_for_preset(i_girder) == "Composite transformed"
     assert section_builder._girder_section_family(u_girder) == "precast_composite_girder"

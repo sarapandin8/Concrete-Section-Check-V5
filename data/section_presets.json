@@ -244,7 +244,7 @@
         },
         {
           "name": "r_inner_mm",
-          "label": "Inner fillet radius Ri (mm)",
+          "label": "Inner chamfer Ci (mm)",
           "type": "number",
           "default": 100,
           "min": 0,
@@ -253,23 +253,15 @@
         },
         {
           "name": "r_outer_mm",
-          "label": "Outer fillet radius Ro (mm)",
+          "label": "Outer corner radius Ro (mm)",
           "type": "number",
           "default": 0,
           "min": 0,
           "max": 5000,
           "step": 5
-        },
-        {
-          "name": "n_fillet",
-          "label": "Fillet segments",
-          "type": "number",
-          "default": 12,
-          "min": 4,
-          "max": 64,
-          "step": 1
         }
-      ]
+      ],
+      "description": "Precast composite box beam with straight-chamfered internal void corners."
     },
     {
       "key": "parametric_i_girder",

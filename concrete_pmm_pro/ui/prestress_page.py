@@ -1612,6 +1612,20 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
             polygon = to_shapely_polygon(geometry)
             x, y = polygon.exterior.xy
             fig.add_trace(go.Scatter(x=list(x), y=list(y), mode="lines", name="Section outline"))
+            # Show voids/holes in the girder strand layout preview.  Without
+            # this, box beams look like solid rectangles on the Prestress page
+            # even though the Section Builder uses a hollow section.
+            for index, interior in enumerate(polygon.interiors, start=1):
+                hx, hy = interior.xy
+                fig.add_trace(
+                    go.Scatter(
+                        x=list(hx),
+                        y=list(hy),
+                        mode="lines",
+                        line={"dash": "dot"},
+                        name=f"Void {index}",
+                    )
+                )
         except Exception:
             pass
     points = _girder_strand_point_layout_dataframe(table, geometry)

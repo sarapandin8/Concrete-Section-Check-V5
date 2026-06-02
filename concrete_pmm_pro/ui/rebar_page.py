@@ -13,6 +13,7 @@ from shapely.geometry import Point, Polygon
 
 from concrete_pmm_pro.core.models import Rebar, SectionGeometry
 from concrete_pmm_pro.core.reinforcement_system import ordinary_rebar_enabled, prestressing_steel_enabled
+from concrete_pmm_pro.geometry.rebar_layout import PerimeterRebarLayoutResult, generate_perimeter_rebar_layout
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.visualization import create_section_preview
 
@@ -605,6 +606,106 @@ def _rebar_column_config(bar_size_options: list[str]) -> dict[str, Any]:
     }
 
 
+def _rebar_bar_size_options(rebar_db: pd.DataFrame) -> list[str]:
+    return [""] + [str(name) for name in rebar_db["name"].tolist()]
+
+
+def _render_auto_perimeter_controls(rebar_db: pd.DataFrame, geometry: SectionGeometry | None) -> PerimeterRebarLayoutResult:
+    """Render preview/apply controls for generated perimeter reinforcement.
+
+    The generator is deliberately opt-in: it never overwrites the engineering
+    rebar table until the user presses Apply.  This keeps manual layouts safe
+    while making perimeter reinforcement fast for column/pier/wall/pylon PMM
+    sections.
+    """
+    st.markdown("##### Auto perimeter layout")
+    st.caption(
+        "Preview ordinary bars offset from the current section perimeter, then apply the generated coordinates to the Rebar table. "
+        "This does not silently overwrite manual bars."
+    )
+    control_cols = st.columns([1.05, 1.0, 1.0, 1.0, 0.9], gap="small")
+    with control_cols[0]:
+        bar_size = st.selectbox(
+            "Bar size",
+            _rebar_bar_size_options(rebar_db),
+            index=max(0, _rebar_bar_size_options(rebar_db).index("DB20") if "DB20" in set(rebar_db["name"]) else 0),
+            key="rebar_perimeter_bar_size",
+        )
+    defaults = bar_size_defaults(bar_size, rebar_db) if bar_size else None
+    diameter_mm = defaults[0] if defaults else 20.0
+    default_material = defaults[1] if defaults else "SD40"
+    with control_cols[1]:
+        material = st.text_input("Material", value=default_material, key="rebar_perimeter_material")
+    with control_cols[2]:
+        edge_offset_mm = st.number_input(
+            "Bar center offset (mm)",
+            min_value=1.0,
+            value=75.0,
+            step=5.0,
+            key="rebar_perimeter_edge_offset_mm",
+        )
+    with control_cols[3]:
+        target_spacing_mm = st.number_input(
+            "Target spacing (mm)",
+            min_value=1.0,
+            value=150.0,
+            step=10.0,
+            key="rebar_perimeter_target_spacing_mm",
+        )
+    with control_cols[4]:
+        min_bars = st.number_input(
+            "Minimum bars",
+            min_value=1,
+            value=4,
+            step=1,
+            key="rebar_perimeter_min_bars",
+        )
+
+    prefix_cols = st.columns([0.35, 1.65], gap="small")
+    with prefix_cols[0]:
+        label_prefix = st.text_input("Label prefix", value="B", key="rebar_perimeter_label_prefix")
+    with prefix_cols[1]:
+        st.caption(
+            "Default controls: 75 mm to bar center and 150 mm target spacing. Use the preview as an engineering starting layout, then adjust manually if needed."
+        )
+
+    result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size=bar_size or "DB20",
+        diameter_mm=float(diameter_mm),
+        material=material or default_material,
+        edge_offset_mm=float(edge_offset_mm),
+        target_spacing_mm=float(target_spacing_mm),
+        min_bars=int(min_bars),
+        label_prefix=label_prefix,
+    )
+
+    if result.errors:
+        for error in result.errors:
+            st.error(f"ERROR: {error}")
+    if result.warnings:
+        for warning in result.warnings:
+            st.warning(f"WARNING: {warning}")
+    if result.info:
+        for info in result.info:
+            st.info(f"INFO: {info}")
+
+    if result.ok and not result.table.empty:
+        metric_cols = st.columns(3)
+        metric_cols[0].metric("Generated bars", f"{len(result.table):,}")
+        metric_cols[1].metric("Actual spacing", f"{(result.actual_spacing_mm or 0.0):.1f} mm")
+        metric_cols[2].metric("Offset", f"{edge_offset_mm:.1f} mm")
+        st.dataframe(result.table, use_container_width=True, hide_index=True)
+        if st.button("Apply generated perimeter layout to Rebar table", type="primary", key="rebar_apply_perimeter_layout"):
+            st.session_state["rebar_table"] = _ensure_rebar_table_columns(result.table)
+            st.session_state["rebar_editor_revision"] = int(st.session_state.get("rebar_editor_revision", 0)) + 1
+            st.rerun()
+    else:
+        st.caption("No generated perimeter layout is available yet.")
+
+    return result
+
+
 def _render_rebar_editor(table: pd.DataFrame, bar_size_options: list[str], editor_key: str) -> pd.DataFrame:
     return st.data_editor(
         _ensure_rebar_table_columns(table),
@@ -657,17 +758,17 @@ def render_rebar_page() -> None:
             # after data_editor returns so the metrics still use the normalized table
             # from the current rerun instead of stale pre-edit values.
             summary_slot = st.empty()
-            input_mode = st.selectbox("Rebar input mode", ["Manual table", "Rectangular perimeter layout", "Circular layout"])
+            input_mode = st.selectbox("Rebar input mode", ["Manual table", "Auto perimeter layout"])
             st.markdown(
                 '<div class="cpmm-rebar-note">Selecting a database bar size fills Diameter and default Material. Diameter and Material remain editable for project-specific overrides.</div>',
                 unsafe_allow_html=True,
             )
-            if input_mode != "Manual table":
-                st.info("Automatic rebar layouts are planned for a later milestone. The editable Manual table remains active for engineering traceability.")
+            if input_mode == "Auto perimeter layout":
+                _render_auto_perimeter_controls(rebar_db, st.session_state.get("section_geometry"))
 
-            # The editable table is always shown.  Until automatic generators exist,
-            # hiding this table would hide the actual reinforcement model sent to
-            # PMM/SLS analysis and make bar-size synchronization hard to verify.
+            # The editable table is always shown.  Auto perimeter layout is a
+            # preview/apply workflow, so the main table remains the single source
+            # of truth for PMM/SLS analysis after the generated bars are applied.
             editor_key = f"rebar_data_editor_{st.session_state['rebar_editor_revision']}"
             edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options, editor_key)
 

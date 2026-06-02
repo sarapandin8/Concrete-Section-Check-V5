@@ -50,3 +50,70 @@ def test_rebar_ratio_uses_existing_section_area() -> None:
 
 def test_rebar_ratio_is_na_without_geometry() -> None:
     assert rebar_page._reinforcement_ratio_label(400.0, None) == "N/A"
+
+
+def test_perimeter_rebar_layout_generates_uniform_rectangle_points() -> None:
+    from concrete_pmm_pro.geometry.rebar_layout import generate_perimeter_rebar_layout
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-300.0, y=-300.0),
+            Point2D(x=300.0, y=-300.0),
+            Point2D(x=300.0, y=300.0),
+            Point2D(x=-300.0, y=300.0),
+        ]
+    )
+
+    result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size="DB20",
+        diameter_mm=20.0,
+        material="SD40",
+        edge_offset_mm=75.0,
+        target_spacing_mm=150.0,
+        min_bars=4,
+        label_prefix="B",
+    )
+
+    assert result.ok
+    assert not result.table.empty
+    assert len(result.table) == 12  # offset square side = 450 mm, perimeter = 1800 mm
+    assert result.actual_spacing_mm == 150.0
+    assert set(result.table["Bar Size"]) == {"DB20"}
+    assert set(result.table["Material"]) == {"SD40"}
+    assert result.table["Count"].tolist() == [1] * 12
+
+
+def test_perimeter_rebar_layout_rejects_impossible_offset() -> None:
+    from concrete_pmm_pro.geometry.rebar_layout import generate_perimeter_rebar_layout
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-100.0, y=-100.0),
+            Point2D(x=100.0, y=-100.0),
+            Point2D(x=100.0, y=100.0),
+            Point2D(x=-100.0, y=100.0),
+        ]
+    )
+
+    result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size="DB20",
+        diameter_mm=20.0,
+        material="SD40",
+        edge_offset_mm=125.0,
+        target_spacing_mm=150.0,
+    )
+
+    assert not result.ok
+    assert "offset is too large" in result.errors[0]
+
+
+def test_rebar_page_exposes_auto_perimeter_preview_apply_workflow() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "rebar_page.py").read_text(encoding="utf-8")
+
+    assert "Auto perimeter layout" in source
+    assert "Bar center offset (mm)" in source
+    assert "Target spacing (mm)" in source
+    assert "Apply generated perimeter layout to Rebar table" in source
+    assert "does not silently overwrite manual bars" in source

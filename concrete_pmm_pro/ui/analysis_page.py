@@ -57,12 +57,6 @@ from concrete_pmm_pro.core.analysis_modes import (
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
-from concrete_pmm_pro.core.reinforcement_system import (
-    effective_prestress_for_analysis,
-    effective_rebars_for_analysis,
-    ordinary_rebar_enabled,
-    prestressing_steel_enabled,
-)
 from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.reporting import (
     build_result_traceability_snapshot,

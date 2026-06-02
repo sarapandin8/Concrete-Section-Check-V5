@@ -1348,11 +1348,8 @@ def _store_valid_section_state(preset: dict[str, Any], params: dict[str, Any], g
     st.session_state["section_category"] = str(preset.get("category", ""))
     st.session_state["girder_section_family"] = _girder_section_family(preset)
     st.session_state["girder_service_default_basis"] = _recommended_service_basis_for_preset(preset)
-    # REBAR.SYSTEM1.1: Do not reassign checkbox-backed session_state keys here.
-    # Streamlit forbids mutating a widget key after the checkbox has been
-    # instantiated in the same run.  The reinforcement/prestress flags are
-    # initialized before rendering the checkboxes and are already stored in
-    # session_state; project IO reads those values directly.
+    st.session_state["section_has_ordinary_rebar"] = ordinary_rebar_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[0])
+    st.session_state["section_has_prestressing_steel"] = prestressing_steel_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[1])
     st.session_state["section_parameters"] = params
     st.session_state["section_geometry"] = geometry
     st.session_state["section_dimensions"] = dimensions

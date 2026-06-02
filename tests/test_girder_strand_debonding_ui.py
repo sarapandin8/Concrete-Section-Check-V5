@@ -23,6 +23,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "reduce the number of strands in this row" in PRESTRESS_SOURCE
     assert "Transfer/development length transition is not modeled" in PRESTRESS_SOURCE
     assert "does not change current Analysis results" in PRESTRESS_SOURCE
+    assert "Rebuild default strand layout from current section" in PRESTRESS_SOURCE
+    assert "2 rows at y=50/100 mm" in PRESTRESS_SOURCE
+    assert 'line={"dash": "solid"}' in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:
@@ -119,10 +122,47 @@ def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> No
     assert DEFAULT_GIRDER_STRAND_SIZE == "12.7 mm low-relaxation strand"
     assert set(table["Strand Size"]) == {"12.7 mm low-relaxation strand"}
     assert table.loc[0, "Area/Strand_mm2"] == 98.7
-    assert table.loc[0, "Total Aps_mm2"] == 12 * 98.7
+    assert len(table.index) == 2
+    assert table["y_mm_from_bottom"].tolist() == [50.0, 100.0]
+    assert table["No. Strands"].tolist() == [8, 6]
+    assert table.loc[0, "Total Aps_mm2"] == 8 * 98.7
     assert table.loc[0, "Edge CL_mm"] == 45.0
     assert table.loc[0, "Min spacing_mm"] == 50.0
 
+
+
+def test_section_based_default_strand_layout_uses_current_section_width(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.core.models import Point2D, SectionGeometry  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import _normalize_girder_strand_layout_table  # noqa: PLC0415
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-300.0, y=-300.0),
+            Point2D(x=300.0, y=-300.0),
+            Point2D(x=300.0, y=300.0),
+            Point2D(x=-300.0, y=300.0),
+        ]
+    )
+
+    table = _normalize_girder_strand_layout_table(None, span_length_m=30.0, geometry=geometry)
+
+    assert len(table.index) == 2
+    assert table["No. Strands"].tolist() == [11, 11]
+    assert table["y_mm_from_bottom"].tolist() == [50.0, 100.0]
+    assert set(table["Strand Size"]) == {"12.7 mm low-relaxation strand"}
 
 def test_girder_strand_size_controls_spacing_and_edge_clearance(monkeypatch) -> None:
     import sys

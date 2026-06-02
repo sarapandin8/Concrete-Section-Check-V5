@@ -223,6 +223,12 @@ GIRDER_STRAND_SIZE_PROPERTIES = {
 }
 
 DEFAULT_GIRDER_STRAND_SIZE = "12.7 mm low-relaxation strand"
+DEFAULT_GIRDER_STRAND_ROW_COUNT = 2
+DEFAULT_GIRDER_STRAND_FIRST_ROW_Y_MM = 50.0
+DEFAULT_GIRDER_STRAND_ROW_VERTICAL_SPACING_MM = 50.0
+DEFAULT_GIRDER_STRAND_X_SPACING_MM = 50.0
+DEFAULT_GIRDER_STRAND_EDGE_CL_MM = 45.0
+DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS = [8, 6]
 
 GIRDER_PRESTRESS_UI_PRESET_KEYS = frozenset(
     {
@@ -1178,81 +1184,92 @@ def _default_pe_final_per_strand_kn(strand_size: str | None) -> float:
     return round(props["area_mm2"] * 0.60 * props["fpu_mpa"] / 1000.0, 3)
 
 
-def _default_girder_strand_layout_table() -> pd.DataFrame:
-    """Return a starter strand-row layout for simple-supported girders.
+def _default_strand_count_for_row(geometry: SectionGeometry | None, y_from_bottom_mm: float, *, fallback_count: int) -> int:
+    """Return a section-based starter strand count for one row.
 
-    Default strand size is 12.7 mm per the current UI convention. Users define
-    strand count by row; the app computes total steel area, recommended spacing
-    checks, and individual plotted strand points.
+    Defaults are generated from the currently selected section geometry using
+    the practical girder strand detailing convention: 45 mm edge centerline and
+    50 mm horizontal strand spacing for the default 12.7 mm low-relaxation
+    strand.  This is a starting layout only; the engineer can edit the row
+    count and the app will re-check fit immediately.
+    """
+
+    bottom_y = _section_bottom_y_from_geometry(geometry)
+    y_abs = bottom_y + float(y_from_bottom_mm)
+    segment = _section_horizontal_segment_at_y(geometry, y_abs)
+    if segment is None:
+        return max(1, int(fallback_count))
+    left_edge, right_edge = segment
+    available_width = max(0.0, float(right_edge) - float(left_edge) - 2.0 * DEFAULT_GIRDER_STRAND_EDGE_CL_MM)
+    if available_width <= 0.0:
+        return max(1, int(fallback_count))
+    return max(1, int(available_width // DEFAULT_GIRDER_STRAND_X_SPACING_MM) + 1)
+
+
+def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None) -> pd.DataFrame:
+    """Return a section-based starter strand-row layout for simple-supported girders.
+
+    The starter layout uses the current practical convention requested for
+    precast girders: 12.7 mm low-relaxation strand, two rows, first row at
+    50 mm above the bottom fiber, 50 mm vertical spacing, 45 mm edge CL, and
+    50 mm horizontal strand spacing.  Row counts are seeded from the current
+    section width at each row elevation, then remain editable by the engineer.
     """
 
     strand_size = DEFAULT_GIRDER_STRAND_SIZE
     props = _strand_size_properties(strand_size)
     pe_transfer = _default_pe_transfer_per_strand_kn(strand_size)
     pe_final = _default_pe_final_per_strand_kn(strand_size)
-    rows = [
-        {
-            "Active": True,
-            "Group ID": "Row 1",
-            "Layer": "Bottom row",
-            "Strand Size": strand_size,
-            "No. Strands": 12,
-            "Area/Strand_mm2": props["area_mm2"],
-            "Total Aps_mm2": 12 * props["area_mm2"],
-            "Row center x_mm": 0.0,
-            "y_mm_from_bottom": 100.0,
-            "Edge CL_mm": props["recommended_edge_cl_mm"],
-            "Min spacing_mm": props["recommended_min_spacing_mm"],
-            "Computed spacing_mm": 0.0,
-            "Pe_transfer/strand_kN": pe_transfer,
-            "Pe_construction/strand_kN": pe_transfer,
-            "Pe_eff_final/strand_kN": pe_final,
-            "Left debond m": 0.0,
-            "Right debond m": 0.0,
-            "Note": "Fully bonded starter row",
-        },
-        {
-            "Active": True,
-            "Group ID": "Row 2",
-            "Layer": "Second row",
-            "Strand Size": strand_size,
-            "No. Strands": 8,
-            "Area/Strand_mm2": props["area_mm2"],
-            "Total Aps_mm2": 8 * props["area_mm2"],
-            "Row center x_mm": 0.0,
-            "y_mm_from_bottom": 150.0,
-            "Edge CL_mm": props["recommended_edge_cl_mm"],
-            "Min spacing_mm": props["recommended_min_spacing_mm"],
-            "Computed spacing_mm": 0.0,
-            "Pe_transfer/strand_kN": pe_transfer,
-            "Pe_construction/strand_kN": pe_transfer,
-            "Pe_eff_final/strand_kN": pe_final,
-            "Left debond m": 2.0,
-            "Right debond m": 2.0,
-            "Note": "Example symmetric debond row",
-        },
-        {
-            "Active": True,
-            "Group ID": "Row 3",
-            "Layer": "Third row",
-            "Strand Size": strand_size,
-            "No. Strands": 4,
-            "Area/Strand_mm2": props["area_mm2"],
-            "Total Aps_mm2": 4 * props["area_mm2"],
-            "Row center x_mm": 0.0,
-            "y_mm_from_bottom": 200.0,
-            "Edge CL_mm": props["recommended_edge_cl_mm"],
-            "Min spacing_mm": props["recommended_min_spacing_mm"],
-            "Computed spacing_mm": 0.0,
-            "Pe_transfer/strand_kN": pe_transfer,
-            "Pe_construction/strand_kN": pe_transfer,
-            "Pe_eff_final/strand_kN": pe_final,
-            "Left debond m": 4.0,
-            "Right debond m": 4.0,
-            "Note": "Example longer debond row",
-        },
-    ]
+    rows: list[dict[str, Any]] = []
+    for idx in range(DEFAULT_GIRDER_STRAND_ROW_COUNT):
+        y_from_bottom = DEFAULT_GIRDER_STRAND_FIRST_ROW_Y_MM + idx * DEFAULT_GIRDER_STRAND_ROW_VERTICAL_SPACING_MM
+        fallback = DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS[idx] if idx < len(DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS) else DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS[-1]
+        count = _default_strand_count_for_row(geometry, y_from_bottom, fallback_count=fallback)
+        rows.append(
+            {
+                "Active": True,
+                "Group ID": f"Row {idx + 1}",
+                "Layer": "Bottom row" if idx == 0 else f"Row {idx + 1}",
+                "Strand Size": strand_size,
+                "No. Strands": count,
+                "Area/Strand_mm2": props["area_mm2"],
+                "Total Aps_mm2": count * props["area_mm2"],
+                "Row center x_mm": 0.0,
+                "y_mm_from_bottom": y_from_bottom,
+                "Edge CL_mm": props["recommended_edge_cl_mm"],
+                "Min spacing_mm": props["recommended_min_spacing_mm"],
+                "Computed spacing_mm": 0.0,
+                "Pe_transfer/strand_kN": pe_transfer,
+                "Pe_construction/strand_kN": pe_transfer,
+                "Pe_eff_final/strand_kN": pe_final,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+                "Note": "Auto section default row; edit count/debond/force as needed.",
+            }
+        )
     return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+
+
+def _looks_like_legacy_starter_strand_layout(table: pd.DataFrame | None) -> bool:
+    """Return True for the old PS3A 3-row example layout so it can migrate.
+
+    The old starter rows were examples, not project data.  Migrating only this
+    exact shape lets new sections start with the section-based two-row default
+    without overwriting user-edited layouts.
+    """
+
+    if table is None:
+        return False
+    df = pd.DataFrame(table)
+    if len(df.index) != 3:
+        return False
+    expected_notes = {"Fully bonded starter row", "Example symmetric debond row", "Example longer debond row"}
+    notes = {str(value or "").strip() for value in df.get("Note", pd.Series(dtype=object)).tolist()}
+    if not expected_notes.issubset(notes):
+        return False
+    counts = [int(_to_float(value) or 0) for value in df.get("No. Strands", pd.Series(dtype=object)).tolist()]
+    y_values = [round(float(_to_float(value) or 0.0), 6) for value in df.get("y_mm_from_bottom", pd.Series(dtype=object)).tolist()]
+    return counts == [12, 8, 4] and y_values == [100.0, 150.0, 200.0]
 
 def _strand_layout_existing_rows_by_group(table: pd.DataFrame | None) -> list[dict[str, Any]]:
     if table is None:
@@ -1273,6 +1290,7 @@ def _normalize_girder_strand_layout_table(
     *,
     span_length_m: float,
     debond_model: str = "Left/right independent",
+    geometry: SectionGeometry | None = None,
 ) -> pd.DataFrame:
     """Normalize the editable strand layout/debonding table.
 
@@ -1282,8 +1300,8 @@ def _normalize_girder_strand_layout_table(
     """
 
     existing = _strand_layout_existing_rows_by_group(table)
-    if not existing:
-        existing = _default_girder_strand_layout_table().to_dict(orient="records")
+    if not existing or _looks_like_legacy_starter_strand_layout(pd.DataFrame(existing)):
+        existing = _default_girder_strand_layout_table(geometry).to_dict(orient="records")
     rows: list[dict[str, Any]] = []
     for i, current in enumerate(existing, start=1):
         active = _to_bool_default_true(current.get("Active"))
@@ -1461,6 +1479,22 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
     else:
         messages.append(f"{group}: section width at this y-level could not be resolved; centered layout uses minimum spacing only.")
 
+    if geometry is not None:
+        try:
+            polygon = to_shapely_polygon(geometry)
+            invalid_count = 0
+            for x_value in points_x:
+                point = Point(float(x_value), float(y_abs))
+                if not (polygon.contains(point) or polygon.touches(point)):
+                    invalid_count += 1
+            if invalid_count:
+                messages.append(
+                    f"{group}: {invalid_count} strand point(s) fall outside the concrete polygon or inside a void/chamfer; "
+                    "reduce the number of strands or adjust the row elevation/center."
+                )
+        except Exception:
+            pass
+
     points = [
         {
             "Group ID": group,
@@ -1612,9 +1646,9 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
             polygon = to_shapely_polygon(geometry)
             x, y = polygon.exterior.xy
             fig.add_trace(go.Scatter(x=list(x), y=list(y), mode="lines", name="Section outline"))
-            # Show voids/holes in the girder strand layout preview.  Without
-            # this, box beams look like solid rectangles on the Prestress page
-            # even though the Section Builder uses a hollow section.
+            # Show voids/holes in the girder strand layout preview as true
+            # section boundaries.  These are solid lines because voids are
+            # real geometry, not auxiliary reference guides.
             for index, interior in enumerate(polygon.interiors, start=1):
                 hx, hy = interior.xy
                 fig.add_trace(
@@ -1622,7 +1656,7 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
                         x=list(hx),
                         y=list(hy),
                         mode="lines",
-                        line={"dash": "dot"},
+                        line={"dash": "solid"},
                         name=f"Void {index}",
                     )
                 )
@@ -1738,15 +1772,29 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
     settings["debond_model"] = str(debond_model)
     st.session_state["girder_prestress_system_settings"] = settings
 
+    if st.button(
+        "Rebuild default strand layout from current section",
+        help="Replace the current strand table with a section-based 12.7 mm, two-row default using 50 mm row spacing, 45 mm edge CL, and 50 mm horizontal spacing.",
+        key="rebuild_girder_strand_layout_defaults",
+    ):
+        seeded = _apply_computed_girder_strand_spacing(_default_girder_strand_layout_table(geometry), geometry)
+        st.session_state["girder_strand_layout_table"] = seeded
+        st.session_state.pop("girder_strand_layout_editor", None)
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
+
     current = st.session_state.get("girder_strand_layout_table")
     table = _normalize_girder_strand_layout_table(
         pd.DataFrame(current) if current is not None else None,
         span_length_m=float(span),
         debond_model=str(debond_model),
+        geometry=geometry,
     )
     st.caption(
         "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, and stage Pe per strand. "
-        "Area, edge CL = 45 mm, minimum spacing, and total Aps are auto-calculated."
+        "Defaults use 12.7 mm low-relaxation strand, 2 rows at y=50/100 mm, 45 mm edge CL, and 50 mm x/y spacing. "
+        "Area, minimum spacing, and total Aps are auto-calculated."
     )
     edited = st.data_editor(
         table,
@@ -1776,7 +1824,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         },
         key="girder_strand_layout_editor",
     )
-    normalized = _normalize_girder_strand_layout_table(edited, span_length_m=float(span), debond_model=str(debond_model))
+    normalized = _normalize_girder_strand_layout_table(edited, span_length_m=float(span), debond_model=str(debond_model), geometry=geometry)
     normalized = _apply_computed_girder_strand_spacing(normalized, geometry)
     _store_girder_strand_layout_and_rerun_on_change(current, normalized)
 

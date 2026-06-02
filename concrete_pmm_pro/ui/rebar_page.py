@@ -815,12 +815,13 @@ def render_rebar_page() -> None:
 
         if geometry is not None:
             st.subheader("Section Preview with Rebar")
+            st.caption("Default preview shows ordinary rebar only. Prestressing steel is intentionally hidden on the Rebar page.")
             preview_fig = create_section_preview(
                 geometry,
                 st.session_state.get("section_dimensions", []),
                 "symbol_value",
                 st.session_state["rebars"],
-                st.session_state.get("prestress_elements", []) if prestressing_steel_enabled(st.session_state, default=True) else [],
+                [],
             )
             preview_fig.update_layout(height=430, margin=dict(l=10, r=10, t=36, b=10))
             st.plotly_chart(
@@ -828,6 +829,27 @@ def render_rebar_page() -> None:
                 use_container_width=True,
                 key="rebar_section_preview",
             )
+            if prestressing_steel_enabled(st.session_state, default=True):
+                prestress_elements = list(st.session_state.get("prestress_elements", []) or [])
+                if prestress_elements:
+                    with st.expander("Combined Reinforcement Preview", expanded=False):
+                        st.caption(
+                            "Coordination view only: ordinary rebar and prestressing steel are shown together. "
+                            "Default page previews remain separated to avoid mixing rebar and prestress workflows."
+                        )
+                        combined_fig = create_section_preview(
+                            geometry,
+                            st.session_state.get("section_dimensions", []),
+                            "symbol_value",
+                            st.session_state["rebars"],
+                            prestress_elements,
+                        )
+                        combined_fig.update_layout(height=430, margin=dict(l=10, r=10, t=36, b=10))
+                        st.plotly_chart(
+                            combined_fig,
+                            use_container_width=True,
+                            key="rebar_combined_reinforcement_preview",
+                        )
 
     st.subheader("Rebar Summary")
     st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)

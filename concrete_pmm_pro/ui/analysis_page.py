@@ -49,6 +49,12 @@ from concrete_pmm_pro.analysis.warnings import (
 )
 from concrete_pmm_pro.code_checks import aci_beta1
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisModeSettings, AnalysisSettings
+from concrete_pmm_pro.core.reinforcement_system import (
+    effective_prestress_for_analysis,
+    effective_rebars_for_analysis,
+    ordinary_rebar_enabled,
+    prestressing_steel_enabled,
+)
 from concrete_pmm_pro.core.analysis_modes import (
     analysis_mode_description,
     analysis_mode_label,

@@ -1348,8 +1348,14 @@ def _store_valid_section_state(preset: dict[str, Any], params: dict[str, Any], g
     st.session_state["section_category"] = str(preset.get("category", ""))
     st.session_state["girder_section_family"] = _girder_section_family(preset)
     st.session_state["girder_service_default_basis"] = _recommended_service_basis_for_preset(preset)
-    st.session_state["section_has_ordinary_rebar"] = ordinary_rebar_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[0])
-    st.session_state["section_has_prestressing_steel"] = prestressing_steel_enabled(st.session_state, default=_default_reinforcement_flags_for_preset(preset)[1])
+    # Do not write to Streamlit widget-owned reinforcement flag keys here.
+    # The checkboxes in _render_reinforcement_prestress_system_panel already
+    # initialize and own ORDINARY_REBAR_FLAG_KEY / PRESTRESSING_STEEL_FLAG_KEY.
+    # Assigning those keys after widget creation raises StreamlitAPIException.
+    if ORDINARY_REBAR_FLAG_KEY not in st.session_state or PRESTRESSING_STEEL_FLAG_KEY not in st.session_state:
+        default_rebar, default_prestress = _default_reinforcement_flags_for_preset(preset)
+        st.session_state.setdefault(ORDINARY_REBAR_FLAG_KEY, default_rebar)
+        st.session_state.setdefault(PRESTRESSING_STEEL_FLAG_KEY, default_prestress)
     st.session_state["section_parameters"] = params
     st.session_state["section_geometry"] = geometry
     st.session_state["section_dimensions"] = dimensions

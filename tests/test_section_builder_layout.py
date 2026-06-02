@@ -381,3 +381,11 @@ def test_section_builder_source_contains_axis_convention_for_load_tables() -> No
     assert "major/minor labels are intentionally avoided" in source
     assert "Mux" in source
     assert "Vuy" in source
+
+
+def test_rebar_system_flags_are_not_reassigned_after_checkbox_creation() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Do not write to Streamlit widget-owned reinforcement flag keys here" in source
+    assert 'st.session_state["section_has_ordinary_rebar"] = ordinary_rebar_enabled' not in source
+    assert 'st.session_state["section_has_prestressing_steel"] = prestressing_steel_enabled' not in source

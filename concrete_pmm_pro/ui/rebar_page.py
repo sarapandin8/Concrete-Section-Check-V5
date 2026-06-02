@@ -815,7 +815,7 @@ def render_rebar_page() -> None:
 
         if geometry is not None:
             st.subheader("Section Preview with Rebar")
-            st.caption("Default preview shows ordinary rebar only. Prestressing steel is intentionally hidden on the Rebar page.")
+            st.caption("Default preview shows ordinary rebar only. Bars are drawn at true diameter scale; prestressing steel is intentionally hidden on the Rebar page.")
             preview_fig = create_section_preview(
                 geometry,
                 st.session_state.get("section_dimensions", []),

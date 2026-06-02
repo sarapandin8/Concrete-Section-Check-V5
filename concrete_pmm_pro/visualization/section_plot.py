@@ -54,6 +54,33 @@ def _add_prestress_circle_shape(fig: go.Figure, element: PrestressElement, diame
     )
 
 
+def _add_rebar_circle_shape(fig: go.Figure, rebar: Rebar) -> None:
+    """Draw an ordinary rebar at true section scale in coordinate units.
+
+    Plotly marker sizes are screen-pixel based and can make bars look much
+    larger than the actual diameter.  The circle shape below uses x/y axes in
+    millimetres, so DB20 is displayed as a true 20 mm bar regardless of zoom or
+    section size.  A tiny marker trace is still added separately for hover and
+    legend support.
+    """
+    radius = max(float(rebar.diameter_mm), 0.0) / 2.0
+    if radius <= 0.0:
+        return
+    fig.add_shape(
+        type="circle",
+        xref="x",
+        yref="y",
+        x0=rebar.x_mm - radius,
+        x1=rebar.x_mm + radius,
+        y0=rebar.y_mm - radius,
+        y1=rebar.y_mm + radius,
+        fillcolor="#111827",
+        opacity=0.72,
+        line=dict(color="#f8fafc", width=1.0),
+        layer="above",
+    )
+
+
 def create_section_preview(
     geometry: SectionGeometry,
     dimensions: list[DimensionItem] | None = None,
@@ -112,6 +139,8 @@ def create_section_preview(
         )
 
     if rebars:
+        for rebar in rebars:
+            _add_rebar_circle_shape(fig, rebar)
         fig.add_trace(
             go.Scatter(
                 x=[rebar.x_mm for rebar in rebars],
@@ -119,12 +148,17 @@ def create_section_preview(
                 mode="markers",
                 marker=dict(
                     symbol="circle",
-                    size=[max(8.0, min(24.0, rebar.diameter_mm * 0.7)) for rebar in rebars],
+                    # True bar diameters are drawn with coordinate-unit circle
+                    # shapes.  Keep markers intentionally small so they do not
+                    # visually exaggerate bar size; they only provide hover and
+                    # legend behaviour.
+                    size=4,
                     color="#111827",
-                    line=dict(color="#f8fafc", width=1.5),
+                    opacity=0.35,
+                    line=dict(color="#f8fafc", width=0.5),
                 ),
                 text=[
-                    f"{rebar.label or 'Rebar'}<br>x={rebar.x_mm:g} mm<br>y={rebar.y_mm:g} mm<br>D={rebar.diameter_mm:g} mm<br>As={rebar.area_mm2:.1f} mm^2"
+                    f"{rebar.label or 'Rebar'}<br>x={rebar.x_mm:g} mm<br>y={rebar.y_mm:g} mm<br>D={rebar.diameter_mm:g} mm<br>As={rebar.area_mm2:.1f} mm^2<br>display=true-scale diameter"
                     for rebar in rebars
                 ],
                 hoverinfo="text",

@@ -155,3 +155,53 @@ def test_rebar_preview_is_rendered_inside_status_column_before_summary() -> None
     summary_index = source.index("Rebar Summary")
 
     assert status_column_index < preview_index < summary_index
+
+
+def test_rebar_section_preview_draws_true_scale_bar_circles() -> None:
+    from concrete_pmm_pro.core.models import Rebar
+    from concrete_pmm_pro.visualization import create_section_preview
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-200.0, y=-300.0),
+            Point2D(x=200.0, y=-300.0),
+            Point2D(x=200.0, y=300.0),
+            Point2D(x=-200.0, y=300.0),
+        ]
+    )
+    rebar = Rebar(x_mm=75.0, y_mm=-125.0, diameter_mm=20.0, material_name="SD40", label="B1")
+
+    fig = create_section_preview(geometry, rebars=[rebar])
+
+    circle_shapes = [shape for shape in fig.layout.shapes if shape.type == "circle"]
+    assert len(circle_shapes) == 1
+    shape = circle_shapes[0]
+    assert shape.xref == "x"
+    assert shape.yref == "y"
+    assert (shape.x1 - shape.x0) == 20.0
+    assert (shape.y1 - shape.y0) == 20.0
+    assert shape.x0 == 65.0
+    assert shape.x1 == 85.0
+    assert shape.y0 == -135.0
+    assert shape.y1 == -115.0
+
+
+def test_rebar_true_scale_preview_keeps_hover_marker_small() -> None:
+    from concrete_pmm_pro.core.models import Rebar
+    from concrete_pmm_pro.visualization import create_section_preview
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=-200.0, y=-300.0),
+            Point2D(x=200.0, y=-300.0),
+            Point2D(x=200.0, y=300.0),
+            Point2D(x=-200.0, y=300.0),
+        ]
+    )
+    rebar = Rebar(x_mm=0.0, y_mm=0.0, diameter_mm=32.0, material_name="SD50", label="B1")
+
+    fig = create_section_preview(geometry, rebars=[rebar])
+    traces = {trace.name: trace for trace in fig.data}
+
+    assert traces["Rebar"].marker.size == 4
+    assert "display=true-scale diameter" in traces["Rebar"].text[0]

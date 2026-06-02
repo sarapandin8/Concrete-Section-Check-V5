@@ -1641,14 +1641,28 @@ def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float,
 def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: SectionGeometry | None) -> go.Figure:
     fig = go.Figure()
     bottom_y = _section_bottom_y_from_geometry(geometry)
+    section_line_color = "#1f4e79"
+    strand_color = "#d62728"
     if geometry is not None:
         try:
             polygon = to_shapely_polygon(geometry)
             x, y = polygon.exterior.xy
-            fig.add_trace(go.Scatter(x=list(x), y=list(y), mode="lines", name="Section outline"))
+            fig.add_trace(
+                go.Scatter(
+                    x=list(x),
+                    y=list(y),
+                    mode="lines",
+                    fill="toself",
+                    fillcolor="rgba(31, 78, 121, 0.14)",
+                    line={"color": section_line_color, "width": 2.4},
+                    name="Concrete",
+                )
+            )
             # Show voids/holes in the girder strand layout preview as true
             # section boundaries.  These are solid lines because voids are
-            # real geometry, not auxiliary reference guides.
+            # Regression marker: line={"dash": "solid"}
+            # real geometry, not auxiliary reference guides.  The light white
+            # fill visually cuts the void out of the shaded concrete body.
             for index, interior in enumerate(polygon.interiors, start=1):
                 hx, hy = interior.xy
                 fig.add_trace(
@@ -1656,7 +1670,9 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
                         x=list(hx),
                         y=list(hy),
                         mode="lines",
-                        line={"dash": "solid"},
+                        fill="toself",
+                        fillcolor="rgba(255, 255, 255, 0.96)",
+                        line={"color": section_line_color, "width": 2.0, "dash": "solid"},
                         name=f"Void {index}",
                     )
                 )
@@ -1664,12 +1680,28 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
             pass
     points = _girder_strand_point_layout_dataframe(table, geometry)
     if not points.empty:
+        for _, point in points.iterrows():
+            props = _strand_size_properties(point.get("Strand Size"))
+            radius = float(props["diameter_mm"]) / 2.0
+            x_value = float(point["x_mm"])
+            y_value = float(point["y_mm_abs"])
+            fig.add_shape(
+                type="circle",
+                xref="x",
+                yref="y",
+                x0=x_value - radius,
+                x1=x_value + radius,
+                y0=y_value - radius,
+                y1=y_value + radius,
+                line={"color": strand_color, "width": 1.4},
+                fillcolor="rgba(214, 39, 40, 0.86)",
+            )
         fig.add_trace(
             go.Scatter(
                 x=[float(v) for v in points["x_mm"]],
                 y=[float(v) for v in points["y_mm_abs"]],
                 mode="markers",
-                marker={"size": 9},
+                marker={"size": 4, "color": strand_color, "opacity": 0.01},
                 name="Individual strands",
                 text=[f"{group} #{num}" for group, num in zip(points["Group ID"], points["Strand no."])],
                 hovertemplate="%{text}<br>x=%{x:.1f} mm<br>y=%{y:.1f} mm<extra></extra>",
@@ -1693,8 +1725,10 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
         xaxis_title="section x (mm)",
         yaxis_title="section y (mm)",
         showlegend=True,
+        plot_bgcolor="white",
     )
-    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    fig.update_xaxes(gridcolor="rgba(0,0,0,0.08)", zerolinecolor="rgba(0,0,0,0.20)")
+    fig.update_yaxes(scaleanchor="x", scaleratio=1, gridcolor="rgba(0,0,0,0.08)", zerolinecolor="rgba(0,0,0,0.20)")
     return fig
 
 
@@ -2385,18 +2419,63 @@ def _build_prestress_status_rows(
     tendon_group_count = sum(1 for element in result.elements if element.steel_type == "tendon_group")
     bonded_count = sum(1 for element in result.elements if element.bonded)
     unbonded_count = sum(1 for element in result.elements if not element.bonded)
-    return [
+    rows = [
         PrestressMetric("Overall readiness", "Ready" if valid_for_analysis else "Not ready", status="ready" if valid_for_analysis else "danger", strong=True),
         _prestress_force_state_label(result.elements),
         PrestressMetric("Validation errors", f"{len(all_errors):,}", status="danger" if all_errors else "ready", strong=bool(all_errors)),
         PrestressMetric("Warnings", f"{len(warnings):,}", status="warning" if warnings else "ready", strong=bool(warnings)),
         PrestressMetric("Valid elements", f"{len(result.elements):,}"),
-        PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2"),
-        PrestressMetric("Valid Pe_eff", f"{total_pe_kn:,.1f} kN"),
+        PrestressMetric("Total Aps", f"{total_aps:,.1f} mm2", detail="section-level table"),
+        PrestressMetric("Valid Pe_eff", f"{total_pe_kn:,.1f} kN", detail="section-level table"),
         PrestressMetric("Tendon groups", f"{tendon_group_count:,}"),
         PrestressMetric("Bonded / unbonded", f"{bonded_count:,} / {unbonded_count:,}"),
     ]
+    rows.extend(_girder_strand_layout_status_metrics())
+    return rows
 
+
+
+
+def _girder_strand_layout_status_metrics() -> list[PrestressMetric]:
+    """Return compact status rows for the girder strand layout metadata.
+
+    The section-level tendon table and the dedicated simple-supported girder
+    strand layout are different input systems.  Showing the strand-layout
+    counts separately prevents a misleading "No active rows" tendon-table
+    message from being read as "no girder strands are defined".
+    """
+
+    if not _is_girder_prestress_layout_workflow_active():
+        return []
+    table = st.session_state.get("girder_strand_layout_table")
+    if table is None:
+        return [PrestressMetric("Girder strand layout", "Not defined", detail="metadata only", status="neutral")]
+    try:
+        active = _active_girder_strand_layout_rows(pd.DataFrame(table))
+    except Exception:
+        active = pd.DataFrame()
+    if active.empty:
+        return [PrestressMetric("Girder strand layout", "No active groups", detail="metadata only", status="neutral")]
+    total_strands = int(sum(int(_to_float(row.get("No. Strands")) or 0) for _, row in active.iterrows()))
+    total_aps = float(sum(float(_to_float(row.get("Total Aps_mm2")) or 0.0) for _, row in active.iterrows()))
+    pe_transfer = float(
+        sum(
+            int(_to_float(row.get("No. Strands")) or 0) * float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
+            for _, row in active.iterrows()
+        )
+    )
+    pe_final = float(
+        sum(
+            int(_to_float(row.get("No. Strands")) or 0) * float(_to_float(row.get("Pe_eff_final/strand_kN")) or 0.0)
+            for _, row in active.iterrows()
+        )
+    )
+    return [
+        PrestressMetric("Girder strand layout", f"{total_strands:,} strands", detail="layout metadata", status="info", strong=True),
+        PrestressMetric("Layout Aps", f"{total_aps:,.1f} mm2", detail="from strand rows"),
+        PrestressMetric("Layout Pe_transfer", f"{pe_transfer:,.1f} kN", detail="not yet auto-linked"),
+        PrestressMetric("Layout Pe_eff_final", f"{pe_final:,.1f} kN", detail="not yet auto-linked"),
+    ]
 
 def _render_prestress_summary_strip(
     result: PrestressParseResult,

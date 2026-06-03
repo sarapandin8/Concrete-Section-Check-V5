@@ -545,6 +545,10 @@ def box_section_fillet(
                     "lower_side_ledge": 70.0,
                     "lower_inner_rise": 70.0,
                     "side_slope_connects_to_top_corner": True,
+                    "point_A_left": {"x": -(float(width_mm) / 2.0 - 70.0), "y": -float(height_mm) / 2.0 + h7 + 70.0},
+                    "point_B_left": {"x": -(float(width_mm) / 2.0 - 45.0), "y": float(height_mm) / 2.0},
+                    "point_A_right": {"x": float(width_mm) / 2.0 - 70.0, "y": -float(height_mm) / 2.0 + h7 + 70.0},
+                    "point_B_right": {"x": float(width_mm) / 2.0 - 45.0, "y": float(height_mm) / 2.0},
                 },
                 "wall_thicknesses_mm": {
                     "top": top_cover,
@@ -1305,7 +1309,6 @@ def box_section_fillet_dimensions(
                 _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3), _point(-half_b3 - b2 - 25.0, -h + h3 + h4), _point(-half_b3 - b2, -h + h3 + h4 / 2.0), "vertical", h4),
                 _dim("h5", _point(-half_b3 - b2 - 55.0, -h + h3 + h4), _point(-half_b3 - b2 - 55.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),
                 _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 25.0, -h + h3 + 2.0 * h4 + h5), _point(-half_b3 - b2 - 60.0, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
-                _dim("b2,start", _point(-w, h + 45.0), _point(-w + b2_start, h + 45.0), _point(-w / 2.0 + b2_start / 2.0, h + 75.0), "horizontal", b2_start),
             ]
         )
         if top_cover > 0:

@@ -36,6 +36,9 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    debonded_strand_count_for_row,
+    debonded_strand_numbers_for_row,
+    explicit_debonded_strand_numbers,
     girder_critical_transfer_station_dataframe,
     girder_debonding_preview_status,
     girder_debonding_rule_audit_dataframe,
@@ -141,6 +144,7 @@ GIRDER_STRAND_LAYOUT_COLUMNS = [
     "Pe_eff_final/strand_kN",
     "Left debond m",
     "Right debond m",
+    "Debonded strand nos",
     "Note",
 ]
 
@@ -170,6 +174,7 @@ GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS = [
     "y_mm_from_bottom",
     "Left debond m",
     "Right debond m",
+    "Debonded strand nos",
     "Pe_transfer/strand_kN",
     "Pe_construction/strand_kN",
     "Pe_eff_final/strand_kN",
@@ -189,6 +194,7 @@ GIRDER_STRAND_LAYOUT_AUDIT_COLUMNS = [
     "Computed spacing_mm",
     "Left debond m",
     "Right debond m",
+    "Debonded strand nos",
 ]
 
 GIRDER_DEBOND_MODE_OPTIONS = [
@@ -1266,6 +1272,7 @@ def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None)
                 "Pe_eff_final/strand_kN": pe_final,
                 "Left debond m": 0.0,
                 "Right debond m": 0.0,
+                "Debonded strand nos": "",
                 "Note": "Auto section default row; edit count/debond/force as needed.",
             }
         )
@@ -1381,6 +1388,7 @@ def _normalize_girder_strand_layout_table(
                 "Pe_eff_final/strand_kN": pe_final if pe_final is not None and pe_final >= 0.0 else _default_pe_final_per_strand_kn(strand_size),
                 "Left debond m": left_debond,
                 "Right debond m": right_debond,
+                "Debonded strand nos": str(current.get("Debonded strand nos") or "").strip(),
                 "Note": str(current.get("Note") or "").strip(),
             }
         )
@@ -1567,6 +1575,7 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
         )
     )
 
+    debonded_numbers = set(debonded_strand_numbers_for_row(row.to_dict() if hasattr(row, "to_dict") else row))
     points = [
         {
             "Group ID": group,
@@ -1578,6 +1587,7 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
             "Min spacing_mm": min_spacing,
             "Edge CL_mm": edge_cl,
             "Strand Size": str(row.get("Strand Size") or DEFAULT_GIRDER_STRAND_SIZE),
+            "Debonded selected": (i + 1) in debonded_numbers,
         }
         for i in range(count)
     ]
@@ -1714,6 +1724,46 @@ def _girder_effective_prestress_preview_dataframe(table: pd.DataFrame, span_leng
     return girder_prestress_station_dataframe(table, span_length_m=span_length_m)
 
 
+def _debonded_strand_selection_review_message(row: pd.Series) -> str | None:
+    raw = str(row.get("Debonded strand nos") or "").strip()
+    if not raw:
+        return None
+    count = int(_to_float(row.get("No. Strands")) or 0)
+    invalid: list[str] = []
+    out_of_range: list[int] = []
+    text = raw.replace(";", ",").replace(" ", ",")
+    for token in [part.strip() for part in text.split(",") if part.strip()]:
+        if "-" in token:
+            parts = [part.strip() for part in token.split("-", 1)]
+            try:
+                start, end = int(parts[0]), int(parts[1])
+            except (TypeError, ValueError):
+                invalid.append(token)
+                continue
+            lo, hi = sorted((start, end))
+            for value in range(lo, hi + 1):
+                if value < 1 or value > count:
+                    out_of_range.append(value)
+            continue
+        try:
+            value = int(token)
+        except (TypeError, ValueError):
+            invalid.append(token)
+            continue
+        if value < 1 or value > count:
+            out_of_range.append(value)
+    selected = explicit_debonded_strand_numbers(row.to_dict())
+    group = row.get("Group ID") or "strand group"
+    if invalid:
+        return f"{group}: invalid debonded strand token(s): {', '.join(invalid)}; use values like 1,2,18,19 or 1-4."
+    if out_of_range:
+        unique = ", ".join(str(value) for value in sorted(set(out_of_range)))
+        return f"{group}: debonded strand number(s) {unique} are outside 1..{count}."
+    if not selected:
+        return f"{group}: debonded strand nos could not be parsed; use values like 1,2,18,19 or 1-4."
+    return None
+
+
 def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float, geometry: SectionGeometry | None) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -1734,6 +1784,9 @@ def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float,
         count = int(_to_float(row.get("No. Strands")) or 0)
         if count <= 0:
             errors.append(f"{group}: No. Strands must be greater than zero.")
+        selection_message = _debonded_strand_selection_review_message(row)
+        if selection_message:
+            warnings.append(selection_message)
         left = float(_to_float(row.get("Left debond m")) or 0.0)
         right = float(_to_float(row.get("Right debond m")) or 0.0)
         if left + right >= span_length_m:
@@ -1774,6 +1827,7 @@ def _debond_status_from_row(row: pd.Series | dict[str, Any]) -> tuple[str, str]:
 def _girder_debonding_schedule_dataframe(table: pd.DataFrame, span_length_m: float) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for _, row in _active_girder_strand_layout_rows(table).iterrows():
+        row_dict = row.to_dict()
         group = str(row.get("Group ID") or "strand group")
         count = int(_to_float(row.get("No. Strands")) or 0)
         left = min(max(float(_to_float(row.get("Left debond m")) or 0.0), 0.0), float(span_length_m))
@@ -1781,10 +1835,18 @@ def _girder_debonding_schedule_dataframe(table: pd.DataFrame, span_length_m: flo
         bonded_start = left
         bonded_end = max(left, float(span_length_m) - right)
         status, _ = _debond_status_from_row(row)
+        debonded_numbers = debonded_strand_numbers_for_row(row_dict)
+        explicit_numbers = explicit_debonded_strand_numbers(row_dict)
+        debonded_count = len(debonded_numbers)
+        bonded_count = max(0, count - debonded_count)
         rows.append(
             {
                 "Group ID": group,
                 "No. strands": count,
+                "Bonded strands": bonded_count,
+                "Debonded strands": debonded_count,
+                "Debonded strand nos": ", ".join(str(value) for value in debonded_numbers) if debonded_numbers else "—",
+                "Selection mode": "Individual" if explicit_numbers else ("Row-based all" if debonded_count else "None"),
                 "Debond status": status,
                 "Left debond m": left,
                 "Right debond m": right,
@@ -1795,7 +1857,7 @@ def _girder_debonding_schedule_dataframe(table: pd.DataFrame, span_length_m: flo
 
 
 def _render_girder_debonding_rule_dashboard(table: pd.DataFrame, span_length_m: float) -> None:
-    """Render PS5C row-based debonding QA without claiming code certification."""
+    """Render PS6A debonding QA without claiming code certification."""
 
     status = girder_debonding_preview_status(table, span_length_m=span_length_m)
     audit = girder_debonding_rule_audit_dataframe(table, span_length_m=span_length_m)
@@ -1811,24 +1873,24 @@ def _render_girder_debonding_rule_dashboard(table: pd.DataFrame, span_length_m: 
         max_debond = max(max_debond, left, right)
     tone = "ready" if status == "OK" else ("danger" if status == "ERROR" else "review")
     metrics = [
-        PrestressMetric("Debonding QA", status, "Row-based preview only", tone, strong=True),
+        PrestressMetric("Debonding QA", status, "Individual preview only", tone, strong=True),
         PrestressMetric("Debonded rows", f"{debonded_rows} / {len(active)}", "Active row groups", "info"),
         PrestressMetric("Max debond length", f"{max_debond:.3f} m", f"L/5 = {span_length_m / 5.0:.3f} m", "neutral"),
         PrestressMetric("Critical stations", str(len(critical.index)), "End faces + sleeve transitions", "info"),
     ]
     st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
     if status == "ERROR":
-        st.error("Debonding QA found row-based input errors. Review before using the prestress preview.")
+        st.error("Debonding QA found preview input errors. Review before using the prestress preview.")
     elif status == "REVIEW":
         st.warning("Debonding QA requires engineering review. This is not a final AASHTO/ACI code-certified debonding check.")
     else:
-        st.success("Debonding QA preview has no row-based errors. Final individual-strand/code checks are still future milestones.")
+        st.success("Debonding QA preview has no input errors. Final code-certified checks and auto-recommendation are still future milestones.")
 
-    with st.expander("Debonding rule audit — row-based preview", expanded=status != "OK"):
+    with st.expander("Debonding rule audit — individual preview", expanded=status != "OK"):
         st.dataframe(audit, use_container_width=True, hide_index=True)
         st.caption(
-            "PS5C checks only the row-based debonding information currently available. "
-            "Individual strand limits such as total debonded strand percentage and per-row debonded strand percentage require a future individual-strand selection model."
+            "PS6A can use optional individual strand numbers within each row for preview ratio checks. "
+            "Blank debonded strand numbers preserve PS5 row-based all-strands behavior for backward compatibility. This is still not a final code-certified debonding check."
         )
     with st.expander("Critical transfer station audit", expanded=False):
         st.dataframe(critical, use_container_width=True, hide_index=True)
@@ -1883,21 +1945,29 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
     points = _girder_strand_point_layout_dataframe(table, geometry)
     if not points.empty:
         active_rows = _active_girder_strand_layout_rows(table).set_index("Group ID", drop=False)
-        status_by_group: dict[str, tuple[str, float, float, int]] = {}
+        row_info: dict[str, dict[str, Any]] = {}
         for _, row in active_rows.iterrows():
             group = str(row.get("Group ID") or "strand group")
+            row_dict = row.to_dict()
             status, _ = _debond_status_from_row(row)
             left = float(_to_float(row.get("Left debond m")) or 0.0)
             right = float(_to_float(row.get("Right debond m")) or 0.0)
             count = int(_to_float(row.get("No. Strands")) or 0)
-            status_by_group[group] = (status, left, right, count)
+            debonded_numbers = debonded_strand_numbers_for_row(row_dict)
+            explicit_numbers = explicit_debonded_strand_numbers(row_dict)
+            row_info[group] = {
+                "status": status,
+                "left": left,
+                "right": right,
+                "count": count,
+                "debonded_numbers": debonded_numbers,
+                "explicit": bool(explicit_numbers),
+            }
 
         for _, point in points.iterrows():
             props = _strand_size_properties(point.get("Strand Size"))
             radius = max(float(props["diameter_mm"]) / 2.0, 9.0)
-            group = str(point.get("Group ID") or "strand group")
-            status = status_by_group.get(group, ("Fully bonded", 0.0, 0.0, 0))[0]
-            color = bonded_color if status == "Fully bonded" else debonded_color
+            color = debonded_color if bool(point.get("Debonded selected")) else bonded_color
             x_value = float(point["x_mm"])
             y_value = float(point["y_mm_abs"])
             fig.add_shape(
@@ -1916,17 +1986,19 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
         debonded_points = []
         for _, point in points.iterrows():
             group = str(point.get("Group ID") or "strand group")
-            status, left, right, _ = status_by_group.get(group, ("Fully bonded", 0.0, 0.0, 0))
-            record = (point, status, left, right)
-            if status == "Fully bonded":
-                bonded_points.append(record)
-            else:
+            info = row_info.get(group, {"status": "Fully bonded", "left": 0.0, "right": 0.0})
+            record = (point, str(info["status"]), float(info["left"]), float(info["right"]))
+            if bool(point.get("Debonded selected")):
                 debonded_points.append(record)
+            else:
+                bonded_points.append(record)
 
         def _point_hover(record: tuple[pd.Series, str, float, float]) -> str:
             point, status, left, right = record
-            details = [f"{point['Group ID']} #{point['Strand no.']}", f"Status = {status}"]
+            state = "Debonded selected" if bool(point.get("Debonded selected")) else "Bonded through row sleeve"
+            details = [f"{point['Group ID']} #{point['Strand no.']}", f"Status = {state}"]
             if left > 1e-9 or right > 1e-9:
+                details.append(f"Row debond = {status}")
                 details.append(f"L debond = {left:.3f} m")
                 details.append(f"R debond = {right:.3f} m")
             return "<br>".join(details)
@@ -1968,13 +2040,19 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
 
         group_stats = []
         for group, group_points in points.groupby("Group ID", as_index=False):
-            status, left, right, count = status_by_group.get(str(group), ("Fully bonded", 0.0, 0.0, 0))
+            info = row_info.get(str(group), {"status": "Fully bonded", "left": 0.0, "right": 0.0, "count": len(group_points), "debonded_numbers": (), "explicit": False})
+            status = str(info["status"])
+            left = float(info["left"])
+            right = float(info["right"])
+            count = int(info["count"])
+            debonded_count = len(tuple(info["debonded_numbers"]))
+            bonded_count = max(0, count - debonded_count)
             y_value = float(group_points["y_mm_abs"].mean())
             x_anchor = float(group_points["x_mm"].max())
             if status == "Fully bonded":
-                label = f"{group} · {count} strands · Bonded"
+                label = f"{group} · total {count} · B={bonded_count} · U={debonded_count}"
             else:
-                label = f"{group} · {count} strands · {status} · L={left:.2f} m · R={right:.2f} m"
+                label = f"{group} · total {count} · B={bonded_count} · U={debonded_count} · {status} · L={left:.2f} m · R={right:.2f} m"
             group_stats.append((str(group), y_value, x_anchor, label))
 
         if section_x_max is None:
@@ -2188,7 +2266,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         geometry=geometry,
     )
     st.caption(
-        "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, and stage Pe per strand. "
+        "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, optional debonded strand numbers, and stage Pe per strand. "
         "Defaults use 12.7 mm low-relaxation strand, 2 rows at y=50/100 mm, 45 mm edge CL, and 50 mm x/y spacing. "
         "Area, minimum spacing, and total Aps are auto-calculated."
     )
@@ -2216,6 +2294,10 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             "Pe_eff_final/strand_kN": st.column_config.NumberColumn("🟨 Pe_eff_final / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
             "Left debond m": st.column_config.NumberColumn("🟨 Left debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
             "Right debond m": st.column_config.NumberColumn("🟨 Right debond (m)", min_value=0.0, max_value=float(span), step=0.5, format="%.3f"),
+            "Debonded strand nos": st.column_config.TextColumn(
+                "🟨 Debonded strand nos",
+                help="Optional PS6A individual selection, e.g. 1,2,18,19 or 1-4. Blank keeps PS5 row-based all-strands debonding when L/R debond length is nonzero.",
+            ),
             "Note": st.column_config.TextColumn("Note"),
         },
         key="girder_strand_layout_editor",
@@ -2253,7 +2335,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         with st.expander("Plot assumptions", expanded=False):
             st.caption(
                 "Cross-section symbols show row-level debonding status from the left/right debond inputs. "
-                "The current workflow is still row-based; individual bonded/unbonded strand selection within a row is a future advisory-design milestone."
+                "PS6A supports optional individual bonded/unbonded strand selection within a row. Blank debonded strand numbers keep the previous row-based all-strands debonding fallback."
             )
     with tab_debond:
         st.plotly_chart(_plot_girder_longitudinal_debonding_layout(normalized, float(span)), use_container_width=True)

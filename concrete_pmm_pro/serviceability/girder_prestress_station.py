@@ -21,6 +21,7 @@ _TOTAL_APS_COLUMN = "Total Aps_mm2"
 _Y_FROM_BOTTOM_COLUMN = "y_mm_from_bottom"
 _LEFT_DEBOND_COLUMN = "Left debond m"
 _RIGHT_DEBOND_COLUMN = "Right debond m"
+_DEBONDED_STRAND_NOS_COLUMN = "Debonded strand nos"
 _PE_TRANSFER_PER_STRAND_COLUMN = "Pe_transfer/strand_kN"
 _PE_CONSTRUCTION_PER_STRAND_COLUMN = "Pe_construction/strand_kN"
 _PE_FINAL_PER_STRAND_COLUMN = "Pe_eff_final/strand_kN"
@@ -238,6 +239,97 @@ def _to_bool_default_true(value: Any) -> bool:
     return True
 
 
+
+def explicit_debonded_strand_numbers(row: Mapping[str, Any]) -> tuple[int, ...]:
+    """Parse explicitly selected debonded strand numbers within one row.
+
+    The supported PS6A syntax is a comma/space separated list such as
+    ``1, 2, 18, 19``.  Ranges such as ``1-4`` are also accepted as a UI
+    convenience.  Numbers are 1-based within the row, matching the plotted
+    strand labels.  Invalid/out-of-range tokens are ignored here and surfaced
+    by the UI/QA layer; this helper is intentionally safe for solver-adjacent
+    station calculations.
+    """
+
+    count = int(max(0, round(_to_float(row.get(_COUNT_COLUMN)) or 0.0)))
+    raw = row.get(_DEBONDED_STRAND_NOS_COLUMN)
+    if raw is None or str(raw).strip() == "":
+        return ()
+    text = str(raw).strip().replace(";", ",").replace(" ", ",")
+    selected: set[int] = set()
+    for token in [part.strip() for part in text.split(",") if part.strip()]:
+        if "-" in token:
+            parts = [part.strip() for part in token.split("-", 1)]
+            try:
+                start, end = int(parts[0]), int(parts[1])
+            except (TypeError, ValueError):
+                continue
+            lo, hi = sorted((start, end))
+            for value in range(lo, hi + 1):
+                if 1 <= value <= count:
+                    selected.add(value)
+            continue
+        try:
+            value = int(token)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= value <= count:
+            selected.add(value)
+    return tuple(sorted(selected))
+
+
+def debonded_strand_numbers_for_row(row: Mapping[str, Any]) -> tuple[int, ...]:
+    """Return strand numbers treated as debonded in the PS6A preview.
+
+    Backward compatibility is deliberate: existing PS5 row-based projects with
+    left/right debond lengths but no explicit strand numbers still mean the
+    full row is debonded over the sleeved zone.  Once the user enters explicit
+    strand numbers, only those strands are ignored inside the sleeve.
+    """
+
+    count = int(max(0, round(_to_float(row.get(_COUNT_COLUMN)) or 0.0)))
+    explicit = explicit_debonded_strand_numbers(row)
+    if explicit:
+        return explicit
+    left = _to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0
+    right = _to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0
+    if (left > 1e-9 or right > 1e-9) and count > 0:
+        return tuple(range(1, count + 1))
+    return ()
+
+
+def effective_strand_count_in_row_at_station(row: Mapping[str, Any], x_m: float, span_length_m: float) -> int:
+    """Return the effective strand count for one row at station x.
+
+    Outside sleeve zones all strands in the row are effective.  Inside a
+    sleeved zone, explicitly selected debonded strand numbers are ignored.  If
+    no explicit strand numbers are provided, PS5 row-based semantics are
+    preserved and the full row is ignored inside the sleeve.
+    """
+
+    span = _clamp_span_length(span_length_m)
+    x = _to_float(x_m)
+    if x is None:
+        return 0
+    count = int(max(0, round(_to_float(row.get(_COUNT_COLUMN)) or 0.0)))
+    if count <= 0:
+        return 0
+    left = min(max(float(_to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+    right = min(max(float(_to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+    x_value = float(x)
+    inside_left_sleeve = left > 1e-9 and x_value < left - 1e-9
+    inside_right_sleeve = right > 1e-9 and x_value > span - right + 1e-9
+    if not inside_left_sleeve and not inside_right_sleeve:
+        return count
+    debonded_count = len(debonded_strand_numbers_for_row(row))
+    return max(0, count - debonded_count)
+
+
+def debonded_strand_count_for_row(row: Mapping[str, Any]) -> int:
+    """Return number of row strands selected/treated as debonded."""
+
+    return len(debonded_strand_numbers_for_row(row))
+
 def _clamp_span_length(span_length_m: float) -> float:
     span = _to_float(span_length_m)
     if span is None or span <= 0.0:
@@ -276,13 +368,7 @@ def strand_group_effective_at_station(row: Mapping[str, Any], x_m: float, span_l
     x = _to_float(x_m)
     if x is None:
         return False
-    left = _to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0
-    right = _to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0
-    left = min(max(float(left), 0.0), span)
-    right = min(max(float(right), 0.0), span)
-    bonded_start = left
-    bonded_end = span - right
-    return bonded_start - 1e-9 <= float(x) <= bonded_end + 1e-9
+    return effective_strand_count_in_row_at_station(row, float(x), span) > 0
 
 
 def girder_debonding_zones_for_row(row: Mapping[str, Any], span_length_m: float) -> tuple[GirderDebondingZone, ...]:
@@ -448,13 +534,14 @@ def girder_debonding_rule_checks(
     checks: list[GirderDebondingRuleCheck] = []
     active_rows = active_girder_strand_rows(table)
     active_count, debonded_count = _active_row_count_and_debonded_count(table)
+    explicit_rows = sum(1 for row in active_rows if explicit_debonded_strand_numbers(row))
     checks.append(
         GirderDebondingRuleCheck(
-            rule="PS5C scope",
+            rule="PS6A scope",
             status="PREVIEW",
-            demand=f"{debonded_count} debonded row(s) / {active_count} active row(s)",
-            limit="Row-based QA only",
-            note="Individual strand IDs inside each row are not modeled yet; do not treat this as final code-certified debonding.",
+            demand=f"{explicit_rows} explicit row(s); {debonded_count} debonded row(s) / {active_count} active row(s)",
+            limit="Individual strand selection preview",
+            note="PS6A can track selected strand numbers within a row, but this is still not a final AASHTO/ACI code-certified debonding design.",
         )
     )
     if not active_rows:
@@ -532,6 +619,38 @@ def girder_debonding_rule_checks(
             note="This is a row-based warning only; future individual-strand modeling is required for code-style per-section termination limits.",
         )
     )
+    total_strands = sum(int(max(0, round(_to_float(row.get(_COUNT_COLUMN)) or 0.0))) for row in active_rows)
+    debonded_strands = sum(debonded_strand_count_for_row(row) for row in active_rows)
+    total_ratio = debonded_strands / total_strands if total_strands > 0 else 0.0
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Total debonded strand ratio",
+            status="OK" if total_ratio <= 0.25 + 1e-9 else "REVIEW",
+            demand=f"{debonded_strands} / {total_strands} = {total_ratio:.1%}",
+            limit="≤ 25% preview limit",
+            note="Computed from explicit selected strand numbers; blank selection with debond length preserves row-based all-strands behavior.",
+        )
+    )
+    over_row_limits: list[str] = []
+    row_ratio_demands: list[str] = []
+    for row in active_rows:
+        group_id = str(row.get(_GROUP_ID_COLUMN) or "strand group")
+        row_total = int(max(0, round(_to_float(row.get(_COUNT_COLUMN)) or 0.0)))
+        row_debonded = debonded_strand_count_for_row(row)
+        ratio = row_debonded / row_total if row_total > 0 else 0.0
+        if row_debonded > 0:
+            row_ratio_demands.append(f"{group_id}: {row_debonded}/{row_total}={ratio:.1%}")
+        if ratio > 0.40 + 1e-9:
+            over_row_limits.append(group_id)
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Per-row debonded strand ratio",
+            status="OK" if not over_row_limits else "REVIEW",
+            demand="; ".join(row_ratio_demands) if row_ratio_demands else "0 selected debonded strands",
+            limit="≤ 40% per row preview limit",
+            note="Review rows over the preview limit: " + (", ".join(over_row_limits) if over_row_limits else "none."),
+        )
+    )
     critical = girder_critical_transfer_stations(table, span_length_m=span)
     checks.append(
         GirderDebondingRuleCheck(
@@ -576,13 +695,12 @@ def girder_debonding_preview_status(
     return "OK"
 
 
-def _active_group_from_row(row: Mapping[str, Any]) -> ActiveStrandGroup:
+def _active_group_from_row(row: Mapping[str, Any], *, effective_no_strands: int | None = None) -> ActiveStrandGroup:
     count = _to_float(row.get(_COUNT_COLUMN)) or 0.0
-    no_strands = max(0, int(round(count)))
+    row_no_strands = max(0, int(round(count)))
+    no_strands = row_no_strands if effective_no_strands is None else max(0, int(effective_no_strands))
     area_per = _to_float(row.get(_AREA_PER_STRAND_COLUMN)) or 0.0
-    total_aps = _to_float(row.get(_TOTAL_APS_COLUMN))
-    if total_aps is None:
-        total_aps = no_strands * area_per
+    total_aps = no_strands * area_per
     return ActiveStrandGroup(
         group_id=str(row.get(_GROUP_ID_COLUMN) or "strand group"),
         no_strands=no_strands,
@@ -608,8 +726,9 @@ def active_strand_groups_at_station(
     span = _clamp_span_length(span_length_m)
     groups: list[ActiveStrandGroup] = []
     for row in active_girder_strand_rows(table):
-        if strand_group_effective_at_station(row, x_m, span):
-            group = _active_group_from_row(row)
+        effective_count = effective_strand_count_in_row_at_station(row, x_m, span)
+        if effective_count > 0:
+            group = _active_group_from_row(row, effective_no_strands=effective_count)
             if group.no_strands > 0 and group.total_aps_mm2 > 0.0:
                 groups.append(group)
     return tuple(groups)

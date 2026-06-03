@@ -4,6 +4,8 @@ import pandas as pd
 
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
     active_strand_groups_at_station,
+    debonded_strand_numbers_for_row,
+    effective_strand_count_in_row_at_station,
     evaluate_girder_prestress_station,
     girder_critical_transfer_station_dataframe,
     girder_debonding_layout_zones,
@@ -190,9 +192,41 @@ def test_debonding_layout_zones_ignore_inactive_rows() -> None:
     assert group_ids.count("Independent debond") == 3
 
 
+
+
+def test_individual_debonded_strand_selection_partially_reduces_support_effective_count() -> None:
+    layout = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "No. Strands": 10,
+                "Area/Strand_mm2": 100.0,
+                "Total Aps_mm2": 1000.0,
+                "y_mm_from_bottom": 50.0,
+                "Pe_transfer/strand_kN": 150.0,
+                "Pe_construction/strand_kN": 140.0,
+                "Pe_eff_final/strand_kN": 120.0,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+                "Debonded strand nos": "1,2,9,10",
+            }
+        ]
+    )
+    row = layout.iloc[0]
+    assert debonded_strand_numbers_for_row(row) == (1, 2, 9, 10)
+    assert effective_strand_count_in_row_at_station(row, x_m=0.0, span_length_m=10.0) == 6
+    assert effective_strand_count_in_row_at_station(row, x_m=5.0, span_length_m=10.0) == 10
+
+    support = evaluate_girder_prestress_station(layout, x_m=0.0, span_length_m=10.0)
+    assert support.effective_strands == 6
+    assert support.aps_eff_mm2 == 600.0
+    assert support.pe_transfer_eff_kN == 900.0
+
+
 def test_debonding_rule_audit_reports_row_based_preview_and_review_items() -> None:
     audit = girder_debonding_rule_audit_dataframe(_layout(), span_length_m=20.0)
-    assert "PS5C scope" in set(audit["Rule"])
+    assert "PS6A scope" in set(audit["Rule"])
     assert "Left/right symmetry" in set(audit["Rule"])
     symmetry = audit[audit["Rule"] == "Left/right symmetry"].iloc[0]
     assert symmetry["Status"] == "REVIEW"

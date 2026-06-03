@@ -17,7 +17,7 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Effective prestress preview" in PRESTRESS_SOURCE
     assert "12.7 mm low-relaxation strand" in PRESTRESS_SOURCE
     assert "15.2 mm low-relaxation strand" in PRESTRESS_SOURCE
-    assert "individual bonded/unbonded strand selection within a row is a future advisory-design milestone" in PRESTRESS_SOURCE
+    assert "PS6A supports optional individual bonded/unbonded strand selection within a row" in PRESTRESS_SOURCE
     assert "Computed spacing_mm" in PRESTRESS_SOURCE
     assert "3db minimum spacing" in PRESTRESS_SOURCE
     assert "reduce the number of strands in this row" in PRESTRESS_SOURCE
@@ -36,7 +36,7 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
     assert "Debonding QA" in PRESTRESS_SOURCE
     assert "_render_girder_debonding_rule_dashboard" in PRESTRESS_SOURCE
-    assert "Debonding rule audit — row-based preview" in PRESTRESS_SOURCE
+    assert "Debonding rule audit — individual preview" in PRESTRESS_SOURCE
     assert "Critical transfer station audit" in PRESTRESS_SOURCE
 
 
@@ -208,7 +208,7 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     label_texts = [annotation.text for annotation in fig.layout.annotations]
     assert any(getattr(annotation, "xanchor", None) == "left" for annotation in fig.layout.annotations)
     assert all("<br>" not in label for label in label_texts)
-    assert any("Row 1 · 2 strands · Debonded both ends · L=1.00 m · R=1.00 m" == label for label in label_texts)
+    assert any("Row 1 · total 2 · B=0 · U=2 · Debonded both ends · L=1.00 m · R=1.00 m" == label for label in label_texts)
 
     schedule = _girder_debonding_schedule_dataframe(table, span_length_m=10.0)
     assert schedule.loc[0, "Debond status"] == "Debonded both ends"
@@ -217,6 +217,60 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     assert schedule.loc[1, "Debond status"] == "Right debonded"
     assert schedule.loc[1, "Bonded zone m"] == "0.000 → 8.000"
 
+
+
+
+def test_cross_section_plot_shows_individual_bonded_and_debonded_points(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_debonding_schedule_dataframe,
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+        _plot_girder_strand_cross_section_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 6,
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+                "Debonded strand nos": "1,6",
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
+    points = _girder_strand_point_layout_dataframe(table, None)
+    assert points["Debonded selected"].tolist().count(True) == 2
+    assert points["Debonded selected"].tolist().count(False) == 4
+
+    fig = _plot_girder_strand_cross_section_layout(table, None)
+    trace_names = [trace.name for trace in fig.data]
+    assert "Bonded" in trace_names
+    assert "Debonded" in trace_names
+    assert any("B=4 · U=2" in annotation.text for annotation in fig.layout.annotations)
+
+    schedule = _girder_debonding_schedule_dataframe(table, 10.0)
+    assert schedule.loc[0, "Bonded strands"] == 4
+    assert schedule.loc[0, "Debonded strands"] == 2
+    assert schedule.loc[0, "Debonded strand nos"] == "1, 6"
+    assert schedule.loc[0, "Selection mode"] == "Individual"
 
 def test_data_editor_patch_payload_persists_first_edit_without_dataframe_value_error(monkeypatch) -> None:
     import sys

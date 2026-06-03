@@ -1937,34 +1937,35 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
         section_width = max(section_x_max - section_x_min, 200.0)
         # Keep row labels outside the concrete outline with enough air to avoid
         # the text visually touching the section, even for wide box beams.
-        label_gap = max(260.0, 0.24 * section_width)
+        label_gap = max(340.0, 0.34 * section_width)
         label_x = section_x_max + label_gap
-        fig.add_trace(
-            go.Scatter(
-                x=[label_x for _ in group_stats],
-                y=[row[1] for row in group_stats],
-                mode="text",
-                text=[row[3] for row in group_stats],
-                textposition="middle left",
-                textfont={"size": 11, "color": "#334155"},
-                name="Row status labels",
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-        for _, y_value, x_anchor, _ in group_stats:
+        for _, y_value, x_anchor, label in group_stats:
             fig.add_shape(
                 type="line",
                 x0=x_anchor + 16.0,
-                x1=label_x - 22.0,
+                x1=label_x - 32.0,
                 y0=y_value,
                 y1=y_value,
                 line={"color": "rgba(100, 116, 139, 0.50)", "width": 1.0},
             )
-        fig.update_xaxes(range=[section_x_min - 0.15 * section_width, label_x + 620.0])
+            fig.add_annotation(
+                x=label_x,
+                y=y_value,
+                text=label,
+                showarrow=False,
+                xanchor="left",
+                yanchor="middle",
+                xshift=8,
+                align="left",
+                font={"size": 11, "color": "#334155"},
+                bgcolor="rgba(255, 255, 255, 0.92)",
+                bordercolor="rgba(255, 255, 255, 0.0)",
+                borderpad=1,
+            )
+        fig.update_xaxes(range=[section_x_min - 0.15 * section_width, label_x + 760.0])
     fig.update_layout(
         height=410,
-        margin={"l": 20, "r": 240, "t": 30, "b": 20},
+        margin={"l": 20, "r": 320, "t": 30, "b": 20},
         xaxis_title="section x (mm)",
         yaxis_title="section y (mm)",
         showlegend=True,

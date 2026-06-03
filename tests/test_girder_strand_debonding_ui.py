@@ -29,8 +29,8 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert 'name="Bonded"' in PRESTRESS_SOURCE
     assert 'name="Debonded"' in PRESTRESS_SOURCE
     assert "diamond-open" in PRESTRESS_SOURCE
-    assert "Row status labels" in PRESTRESS_SOURCE
-    assert "label_gap = max(260.0" in PRESTRESS_SOURCE
+    assert 'xanchor="left"' in PRESTRESS_SOURCE
+    assert "label_gap = max(340.0" in PRESTRESS_SOURCE
     assert "on_change=_sync_girder_strand_layout_editor_to_table" in PRESTRESS_SOURCE
     assert "Row 1 at the bottom" in PRESTRESS_SOURCE
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
@@ -201,10 +201,10 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     fig = _plot_girder_strand_cross_section_layout(table, None)
     trace_names = [trace.name for trace in fig.data]
     assert "Bonded" in trace_names or "Debonded" in trace_names
-    assert "Row status labels" in trace_names
-    label_trace = next(trace for trace in fig.data if trace.name == "Row status labels")
-    assert all("<br>" not in label for label in label_trace.text)
-    assert any("Row 1 · 2 strands · Debonded both ends · L=1.00 m · R=1.00 m" == label for label in label_trace.text)
+    label_texts = [annotation.text for annotation in fig.layout.annotations]
+    assert any(getattr(annotation, "xanchor", None) == "left" for annotation in fig.layout.annotations)
+    assert all("<br>" not in label for label in label_texts)
+    assert any("Row 1 · 2 strands · Debonded both ends · L=1.00 m · R=1.00 m" == label for label in label_texts)
 
     schedule = _girder_debonding_schedule_dataframe(table, span_length_m=10.0)
     assert schedule.loc[0, "Debond status"] == "Debonded both ends"

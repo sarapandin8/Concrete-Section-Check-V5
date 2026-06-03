@@ -92,8 +92,10 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
         h5_mm=200,
         h6_mm=300,
         h7_mm=400,
+        h8_mm=70,
         b2_mm=100,
         b3_mm=290,
+        b4_mm=70,
         r_outer_mm=0,
     )
 
@@ -109,13 +111,13 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     assert (-450.0, 350.0) in outer
     assert (450.0, 350.0) in outer
     assert (-495.0, 50.0) in outer
-    assert (-425.0, 50.0) in outer
     assert (-425.0, 120.0) in outer
     assert (425.0, 120.0) in outer
-    assert (425.0, 50.0) in outer
     assert (495.0, 50.0) in outer
-    assert geometry.metadata["drawing_parameters_mm"]["lower_side_ledge"] == pytest.approx(70)
-    assert geometry.metadata["drawing_parameters_mm"]["lower_inner_rise"] == pytest.approx(70)
+    assert geometry.metadata["drawing_parameters_mm"]["b4"] == pytest.approx(70)
+    assert geometry.metadata["drawing_parameters_mm"]["h8"] == pytest.approx(70)
+    assert geometry.metadata["drawing_parameters_mm"]["point_1_left"]["x"] == pytest.approx(-495.0)
+    assert geometry.metadata["drawing_parameters_mm"]["point_2_left"]["x"] == pytest.approx(-425.0)
     assert (-145.0, -190.0) in hole
     assert (145.0, -190.0) in hole
     assert (-245.0, -110.0) in hole
@@ -133,8 +135,10 @@ def test_precast_box_beam_interior_rejects_inconsistent_h6_h7_or_optional_b2_sta
             h5_mm=200,
             h6_mm=320,
             h7_mm=400,
+            h8_mm=70,
             b2_mm=100,
             b3_mm=290,
+            b4_mm=70,
             b2_start_from_left_mm=250,
         )
 
@@ -147,8 +151,10 @@ def test_precast_box_beam_interior_rejects_inconsistent_h6_h7_or_optional_b2_sta
             h5_mm=200,
             h6_mm=300,
             h7_mm=400,
+            h8_mm=70,
             b2_mm=100,
             b3_mm=290,
+            b4_mm=70,
             b2_start_from_left_mm=260,
         )
 

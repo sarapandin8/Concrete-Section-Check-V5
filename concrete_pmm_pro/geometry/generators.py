@@ -184,63 +184,55 @@ def _precast_box_beam_interior_outer_points(
     height_mm: float,
     *,
     h7_mm: float,
+    h8_mm: float,
+    b4_mm: float,
     top_edge_offset_mm: float = 45.0,
-    top_side_drop_mm: float = 70.0,
-    lower_side_ledge_mm: float = 70.0,
-    lower_inner_rise_mm: float = 70.0,
 ) -> list[Point2D]:
     """Return the requested interior precast box beam outer profile.
 
     Geometry basis from the user's drawing for the *interior* box beam only:
     - full bottom width B
     - top edge inset 45 mm on each side
-    - top edge inset 45 mm on each side
-    - lower horizontal side ledge 70 mm at the h7 elevation
-    - vertical rise of 70 mm at the ledge end before the long side slope
-    - the sloped outer side runs directly from point A to the top corner B
-    - lower side-break elevation controlled by h7 measured from the bottom
+    - point 1 sits at the top of the lower outside vertical face at elevation h7
+    - point 2 is offset inward by b4 and upward by h8 from point 1
+    - the boundary segment from point 1 to point 2 is a straight diagonal
+    - the upper side then continues as a straight diagonal from point 2 to the top corner B
     The section remains left-right symmetric about the center line.
     """
 
     _require_positive("width_mm", width_mm)
     _require_positive("height_mm", height_mm)
     _require_positive("h7_mm", h7_mm)
+    _require_non_negative("h8_mm", h8_mm)
+    _require_non_negative("b4_mm", b4_mm)
     _require_non_negative("top_edge_offset_mm", top_edge_offset_mm)
-    _require_non_negative("top_side_drop_mm", top_side_drop_mm)
-    _require_non_negative("lower_side_ledge_mm", lower_side_ledge_mm)
-    _require_non_negative("lower_inner_rise_mm", lower_inner_rise_mm)
 
     w = float(width_mm) / 2.0
     d = float(height_mm) / 2.0
     inset = float(top_edge_offset_mm)
-    top_drop = float(top_side_drop_mm)
-    lower_ledge = float(lower_side_ledge_mm)
-    lower_inner_rise = float(lower_inner_rise_mm)
+    b4 = float(b4_mm)
+    h8 = float(h8_mm)
     y_break_lower = -d + float(h7_mm)
-    y_break_middle = y_break_lower + lower_inner_rise
+    y_break_middle = y_break_lower + h8
     y_break_upper = d
 
     if inset >= w:
         raise ValueError("Invalid geometry: top edge offset must be less than B/2.")
-    if lower_ledge >= w:
-        raise ValueError("Invalid geometry: lower side ledge must be less than B/2.")
-    if top_drop >= height_mm:
-        raise ValueError("Invalid geometry: top side drop must be less than H.")
+    if b4 >= w:
+        raise ValueError("Invalid geometry: b4 must be less than B/2.")
     if y_break_lower <= -d or y_break_lower >= y_break_upper:
-        raise ValueError("Invalid geometry: h7 must place the outer side break between the bottom edge and the top edge.")
+        raise ValueError("Invalid geometry: h7 must place point 1 between the bottom edge and the top edge.")
     if y_break_middle >= y_break_upper:
-        raise ValueError("Invalid geometry: h7 + lower inner rise must remain below the top edge.")
+        raise ValueError("Invalid geometry: h7 + h8 must remain below the top edge.")
 
     points = [
         _point(-w, -d),
         _point(w, -d),
         _point(w, y_break_lower),
-        _point(w - lower_ledge, y_break_lower),
-        _point(w - lower_ledge, y_break_middle),
+        _point(w - b4, y_break_middle),
         _point(w - inset, y_break_upper),
         _point(-w + inset, y_break_upper),
-        _point(-w + lower_ledge, y_break_middle),
-        _point(-w + lower_ledge, y_break_lower),
+        _point(-w + b4, y_break_middle),
         _point(-w, y_break_lower),
     ]
     _ensure_valid_simple_polygon(points, "Precast Box Beam – Interior outer polygon")
@@ -475,23 +467,27 @@ def box_section_fillet(
     h5_mm: float | None = None,
     h6_mm: float | None = None,
     h7_mm: float | None = None,
+    h8_mm: float | None = None,
     b2_mm: float | None = None,
     b3_mm: float | None = None,
+    b4_mm: float | None = None,
     b2_start_from_left_mm: float | None = None,
     name: str = "Precast Box Beam – Interior",
 ) -> SectionGeometry:
     # New drawing-variable branch for the interior precast box beam. Legacy
     # wall-thickness inputs are intentionally preserved for project-file
     # compatibility when the new parameters are absent.
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, b2_mm, b3_mm, b2_start_from_left_mm))
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
     if use_drawing_parameters:
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
         h6 = float(300.0 if h6_mm is None else h6_mm)
         h7 = float(400.0 if h7_mm is None else h7_mm)
+        h8 = float(70.0 if h8_mm is None else h8_mm)
         b2 = float(100.0 if b2_mm is None else b2_mm)
         b3 = float(290.0 if b3_mm is None else b3_mm)
+        b4 = float(70.0 if b4_mm is None else b4_mm)
         outer_radius = float(r_outer_mm)
         if n_fillet < 4:
             raise ValueError("Invalid geometry: n_fillet must be at least 4.")
@@ -514,7 +510,7 @@ def box_section_fillet(
                 "Invalid geometry: b2_start_from_left must equal (B - (2*b2 + b3)) / 2 for the centered interior void."
             )
 
-        outer_polygon = _precast_box_beam_interior_outer_points(width_mm, height_mm, h7_mm=h7)
+        outer_polygon = _precast_box_beam_interior_outer_points(width_mm, height_mm, h7_mm=h7, h8_mm=h8, b4_mm=b4)
         hole = _precast_box_beam_interior_void_points(width_mm, height_mm, h3_mm=h3, h4_mm=h4, h5_mm=h5, b2_mm=b2, b3_mm=b3)
         top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
         left_inner_x = -(b3 / 2.0 + b2)
@@ -536,18 +532,20 @@ def box_section_fillet(
                     "h5": h5,
                     "h6": h6,
                     "h7": h7,
+                    "h8": h8,
                     "b2": b2,
                     "b3": b3,
+                    "b4": b4,
                     "b2_start_from_left": derived_b2_start,
                     "top_cover": top_cover,
                     "top_edge_offset": 45.0,
                     "top_side_drop": 70.0,
-                    "lower_side_ledge": 70.0,
-                    "lower_inner_rise": 70.0,
                     "side_slope_connects_to_top_corner": True,
-                    "point_A_left": {"x": -(float(width_mm) / 2.0 - 70.0), "y": -float(height_mm) / 2.0 + h7 + 70.0},
+                    "point_1_left": {"x": -float(width_mm) / 2.0, "y": -float(height_mm) / 2.0 + h7},
+                    "point_2_left": {"x": -(float(width_mm) / 2.0 - b4), "y": -float(height_mm) / 2.0 + h7 + h8},
                     "point_B_left": {"x": -(float(width_mm) / 2.0 - 45.0), "y": float(height_mm) / 2.0},
-                    "point_A_right": {"x": float(width_mm) / 2.0 - 70.0, "y": -float(height_mm) / 2.0 + h7 + 70.0},
+                    "point_1_right": {"x": float(width_mm) / 2.0, "y": -float(height_mm) / 2.0 + h7},
+                    "point_2_right": {"x": float(width_mm) / 2.0 - b4, "y": -float(height_mm) / 2.0 + h7 + h8},
                     "point_B_right": {"x": float(width_mm) / 2.0 - 45.0, "y": float(height_mm) / 2.0},
                 },
                 "wall_thicknesses_mm": {
@@ -1274,23 +1272,27 @@ def box_section_fillet_dimensions(
     h5_mm: float | None = None,
     h6_mm: float | None = None,
     h7_mm: float | None = None,
+    h8_mm: float | None = None,
     b2_mm: float | None = None,
     b3_mm: float | None = None,
+    b4_mm: float | None = None,
     b2_start_from_left_mm: float | None = None,
     **kwargs: object,
 ) -> list[DimensionItem]:
     # n_fillet is intentionally kept in the dimension-helper signature to
     # mirror the geometry generator; dimension annotations do not discretize arcs.
     _ = n_fillet
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, b2_mm, b3_mm, b2_start_from_left_mm))
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
     if use_drawing_parameters:
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
         h6 = float(300.0 if h6_mm is None else h6_mm)
         h7 = float(400.0 if h7_mm is None else h7_mm)
+        h8 = float(70.0 if h8_mm is None else h8_mm)
         b2 = float(100.0 if b2_mm is None else b2_mm)
         b3 = float(290.0 if b3_mm is None else b3_mm)
+        b4 = float(70.0 if b4_mm is None else b4_mm)
         derived_b2_start = (float(width_mm) - (2.0 * b2 + b3)) / 2.0
         b2_start = derived_b2_start if b2_start_from_left_mm is None else float(b2_start_from_left_mm)
         dims = rectangle_dimensions(width_mm, height_mm, **kwargs)
@@ -1303,10 +1305,12 @@ def box_section_fillet_dimensions(
             [
                 _dim("h7", _point(-w - 80.0, -h), _point(-w - 80.0, -h + h7), _point(-w - 105.0, -h + h7 / 2.0), "vertical", h7),
                 _dim("h6", _point(-w - 45.0, -h + h7), _point(-w - 45.0, h), _point(-w - 20.0, -h + h7 + (height_mm - h7) / 2.0), "vertical", h6),
+                _dim("h8", _point(-w - 15.0, -h + h7), _point(-w - 15.0, -h + h7 + h8), _point(-w - 40.0, -h + h7 + h8 / 2.0), "vertical", h8),
+                _dim("b4", _point(-w, -h + h7 - 28.0), _point(-w + b4, -h + h7 - 28.0), _point(-w + b4 / 2.0, -h + h7 - 58.0), "horizontal", b4),
                 _dim("b3", _point(-half_b3, -h + h3 - 35.0), _point(half_b3, -h + h3 - 35.0), _point(0.0, -h + h3 - 65.0), "horizontal", b3),
-                _dim("b2", _point(-half_b3 - b2, -h + h3 + 2.0 * h4 + h5 + 35.0), _point(-half_b3, -h + h3 + 2.0 * h4 + h5 + 35.0), _point(-half_b3 - b2 / 2.0, -h + h3 + 2.0 * h4 + h5 + 65.0), "horizontal", b2),
+                _dim("b2", _point(-half_b3 - b2, -h + h3 + 2.0 * h4 + h5 + 55.0), _point(-half_b3, -h + h3 + 2.0 * h4 + h5 + 55.0), _point(-half_b3 - b2 / 2.0, -h + h3 + 2.0 * h4 + h5 + 85.0), "horizontal", b2),
                 _dim("h3", _point(-half_b3 - b2 - 55.0, -h), _point(-half_b3 - b2 - 55.0, -h + h3), _point(-half_b3 - b2 - 80.0, -h + h3 / 2.0), "vertical", h3),
-                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3), _point(-half_b3 - b2 - 25.0, -h + h3 + h4), _point(-half_b3 - b2, -h + h3 + h4 / 2.0), "vertical", h4),
+                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3), _point(-half_b3 - b2 - 25.0, -h + h3 + h4), _point(-half_b3 - b2 - 60.0, -h + h3 + h4 / 2.0), "vertical", h4),
                 _dim("h5", _point(-half_b3 - b2 - 55.0, -h + h3 + h4), _point(-half_b3 - b2 - 55.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),
                 _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 25.0, -h + h3 + 2.0 * h4 + h5), _point(-half_b3 - b2 - 60.0, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
             ]

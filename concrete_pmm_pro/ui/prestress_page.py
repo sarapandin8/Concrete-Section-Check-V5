@@ -35,6 +35,11 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     tendon_product_options,
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
+from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    girder_prestress_station_dataframe,
+    station_candidates_from_debonding,
+    strand_group_effective_at_station,
+)
 from concrete_pmm_pro.visualization import create_section_preview
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1388,20 +1393,15 @@ def _active_girder_strand_layout_rows(table: pd.DataFrame | None) -> pd.DataFram
 
 
 def _station_candidates_from_debonding(table: pd.DataFrame, span_length_m: float) -> list[float]:
-    stations = {0.0, span_length_m, span_length_m / 2.0}
-    for _, row in _active_girder_strand_layout_rows(table).iterrows():
-        left = _to_float(row.get("Left debond m")) or 0.0
-        right = _to_float(row.get("Right debond m")) or 0.0
-        for x in (left, span_length_m - right):
-            if 0.0 <= x <= span_length_m:
-                stations.add(round(x, 6))
-    return sorted(stations)
+    """Compatibility wrapper around the PS5A station-based prestress core."""
+
+    return station_candidates_from_debonding(table, span_length_m)
 
 
 def _strand_group_effective_at_station(row: pd.Series, x_m: float, span_length_m: float) -> bool:
-    left = _to_float(row.get("Left debond m")) or 0.0
-    right = _to_float(row.get("Right debond m")) or 0.0
-    return x_m >= left - 1e-9 and x_m <= span_length_m - right + 1e-9
+    """Compatibility wrapper around the PS5A station-based prestress core."""
+
+    return strand_group_effective_at_station(row.to_dict() if hasattr(row, "to_dict") else row, x_m, span_length_m)
 
 
 def _section_horizontal_segment_at_y(geometry: SectionGeometry | None, y_abs_mm: float) -> tuple[float, float] | None:
@@ -1619,46 +1619,15 @@ def _store_girder_strand_layout_and_rerun_on_change(previous_table: pd.DataFrame
 
 
 def _girder_effective_prestress_preview_dataframe(table: pd.DataFrame, span_length_m: float) -> pd.DataFrame:
-    """Return station preview of strand count, Pe(x), and yps(x).
+    """Return PS5A station preview of strand count, Pe(x), and yps(x).
 
-    The preview uses a deliberately simple debonding rule: a group contributes
-    only between its left and right debond cutoff stations. Transfer/development
-    length transition is not modeled in this milestone.
+    The calculation is owned by serviceability.girder_prestress_station so the
+    solver-adjacent station logic is not embedded in Streamlit UI code.
+    Transfer/development length transition and prestress losses are not modeled
+    in this milestone.
     """
 
-    rows: list[dict[str, Any]] = []
-    active = _active_girder_strand_layout_rows(table)
-    for x_m in _station_candidates_from_debonding(active, span_length_m):
-        effective = active.loc[active.apply(lambda row: _strand_group_effective_at_station(row, x_m, span_length_m), axis=1)]
-        total_strands = 0
-        total_aps = 0.0
-        weighted_y = 0.0
-        pe_transfer = 0.0
-        pe_construction = 0.0
-        pe_final = 0.0
-        for _, row in effective.iterrows():
-            no_strands = int(_to_float(row.get("No. Strands")) or 0)
-            aps = float(_to_float(row.get("Total Aps_mm2")) or 0.0)
-            y = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
-            total_strands += no_strands
-            total_aps += aps
-            weighted_y += aps * y
-            pe_transfer += no_strands * float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
-            pe_construction += no_strands * float(_to_float(row.get("Pe_construction/strand_kN")) or 0.0)
-            pe_final += no_strands * float(_to_float(row.get("Pe_eff_final/strand_kN")) or 0.0)
-        yps = weighted_y / total_aps if total_aps > 0.0 else None
-        rows.append(
-            {
-                "x_m": x_m,
-                "Effective strands": total_strands,
-                "Aps_eff_mm2": total_aps,
-                "Pe_transfer_eff_kN": pe_transfer,
-                "Pe_construction_eff_kN": pe_construction,
-                "Pe_eff_final_eff_kN": pe_final,
-                "yps_eff_mm_from_bottom": yps,
-            }
-        )
-    return pd.DataFrame(rows)
+    return girder_prestress_station_dataframe(table, span_length_m=span_length_m)
 
 
 def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float, geometry: SectionGeometry | None) -> tuple[list[str], list[str]]:

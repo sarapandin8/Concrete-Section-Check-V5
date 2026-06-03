@@ -34,6 +34,10 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "on_change=_sync_girder_strand_layout_editor_to_table" in PRESTRESS_SOURCE
     assert "Row 1 at the bottom" in PRESTRESS_SOURCE
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
+    assert "Debonding QA" in PRESTRESS_SOURCE
+    assert "_render_girder_debonding_rule_dashboard" in PRESTRESS_SOURCE
+    assert "Debonding rule audit — row-based preview" in PRESTRESS_SOURCE
+    assert "Critical transfer station audit" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:

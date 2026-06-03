@@ -5,7 +5,11 @@ import pandas as pd
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
     active_strand_groups_at_station,
     evaluate_girder_prestress_station,
+    girder_critical_transfer_station_dataframe,
     girder_debonding_layout_zones,
+    girder_debonding_preview_status,
+    girder_debonding_rule_audit_dataframe,
+    girder_debonding_rule_checks,
     girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
     station_candidates_from_debonding,
@@ -184,3 +188,30 @@ def test_debonding_layout_zones_ignore_inactive_rows() -> None:
     assert group_ids.count("Bottom fully bonded") == 1
     assert group_ids.count("Upper symmetric debond") == 3
     assert group_ids.count("Independent debond") == 3
+
+
+def test_debonding_rule_audit_reports_row_based_preview_and_review_items() -> None:
+    audit = girder_debonding_rule_audit_dataframe(_layout(), span_length_m=20.0)
+    assert "PS5C scope" in set(audit["Rule"])
+    assert "Left/right symmetry" in set(audit["Rule"])
+    symmetry = audit[audit["Rule"] == "Left/right symmetry"].iloc[0]
+    assert symmetry["Status"] == "REVIEW"
+    assert "Independent debond" in symmetry["Demand / value"]
+    assert girder_debonding_preview_status(_layout(), span_length_m=20.0) == "REVIEW"
+
+
+def test_debonding_rule_audit_flags_debond_length_over_l_over_5() -> None:
+    layout = _layout().copy()
+    layout.loc[1, "Left debond m"] = 3.0
+    checks = {check.rule: check for check in girder_debonding_rule_checks(layout, span_length_m=10.0)}
+    assert checks["Debond length"].status == "ERROR"
+    assert "L/5 = 2.000 m" in checks["Debond length"].limit
+    assert girder_debonding_preview_status(layout, span_length_m=10.0) == "ERROR"
+
+
+def test_critical_transfer_station_dataframe_includes_end_faces_and_sleeve_transitions() -> None:
+    critical = girder_critical_transfer_station_dataframe(_layout(), span_length_m=10.0)
+    assert critical["x_m"].tolist() == [0.0, 1.0, 2.0, 7.0, 8.0, 10.0]
+    assert critical.loc[0, "Station type"] == "End face"
+    assert "Sleeve transition" in set(critical["Station type"])
+    assert any("transfer-length" in note for note in critical["Review note"])

@@ -38,6 +38,22 @@ STATION_PREVIEW_COLUMNS = [
 ]
 
 
+DEBONDING_RULE_AUDIT_COLUMNS = [
+    "Rule",
+    "Status",
+    "Demand / value",
+    "Limit / expectation",
+    "Engineering note",
+]
+
+CRITICAL_TRANSFER_STATION_COLUMNS = [
+    "x_m",
+    "Station type",
+    "Source",
+    "Review note",
+]
+
+
 @dataclass(frozen=True)
 class ActiveStrandGroup:
     """One strand group that is effective at a station in the PS5A model."""
@@ -94,6 +110,50 @@ class GirderDebondingZone:
             "x_end_m": self.x_end_m,
             "Length_m": self.length_m,
             "Effective in PS5 preview": self.is_effective,
+        }
+
+
+@dataclass(frozen=True)
+class GirderDebondingRuleCheck:
+    """One row-based debonding rule check for PS5C preview QA.
+
+    This is not an individual-strand code certification check.  It intentionally
+    audits only information currently available in the row-based strand layout:
+    debond lengths, left/right symmetry, sleeve termination stations, and
+    critical station candidates.
+    """
+
+    rule: str
+    status: str
+    demand: str
+    limit: str
+    note: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "Rule": self.rule,
+            "Status": self.status,
+            "Demand / value": self.demand,
+            "Limit / expectation": self.limit,
+            "Engineering note": self.note,
+        }
+
+
+@dataclass(frozen=True)
+class GirderCriticalTransferStation:
+    """Critical station candidate for future transfer stress review."""
+
+    x_m: float
+    station_type: str
+    source: str
+    note: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "x_m": round(self.x_m, 6),
+            "Station type": self.station_type,
+            "Source": self.source,
+            "Review note": self.note,
         }
 
 
@@ -301,6 +361,219 @@ def station_candidates_from_debonding(table: pd.DataFrame | Iterable[Mapping[str
             if 0.0 <= station <= span:
                 stations.add(round(float(station), 6))
     return sorted(stations)
+
+
+
+def _active_row_count_and_debonded_count(table: pd.DataFrame | Iterable[Mapping[str, Any]] | None) -> tuple[int, int]:
+    active_rows = active_girder_strand_rows(table)
+    debonded_rows = 0
+    for row in active_rows:
+        left = _to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0
+        right = _to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0
+        if left > 1e-9 or right > 1e-9:
+            debonded_rows += 1
+    return len(active_rows), debonded_rows
+
+
+def girder_critical_transfer_stations(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> tuple[GirderCriticalTransferStation, ...]:
+    """Return row-based critical station candidates for transfer-stage review.
+
+    The list includes end faces and every sleeve termination location.  It is
+    intended for PS5C QA/navigation only; transfer length ramping and actual
+    stress checks remain future milestones.
+    """
+
+    span = _clamp_span_length(span_length_m)
+    stations: dict[float, GirderCriticalTransferStation] = {
+        0.0: GirderCriticalTransferStation(
+            x_m=0.0,
+            station_type="End face",
+            source="Left support",
+            note="Transfer stress review station; debonded rows are not effective in the PS5 preview.",
+        ),
+        span: GirderCriticalTransferStation(
+            x_m=span,
+            station_type="End face",
+            source="Right support",
+            note="Transfer stress review station; debonded rows are not effective in the PS5 preview.",
+        ),
+    }
+    for row in active_girder_strand_rows(table):
+        group_id = str(row.get(_GROUP_ID_COLUMN) or "strand group")
+        left = min(max(float(_to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+        right = min(max(float(_to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+        if left > 1e-9:
+            x = round(left, 6)
+            source = f"{group_id} left sleeve"
+            if x in stations:
+                source = f"{stations[x].source}; {source}"
+            stations[x] = GirderCriticalTransferStation(
+                x_m=x,
+                station_type="Sleeve transition",
+                source=source,
+                note="Beginning of bonded zone in the PS5 step-function model; transfer-length force build-up is not modeled.",
+            )
+        if right > 1e-9:
+            x = round(span - right, 6)
+            source = f"{group_id} right sleeve"
+            if x in stations:
+                source = f"{stations[x].source}; {source}"
+            stations[x] = GirderCriticalTransferStation(
+                x_m=x,
+                station_type="Sleeve transition",
+                source=source,
+                note="End of bonded zone in the PS5 step-function model; transfer-length force reduction/ramp is not modeled.",
+            )
+    return tuple(stations[x] for x in sorted(stations))
+
+
+def girder_debonding_rule_checks(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> tuple[GirderDebondingRuleCheck, ...]:
+    """Return row-based debonding QA checks for the PS5C dashboard.
+
+    These checks intentionally avoid claiming final AASHTO/ACI compliance
+    because the current layout does not yet identify individual strand IDs
+    within a row.  Percent debonded strand limits become a future milestone
+    once individual strand selection is available.
+    """
+
+    span = _clamp_span_length(span_length_m)
+    checks: list[GirderDebondingRuleCheck] = []
+    active_rows = active_girder_strand_rows(table)
+    active_count, debonded_count = _active_row_count_and_debonded_count(table)
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="PS5C scope",
+            status="PREVIEW",
+            demand=f"{debonded_count} debonded row(s) / {active_count} active row(s)",
+            limit="Row-based QA only",
+            note="Individual strand IDs inside each row are not modeled yet; do not treat this as final code-certified debonding.",
+        )
+    )
+    if not active_rows:
+        checks.append(
+            GirderDebondingRuleCheck(
+                rule="Active rows",
+                status="REVIEW",
+                demand="0 active rows",
+                limit="At least one active strand row",
+                note="No active strand layout is available for debonding QA.",
+            )
+        )
+        return tuple(checks)
+
+    limit_l5 = span / 5.0
+    max_left = 0.0
+    max_right = 0.0
+    max_sum = 0.0
+    asymmetric_groups: list[str] = []
+    no_bonded_zone_groups: list[str] = []
+    terminations: dict[float, list[str]] = {}
+    for row in active_rows:
+        group_id = str(row.get(_GROUP_ID_COLUMN) or "strand group")
+        left = min(max(float(_to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+        right = min(max(float(_to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+        max_left = max(max_left, left)
+        max_right = max(max_right, right)
+        max_sum = max(max_sum, left + right)
+        if left > 1e-9 or right > 1e-9:
+            if abs(left - right) > 1e-6:
+                asymmetric_groups.append(group_id)
+            if left > 1e-9:
+                terminations.setdefault(round(left, 6), []).append(f"{group_id} left")
+            if right > 1e-9:
+                terminations.setdefault(round(span - right, 6), []).append(f"{group_id} right")
+        if left + right >= span - 1e-9:
+            no_bonded_zone_groups.append(group_id)
+
+    max_debond = max(max_left, max_right)
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Debond length",
+            status="OK" if max_debond <= limit_l5 + 1e-9 else "ERROR",
+            demand=f"max L/R = {max_debond:.3f} m",
+            limit=f"L/5 = {limit_l5:.3f} m",
+            note="Preview check against a common maximum debonded length rule; verify against the governing project code edition.",
+        )
+    )
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Bonded zone remains",
+            status="OK" if not no_bonded_zone_groups else "ERROR",
+            demand=f"max left+right = {max_sum:.3f} m",
+            limit=f"< span = {span:.3f} m",
+            note="Rows must retain a bonded/effective zone in the PS5 step-function preview. Review: "
+            + (", ".join(no_bonded_zone_groups) if no_bonded_zone_groups else "all active rows retain bonded zone."),
+        )
+    )
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Left/right symmetry",
+            status="OK" if not asymmetric_groups else "REVIEW",
+            demand="symmetric" if not asymmetric_groups else ", ".join(asymmetric_groups),
+            limit="left length = right length per row for symmetric simple-span defaults",
+            note="Independent left/right debonding is allowed in the UI, but asymmetric layouts require engineering justification.",
+        )
+    )
+    repeated = {station: labels for station, labels in terminations.items() if len(labels) > 1}
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Sleeve termination staggering",
+            status="OK" if not repeated else "REVIEW",
+            demand="unique termination stations" if not repeated else "; ".join(f"x={x:.3f} m: {len(labels)} row-end(s)" for x, labels in sorted(repeated.items())),
+            limit="avoid terminating many sleeves at the same station",
+            note="This is a row-based warning only; future individual-strand modeling is required for code-style per-section termination limits.",
+        )
+    )
+    critical = girder_critical_transfer_stations(table, span_length_m=span)
+    checks.append(
+        GirderDebondingRuleCheck(
+            rule="Critical transfer stations",
+            status="OK",
+            demand=", ".join(f"{station.x_m:.3f}" for station in critical),
+            limit="end faces + sleeve transitions",
+            note="These stations should be carried forward to transfer stress review; transfer-length ramp is not modeled in PS5C.",
+        )
+    )
+    return tuple(checks)
+
+
+def girder_debonding_rule_audit_dataframe(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> pd.DataFrame:
+    checks = girder_debonding_rule_checks(table, span_length_m=span_length_m)
+    return pd.DataFrame([check.as_dict() for check in checks], columns=DEBONDING_RULE_AUDIT_COLUMNS)
+
+
+def girder_critical_transfer_station_dataframe(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> pd.DataFrame:
+    stations = girder_critical_transfer_stations(table, span_length_m=span_length_m)
+    return pd.DataFrame([station.as_dict() for station in stations], columns=CRITICAL_TRANSFER_STATION_COLUMNS)
+
+
+def girder_debonding_preview_status(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> str:
+    statuses = {check.status for check in girder_debonding_rule_checks(table, span_length_m=span_length_m)}
+    if "ERROR" in statuses:
+        return "ERROR"
+    if "REVIEW" in statuses:
+        return "REVIEW"
+    return "OK"
 
 
 def _active_group_from_row(row: Mapping[str, Any]) -> ActiveStrandGroup:

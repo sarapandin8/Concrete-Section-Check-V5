@@ -36,6 +36,9 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    girder_critical_transfer_station_dataframe,
+    girder_debonding_preview_status,
+    girder_debonding_rule_audit_dataframe,
     girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
     station_candidates_from_debonding,
@@ -1791,6 +1794,50 @@ def _girder_debonding_schedule_dataframe(table: pd.DataFrame, span_length_m: flo
     return pd.DataFrame(rows)
 
 
+def _render_girder_debonding_rule_dashboard(table: pd.DataFrame, span_length_m: float) -> None:
+    """Render PS5C row-based debonding QA without claiming code certification."""
+
+    status = girder_debonding_preview_status(table, span_length_m=span_length_m)
+    audit = girder_debonding_rule_audit_dataframe(table, span_length_m=span_length_m)
+    critical = girder_critical_transfer_station_dataframe(table, span_length_m=span_length_m)
+    active = _active_girder_strand_layout_rows(table)
+    debonded_rows = 0
+    max_debond = 0.0
+    for _, row in active.iterrows():
+        left = float(_to_float(row.get("Left debond m")) or 0.0)
+        right = float(_to_float(row.get("Right debond m")) or 0.0)
+        if left > 1e-9 or right > 1e-9:
+            debonded_rows += 1
+        max_debond = max(max_debond, left, right)
+    tone = "ready" if status == "OK" else ("danger" if status == "ERROR" else "review")
+    metrics = [
+        PrestressMetric("Debonding QA", status, "Row-based preview only", tone, strong=True),
+        PrestressMetric("Debonded rows", f"{debonded_rows} / {len(active)}", "Active row groups", "info"),
+        PrestressMetric("Max debond length", f"{max_debond:.3f} m", f"L/5 = {span_length_m / 5.0:.3f} m", "neutral"),
+        PrestressMetric("Critical stations", str(len(critical.index)), "End faces + sleeve transitions", "info"),
+    ]
+    st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
+    if status == "ERROR":
+        st.error("Debonding QA found row-based input errors. Review before using the prestress preview.")
+    elif status == "REVIEW":
+        st.warning("Debonding QA requires engineering review. This is not a final AASHTO/ACI code-certified debonding check.")
+    else:
+        st.success("Debonding QA preview has no row-based errors. Final individual-strand/code checks are still future milestones.")
+
+    with st.expander("Debonding rule audit — row-based preview", expanded=status != "OK"):
+        st.dataframe(audit, use_container_width=True, hide_index=True)
+        st.caption(
+            "PS5C checks only the row-based debonding information currently available. "
+            "Individual strand limits such as total debonded strand percentage and per-row debonded strand percentage require a future individual-strand selection model."
+        )
+    with st.expander("Critical transfer station audit", expanded=False):
+        st.dataframe(critical, use_container_width=True, hide_index=True)
+        st.caption(
+            "Critical stations are prepared for future transfer stress checks. "
+            "Transfer-length force build-up after sleeve transitions is not modeled in this milestone."
+        )
+
+
 def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: SectionGeometry | None) -> go.Figure:
     fig = go.Figure()
     bottom_y = _section_bottom_y_from_geometry(geometry)
@@ -2184,11 +2231,12 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         st.dataframe(normalized[audit_columns], use_container_width=True, hide_index=True)
 
     errors, warnings = _validate_girder_strand_layout(normalized, span_length_m=float(span), geometry=geometry)
+    preview_status = girder_debonding_preview_status(normalized, span_length_m=float(span))
     metrics = [
         PrestressMetric("Active strand groups", str(len(_active_girder_strand_layout_rows(normalized))), "Rows used by debond preview", "info", strong=True),
         PrestressMetric("Total strands", f"{int((_active_girder_strand_layout_rows(normalized)['No. Strands']).sum())}" if not _active_girder_strand_layout_rows(normalized).empty else "0", "Active groups only", "info"),
         PrestressMetric("Span convention", "x = 0 → L", "Left support to right support", "neutral"),
-        PrestressMetric("Debonding QA", "OK" if not errors else "Review", f"{len(errors)} error(s), {len(warnings)} warning(s)", "ready" if not errors else "danger", strong=True),
+        PrestressMetric("Debonding QA", preview_status, f"{len(errors)} layout error(s), {len(warnings)} warning(s)", "ready" if preview_status == "OK" else ("danger" if preview_status == "ERROR" else "review"), strong=True),
     ]
     st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
     if errors:
@@ -2199,7 +2247,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             for message in warnings:
                 st.warning(message)
 
-    tab_layout, tab_debond, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Effective prestress preview"])
+    tab_layout, tab_debond, tab_rules, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Debonding QA", "Effective prestress preview"])
     with tab_layout:
         st.plotly_chart(_plot_girder_strand_cross_section_layout(normalized, geometry), use_container_width=True)
         with st.expander("Plot assumptions", expanded=False):
@@ -2217,6 +2265,8 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
                 "Blue segments are bonded/effective; red segments are debonded sleeves. "
                 "Transition markers are shown without text to keep the plot clean. Transfer-length force build-up after each transition remains a future milestone."
             )
+    with tab_rules:
+        _render_girder_debonding_rule_dashboard(normalized, float(span))
     with tab_effective:
         st.caption(
             "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Loss calculation is a future milestone."

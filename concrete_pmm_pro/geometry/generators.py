@@ -306,13 +306,13 @@ def _precast_box_beam_exterior_void_points(
     h5_mm: float,
     b2_mm: float,
     b3_mm: float,
-    right_flat_clear_to_edge_mm: float = 180.0,
+    right_flat_clear_to_edge_mm: float = 280.0,
 ) -> list[Point2D]:
     """Return the chamfered exterior-box-beam void using the user drawing variables.
 
     The left side follows the interior-box-beam rules, while the void is shifted
-    toward the straight exterior face on the right. The default rule requested by
-    the user is that the right end of b3 is 180 mm from the rightmost outside edge.
+    toward the straight exterior face on the right. The user rule is that the
+    right end of b3 is b2 + 180 mm from the rightmost outside edge.
     """
 
     for name, value in {
@@ -746,6 +746,7 @@ def precast_box_beam_exterior(
         ]
         _ensure_valid_simple_polygon(outer_polygon, "Precast Box Beam – Exterior outer polygon")
 
+        right_clear_from_b3_to_edge = b2 + 180.0
         hole = _precast_box_beam_exterior_void_points(
             width_mm,
             height_mm,
@@ -754,9 +755,10 @@ def precast_box_beam_exterior(
             h5_mm=h5,
             b2_mm=b2,
             b3_mm=b3,
+            right_flat_clear_to_edge_mm=right_clear_from_b3_to_edge,
         )
         top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
-        right_flat = float(width_mm) / 2.0 - 180.0
+        right_flat = float(width_mm) / 2.0 - right_clear_from_b3_to_edge
         left_flat = right_flat - b3
         left_outer = left_flat - b2
         right_outer = right_flat + b2
@@ -782,7 +784,8 @@ def precast_box_beam_exterior(
                     "b2": b2,
                     "b3": b3,
                     "b4": b4,
-                    "right_end_b3_to_right_edge": 180.0,
+                    "right_end_b3_to_right_edge": right_clear_from_b3_to_edge,
+                    "right_outer_chamfer_to_right_edge": 180.0,
                     "top_cover": top_cover,
                     "top_edge_offset_left": 45.0,
                     "point_1_left": {"x": -w, "y": y1},
@@ -1567,7 +1570,8 @@ def precast_box_beam_exterior_dimensions(
         w = width_mm / 2.0
         h = height_mm / 2.0
         top_cover = height_mm - (h3 + 2.0 * h4 + h5)
-        right_flat = w - 180.0
+        right_clear_from_b3_to_edge = b2 + 180.0
+        right_flat = w - right_clear_from_b3_to_edge
         left_flat = right_flat - b3
         left_outer = left_flat - b2
         right_outer = right_flat + b2
@@ -1579,7 +1583,7 @@ def precast_box_beam_exterior_dimensions(
                 _dim("b4", _point(-w, -h + h7 - 28.0), _point(-w + b4, -h + h7 - 28.0), _point(-w + b4 / 2.0, -h + h7 - 58.0), "horizontal", b4),
                 _dim("b3", _point(left_flat, -h + h3 - 35.0), _point(right_flat, -h + h3 - 35.0), _point((left_flat + right_flat) / 2.0, -h + h3 - 65.0), "horizontal", b3),
                 _dim("b2", _point(left_outer, -h + h3 + 2.0 * h4 + h5 + 55.0), _point(left_flat, -h + h3 + 2.0 * h4 + h5 + 55.0), _point((left_outer + left_flat) / 2.0, -h + h3 + 2.0 * h4 + h5 + 85.0), "horizontal", b2),
-                _dim("180", _point(right_flat, -h + h3 - 90.0), _point(w, -h + h3 - 90.0), _point((right_flat + w) / 2.0, -h + h3 - 120.0), "horizontal", 180.0),
+                _dim("b2+180", _point(right_flat, -h + h3 - 90.0), _point(w, -h + h3 - 90.0), _point((right_flat + w) / 2.0, -h + h3 - 120.0), "horizontal", right_clear_from_b3_to_edge),
                 _dim("h3", _point(left_outer - 55.0, -h), _point(left_outer - 55.0, -h + h3), _point(left_outer - 80.0, -h + h3 / 2.0), "vertical", h3),
                 _dim("h4", _point(left_outer - 25.0, -h + h3), _point(left_outer - 25.0, -h + h3 + h4), _point(left_outer - 60.0, -h + h3 + h4 / 2.0), "vertical", h4),
                 _dim("h5", _point(left_outer - 55.0, -h + h3 + h4), _point(left_outer - 55.0, -h + h3 + h4 + h5), _point(left_outer - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),

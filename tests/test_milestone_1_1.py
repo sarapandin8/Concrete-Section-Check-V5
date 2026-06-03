@@ -93,10 +93,12 @@ def test_precast_box_beam_exterior_uses_drawing_variables_with_straight_right_fa
     assert (-425.0, 120.0) in outer
     assert (-495.0, 50.0) in outer
     assert geometry.metadata["drawing_parameters_mm"]["b3"] == pytest.approx(360)
-    assert geometry.metadata["drawing_parameters_mm"]["right_end_b3_to_right_edge"] == pytest.approx(180.0)
+    assert geometry.metadata["drawing_parameters_mm"]["right_end_b3_to_right_edge"] == pytest.approx(280.0)
+    assert geometry.metadata["drawing_parameters_mm"]["right_outer_chamfer_to_right_edge"] == pytest.approx(180.0)
     assert geometry.metadata["drawing_parameters_mm"]["point_B_right"]["x"] == pytest.approx(495.0)
-    assert (-45.0, -190.0) in hole
-    assert (315.0, -190.0) in hole
+    assert (-145.0, -190.0) in hole
+    assert (215.0, -190.0) in hole
+    assert (315.0, -110.0) in hole
 
 
 

@@ -207,6 +207,15 @@
           "step": 10
         },
         {
+          "name": "h1_mm",
+          "label": "h1 — Top cover (mm)",
+          "type": "number",
+          "default": 180,
+          "min": 1,
+          "max": 5000,
+          "step": 5
+        },
+        {
           "name": "h3_mm",
           "label": "h3 — Bottom cover to inner flat (mm)",
           "type": "number",
@@ -288,7 +297,7 @@
           "step": 5
         }
       ],
-      "description": "Interior precast composite box beam using drawing variables B, H, h3, h4, h5, h6, h7, h8, b2, b3, and b4, with the outer side segment from point 1 to point 2 modeled as a straight diagonal."
+      "description": "Interior precast composite box beam using drawing variables B, H, h1, h3, h4, h5, h6, h7, h8, b2, b3, and b4. h1 is the top cover above the inner void."
     },
     {
       "key": "precast_box_beam_exterior",
@@ -314,6 +323,15 @@
           "min": 1,
           "max": 30000,
           "step": 10
+        },
+        {
+          "name": "h1_mm",
+          "label": "h1 — Top cover (mm)",
+          "type": "number",
+          "default": 180,
+          "min": 1,
+          "max": 5000,
+          "step": 5
         },
         {
           "name": "h3_mm",
@@ -397,7 +415,7 @@
           "step": 5
         }
       ],
-      "description": "Exterior precast composite box beam using the same drawing variables as the interior beam on the left side, with a straight right outer face and an offset internal void. Default b3 is 360 mm and the right end of b3 sits 180 mm from the rightmost outer edge."
+      "description": "Exterior precast composite box beam using drawing variables B, H, h1, h3, h4, h5, h6, h7, h8, b2, b3, and b4. The right outer face is straight; default b3 is 360 mm and the right end of b3 sits b2 + 180 mm from the rightmost outer edge."
     },
     {
       "key": "parametric_i_girder",

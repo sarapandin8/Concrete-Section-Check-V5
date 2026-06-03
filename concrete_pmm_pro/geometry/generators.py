@@ -243,6 +243,7 @@ def _precast_box_beam_interior_void_points(
     width_mm: float,
     height_mm: float,
     *,
+    h1_mm: float | None = None,
     h3_mm: float,
     h4_mm: float,
     h5_mm: float,
@@ -252,13 +253,15 @@ def _precast_box_beam_interior_void_points(
     """Return the chamfered interior-box-beam void using the user drawing variables.
 
     Vertical stack: bottom cover h3, lower chamfer h4, side wall h5,
-    upper chamfer h4, and the remaining top cover = H - (h3 + 2*h4 + h5).
+    upper chamfer h4, and top cover h1. Because H is also an input, h1 is
+    checked against H - (h3 + 2*h4 + h5) instead of silently distorting the void.
 
     Horizontal stack about the center line: top/bottom flat width b3, with
     chamfer projection b2 on each side.
     """
 
     for name, value in {
+        "h1_mm": 180.0 if h1_mm is None else h1_mm,
         "h3_mm": h3_mm,
         "h4_mm": h4_mm,
         "h5_mm": h5_mm,
@@ -267,9 +270,12 @@ def _precast_box_beam_interior_void_points(
     }.items():
         _require_positive(name, float(value))
 
-    top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
-    if top_cover <= 0.0:
+    top_cover = float(180.0 if h1_mm is None else h1_mm)
+    derived_top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
+    if derived_top_cover <= 0.0:
         raise ValueError("Invalid geometry: H must be greater than h3 + 2*h4 + h5 for the interior box-beam void.")
+    if abs(top_cover - derived_top_cover) > 1e-6:
+        raise ValueError("Invalid geometry: h1 is inconsistent. h1 must equal H - h3 - 2*h4 - h5 for the interior box-beam void.")
 
     d = float(height_mm) / 2.0
     half_b3 = float(b3_mm) / 2.0
@@ -301,6 +307,7 @@ def _precast_box_beam_exterior_void_points(
     width_mm: float,
     height_mm: float,
     *,
+    h1_mm: float | None = None,
     h3_mm: float,
     h4_mm: float,
     h5_mm: float,
@@ -316,6 +323,7 @@ def _precast_box_beam_exterior_void_points(
     """
 
     for name, value in {
+        "h1_mm": 180.0 if h1_mm is None else h1_mm,
         "h3_mm": h3_mm,
         "h4_mm": h4_mm,
         "h5_mm": h5_mm,
@@ -325,9 +333,12 @@ def _precast_box_beam_exterior_void_points(
     }.items():
         _require_positive(name, float(value))
 
-    top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
-    if top_cover <= 0.0:
+    top_cover = float(180.0 if h1_mm is None else h1_mm)
+    derived_top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
+    if derived_top_cover <= 0.0:
         raise ValueError("Invalid geometry: H must be greater than h3 + 2*h4 + h5 for the exterior box-beam void.")
+    if abs(top_cover - derived_top_cover) > 1e-6:
+        raise ValueError("Invalid geometry: h1 is inconsistent. h1 must equal H - h3 - 2*h4 - h5 for the exterior box-beam void.")
 
     d = float(height_mm) / 2.0
     w = float(width_mm) / 2.0
@@ -525,6 +536,7 @@ def box_section_fillet(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h1_mm: float | None = None,
     h3_mm: float | None = None,
     h4_mm: float | None = None,
     h5_mm: float | None = None,
@@ -540,8 +552,9 @@ def box_section_fillet(
     # New drawing-variable branch for the interior precast box beam. Legacy
     # wall-thickness inputs are intentionally preserved for project-file
     # compatibility when the new parameters are absent.
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
+    use_drawing_parameters = any(value is not None for value in (h1_mm, h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
     if use_drawing_parameters:
+        h1 = float(180.0 if h1_mm is None else h1_mm)
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
@@ -574,8 +587,8 @@ def box_section_fillet(
             )
 
         outer_polygon = _precast_box_beam_interior_outer_points(width_mm, height_mm, h7_mm=h7, h8_mm=h8, b4_mm=b4)
-        hole = _precast_box_beam_interior_void_points(width_mm, height_mm, h3_mm=h3, h4_mm=h4, h5_mm=h5, b2_mm=b2, b3_mm=b3)
-        top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
+        hole = _precast_box_beam_interior_void_points(width_mm, height_mm, h1_mm=h1, h3_mm=h3, h4_mm=h4, h5_mm=h5, b2_mm=b2, b3_mm=b3)
+        top_cover = h1
         left_inner_x = -(b3 / 2.0 + b2)
         right_inner_x = (b3 / 2.0 + b2)
         bottom_y = -float(height_mm) / 2.0 + h3
@@ -590,6 +603,7 @@ def box_section_fillet(
                 "drawing_parameters_mm": {
                     "B": float(width_mm),
                     "H": float(height_mm),
+                    "h1": h1,
                     "h3": h3,
                     "h4": h4,
                     "h5": h5,
@@ -695,6 +709,7 @@ def precast_box_beam_exterior(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h1_mm: float | None = None,
     h3_mm: float | None = None,
     h4_mm: float | None = None,
     h5_mm: float | None = None,
@@ -708,8 +723,9 @@ def precast_box_beam_exterior(
 ) -> SectionGeometry:
     """Exterior precast box beam with drawing-based left break and straight right face."""
 
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
+    use_drawing_parameters = any(value is not None for value in (h1_mm, h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
     if use_drawing_parameters:
+        h1 = float(180.0 if h1_mm is None else h1_mm)
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
@@ -750,6 +766,7 @@ def precast_box_beam_exterior(
         hole = _precast_box_beam_exterior_void_points(
             width_mm,
             height_mm,
+            h1_mm=h1,
             h3_mm=h3,
             h4_mm=h4,
             h5_mm=h5,
@@ -757,7 +774,7 @@ def precast_box_beam_exterior(
             b3_mm=b3,
             right_flat_clear_to_edge_mm=right_clear_from_b3_to_edge,
         )
-        top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
+        top_cover = h1
         right_flat = float(width_mm) / 2.0 - right_clear_from_b3_to_edge
         left_flat = right_flat - b3
         left_outer = left_flat - b2
@@ -775,6 +792,7 @@ def precast_box_beam_exterior(
                 "drawing_parameters_mm": {
                     "B": float(width_mm),
                     "H": float(height_mm),
+                    "h1": h1,
                     "h3": h3,
                     "h4": h4,
                     "h5": h5,
@@ -1446,6 +1464,7 @@ def box_section_fillet_dimensions(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h1_mm: float | None = None,
     h3_mm: float | None = None,
     h4_mm: float | None = None,
     h5_mm: float | None = None,
@@ -1461,8 +1480,9 @@ def box_section_fillet_dimensions(
     # n_fillet is intentionally kept in the dimension-helper signature to
     # mirror the geometry generator; dimension annotations do not discretize arcs.
     _ = n_fillet
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
+    use_drawing_parameters = any(value is not None for value in (h1_mm, h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm, b2_start_from_left_mm))
     if use_drawing_parameters:
+        h1 = float(180.0 if h1_mm is None else h1_mm)
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
@@ -1478,7 +1498,7 @@ def box_section_fillet_dimensions(
         w = width_mm / 2.0
         h = height_mm / 2.0
         half_b3 = b3 / 2.0
-        top_cover = height_mm - (h3 + 2.0 * h4 + h5)
+        top_cover = h1
         # Outer profile note dimensions.
         dims.extend(
             [
@@ -1495,7 +1515,7 @@ def box_section_fillet_dimensions(
             ]
         )
         if top_cover > 0:
-            dims.append(_dim("top cover", _point(half_b3 + b2 + 55.0, -h + h3 + 2.0 * h4 + h5), _point(half_b3 + b2 + 55.0, h), _point(half_b3 + b2 + 85.0, -h + h3 + 2.0 * h4 + h5 + top_cover / 2.0), "vertical", top_cover))
+            dims.append(_dim("h1", _point(half_b3 + b2 + 55.0, h - h1), _point(half_b3 + b2 + 55.0, h), _point(half_b3 + b2 + 85.0, h - h1 / 2.0), "vertical", h1))
         return dims
 
     top, bottom, left, right = _resolve_wall_thicknesses(
@@ -1543,6 +1563,7 @@ def precast_box_beam_exterior_dimensions(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h1_mm: float | None = None,
     h3_mm: float | None = None,
     h4_mm: float | None = None,
     h5_mm: float | None = None,
@@ -1555,8 +1576,9 @@ def precast_box_beam_exterior_dimensions(
     **kwargs: object,
 ) -> list[DimensionItem]:
     _ = (n_fillet, wall_thickness_mm, fillet_radius_mm, r_inner_mm, r_outer_mm, t_top_mm, t_bottom_mm, t_left_mm, t_right_mm)
-    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
+    use_drawing_parameters = any(value is not None for value in (h1_mm, h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
     if use_drawing_parameters:
+        h1 = float(180.0 if h1_mm is None else h1_mm)
         h3 = float(160.0 if h3_mm is None else h3_mm)
         h4 = float(80.0 if h4_mm is None else h4_mm)
         h5 = float(200.0 if h5_mm is None else h5_mm)
@@ -1569,7 +1591,7 @@ def precast_box_beam_exterior_dimensions(
         dims = rectangle_dimensions(width_mm, height_mm, **kwargs)
         w = width_mm / 2.0
         h = height_mm / 2.0
-        top_cover = height_mm - (h3 + 2.0 * h4 + h5)
+        top_cover = h1
         right_clear_from_b3_to_edge = b2 + 180.0
         right_flat = w - right_clear_from_b3_to_edge
         left_flat = right_flat - b3
@@ -1591,7 +1613,7 @@ def precast_box_beam_exterior_dimensions(
             ]
         )
         if top_cover > 0:
-            dims.append(_dim("top cover", _point(right_outer + 40.0, -h + h3 + 2.0 * h4 + h5), _point(right_outer + 40.0, h), _point(right_outer + 70.0, -h + h3 + 2.0 * h4 + h5 + top_cover / 2.0), "vertical", top_cover))
+            dims.append(_dim("h1", _point(right_outer + 40.0, h - h1), _point(right_outer + 40.0, h), _point(right_outer + 70.0, h - h1 / 2.0), "vertical", h1))
         return dims
 
     # Legacy dimensions fallback.

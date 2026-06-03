@@ -216,11 +216,13 @@ def test_girder_presets_are_split_into_composite_and_non_composite_families() ->
     assert exterior_box_beam["display_name"] == "Precast Box Beam – Exterior"
     assert exterior_box_beam["category"] == "Precast Composite Girder"
     assert exterior_box_beam["dimensions_generator"] == "precast_box_beam_exterior"
+    assert any(param["name"] == "h1_mm" and param.get("default") == 180 for param in exterior_box_beam["parameters"])
     assert any(param["name"] == "h3_mm" for param in exterior_box_beam["parameters"])
     assert any(param["name"] == "h8_mm" for param in exterior_box_beam["parameters"])
     assert any(param["name"] == "b4_mm" for param in exterior_box_beam["parameters"])
     assert any(param["name"] == "b3_mm" and param.get("default") == 360 for param in exterior_box_beam["parameters"])
     assert not any(param["name"] == "r_inner_mm" for param in exterior_box_beam["parameters"])
+    assert any(param["name"] == "h1_mm" and param.get("default") == 180 for param in box_beam["parameters"])
     assert any(param["name"] == "h3_mm" for param in box_beam["parameters"])
     assert any(param["name"] == "h7_mm" for param in box_beam["parameters"])
     assert any(param["name"] == "b3_mm" for param in box_beam["parameters"])

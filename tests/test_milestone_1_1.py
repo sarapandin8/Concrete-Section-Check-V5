@@ -12,6 +12,7 @@ from concrete_pmm_pro.geometry.generators import (
     box_section_fillet_dimensions,
     circular_hollow,
     precast_box_beam_exterior,
+    precast_box_beam_exterior_dimensions,
     psc_i_girder,
     rectangular_hollow,
     single_cell_box_girder,
@@ -63,6 +64,7 @@ def test_precast_box_beam_exterior_uses_drawing_variables_with_straight_right_fa
     geometry = precast_box_beam_exterior(
         width_mm=990,
         height_mm=700,
+        h1_mm=180,
         h3_mm=160,
         h4_mm=80,
         h5_mm=200,
@@ -92,6 +94,8 @@ def test_precast_box_beam_exterior_uses_drawing_variables_with_straight_right_fa
     assert (-450.0, 350.0) in outer
     assert (-425.0, 120.0) in outer
     assert (-495.0, 50.0) in outer
+    assert geometry.metadata["drawing_parameters_mm"]["h1"] == pytest.approx(180)
+    assert geometry.metadata["drawing_parameters_mm"]["top_cover"] == pytest.approx(180)
     assert geometry.metadata["drawing_parameters_mm"]["b3"] == pytest.approx(360)
     assert geometry.metadata["drawing_parameters_mm"]["right_end_b3_to_right_edge"] == pytest.approx(280.0)
     assert geometry.metadata["drawing_parameters_mm"]["right_outer_chamfer_to_right_edge"] == pytest.approx(180.0)
@@ -107,6 +111,7 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     geometry = box_section_fillet(
         width_mm=990,
         height_mm=700,
+        h1_mm=180,
         h3_mm=160,
         h4_mm=80,
         h5_mm=200,
@@ -125,6 +130,8 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     outer = [(round(p.x, 3), round(p.y, 3)) for p in geometry.outer_polygon]
     hole = [(round(p.x, 3), round(p.y, 3)) for p in geometry.holes[0]]
     assert geometry.metadata["geometry_branch"] == "drawing_variable_interior_box_beam"
+    assert geometry.metadata["drawing_parameters_mm"]["h1"] == pytest.approx(180)
+    assert geometry.metadata["drawing_parameters_mm"]["top_cover"] == pytest.approx(180)
     assert geometry.metadata["drawing_parameters_mm"]["b2_start_from_left"] == pytest.approx(250)
     assert (-495.0, -350.0) in outer
     assert (495.0, -350.0) in outer
@@ -143,6 +150,73 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     assert (-245.0, -110.0) in hole
     assert (245.0, 90.0) in hole
     assert len(geometry.holes[0]) == 8
+
+
+def test_precast_box_beam_dimension_helpers_show_h1_top_cover() -> None:
+    interior_dims = box_section_fillet_dimensions(
+        width_mm=990,
+        height_mm=700,
+        h1_mm=180,
+        h3_mm=160,
+        h4_mm=80,
+        h5_mm=200,
+        h6_mm=300,
+        h7_mm=400,
+        h8_mm=70,
+        b2_mm=100,
+        b3_mm=290,
+        b4_mm=70,
+    )
+    exterior_dims = precast_box_beam_exterior_dimensions(
+        width_mm=990,
+        height_mm=700,
+        h1_mm=180,
+        h3_mm=160,
+        h4_mm=80,
+        h5_mm=200,
+        h6_mm=300,
+        h7_mm=400,
+        h8_mm=70,
+        b2_mm=100,
+        b3_mm=360,
+        b4_mm=70,
+    )
+
+    assert any(dim.symbol == "h1" and dim.value_mm == pytest.approx(180) for dim in interior_dims)
+    assert any(dim.symbol == "h1" and dim.value_mm == pytest.approx(180) for dim in exterior_dims)
+
+
+def test_precast_box_beam_rejects_inconsistent_h1_top_cover() -> None:
+    with pytest.raises(ValueError, match="h1 is inconsistent"):
+        box_section_fillet(
+            width_mm=990,
+            height_mm=700,
+            h1_mm=170,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=300,
+            h7_mm=400,
+            h8_mm=70,
+            b2_mm=100,
+            b3_mm=290,
+            b4_mm=70,
+        )
+    with pytest.raises(ValueError, match="h1 is inconsistent"):
+        precast_box_beam_exterior(
+            width_mm=990,
+            height_mm=700,
+            h1_mm=170,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=300,
+            h7_mm=400,
+            h8_mm=70,
+            b2_mm=100,
+            b3_mm=360,
+            b4_mm=70,
+        )
 
 
 def test_precast_box_beam_interior_rejects_inconsistent_h6_h7_or_optional_b2_start() -> None:

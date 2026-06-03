@@ -26,6 +26,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Rebuild default strand layout from current section" in PRESTRESS_SOURCE
     assert "2 rows at y=50/100 mm" in PRESTRESS_SOURCE
     assert 'line={"dash": "solid"}' in PRESTRESS_SOURCE
+    assert "Debonded sleeve — Pe ignored in PS5 preview" in PRESTRESS_SOURCE
+    assert "Sleeve termination marker" in PRESTRESS_SOURCE
+    assert "diamond-open" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:
@@ -97,6 +100,50 @@ def test_strand_layout_normalization_and_station_preview_with_streamlit_stub(mon
     points = _girder_strand_point_layout_dataframe(table, None)
     assert len(points) == 4
     assert set(points["Group ID"]) == {"Row 1", "Row 2"}
+
+
+def test_longitudinal_debonding_plot_shows_sleeve_symbols_with_streamlit_stub(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _plot_girder_longitudinal_debonding_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Debonded row",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "Area/Strand_mm2": 98.7,
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 1.0,
+                "Right debond m": 2.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
+    fig = _plot_girder_longitudinal_debonding_layout(table, span_length_m=10.0)
+    trace_names = [trace.name for trace in fig.data]
+    marker_symbols = [getattr(getattr(trace, "marker", None), "symbol", None) for trace in fig.data]
+
+    assert "Debonded sleeve — Pe ignored in PS5 preview" in trace_names
+    assert "Bonded / effective — Pe counted" in trace_names
+    assert "Sleeve termination marker" in trace_names
+    assert "diamond-open" in marker_symbols
 
 
 def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> None:

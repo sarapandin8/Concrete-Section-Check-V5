@@ -36,6 +36,7 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
     station_candidates_from_debonding,
     strand_group_effective_at_station,
@@ -1772,31 +1773,83 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
 def _plot_girder_longitudinal_debonding_layout(table: pd.DataFrame, span_length_m: float) -> go.Figure:
     fig = go.Figure()
     active = _active_girder_strand_layout_rows(table)
+    y_tick_values: list[int] = []
+    y_tick_labels: list[str] = []
+    legend_seen: set[str] = set()
     for i, (_, row) in enumerate(active.iterrows(), start=1):
         group = str(row.get("Group ID") or f"Row {i}")
-        left = float(_to_float(row.get("Left debond m")) or 0.0)
-        right = float(_to_float(row.get("Right debond m")) or 0.0)
-        bonded_start = min(max(left, 0.0), span_length_m)
-        bonded_end = max(min(span_length_m - right, span_length_m), 0.0)
         y = len(active) - i + 1
-        fig.add_trace(go.Scatter(x=[0.0, span_length_m], y=[y, y], mode="lines", name=f"{group} span", line={"dash": "dot"}))
-        if bonded_end >= bonded_start:
+        y_tick_values.append(y)
+        y_tick_labels.append(group)
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0, span_length_m],
+                y=[y, y],
+                mode="lines",
+                name="Girder span reference",
+                line={"dash": "dot", "width": 1},
+                opacity=0.45,
+                showlegend="Girder span reference" not in legend_seen,
+                hoverinfo="skip",
+            )
+        )
+        legend_seen.add("Girder span reference")
+
+        zones = girder_debonding_zones_for_row(row.to_dict(), span_length_m)
+        for zone in zones:
+            is_debonded = not zone.is_effective
+            legend_name = "Debonded sleeve — Pe ignored in PS5 preview" if is_debonded else "Bonded / effective — Pe counted"
+            line_style = {"width": 7, "dash": "dash" if is_debonded else "solid"}
+            marker_style = {"size": 8, "symbol": "x" if is_debonded else "circle"}
             fig.add_trace(
                 go.Scatter(
-                    x=[bonded_start, bonded_end],
+                    x=[zone.x_start_m, zone.x_end_m],
                     y=[y, y],
                     mode="lines+markers",
-                    name=f"{group} bonded",
-                    line={"width": 7},
-                    hovertemplate=f"{escape(group)}<br>bonded: {bonded_start:.3f} m to {bonded_end:.3f} m<extra></extra>",
+                    name=legend_name,
+                    line=line_style,
+                    marker=marker_style,
+                    showlegend=legend_name not in legend_seen,
+                    hovertemplate=(
+                        f"{escape(group)}<br>"
+                        f"{escape(zone.zone_type)}<br>"
+                        f"x = {zone.x_start_m:.3f} m to {zone.x_end_m:.3f} m<br>"
+                        f"Length = {zone.length_m:.3f} m<br>"
+                        + ("Pe ignored in sleeved zone" if is_debonded else "Pe counted in PS5 preview")
+                        + "<extra></extra>"
+                    ),
                 )
             )
+            legend_seen.add(legend_name)
+
+        left = float(_to_float(row.get("Left debond m")) or 0.0)
+        right = float(_to_float(row.get("Right debond m")) or 0.0)
+        termination_points: list[tuple[float, str]] = []
+        if left > 1e-9:
+            termination_points.append((min(max(left, 0.0), span_length_m), "left sleeve termination"))
+        if right > 1e-9:
+            termination_points.append((max(min(span_length_m - right, span_length_m), 0.0), "right sleeve termination"))
+        if termination_points:
+            fig.add_trace(
+                go.Scatter(
+                    x=[point[0] for point in termination_points],
+                    y=[y for _ in termination_points],
+                    mode="markers",
+                    name="Sleeve termination marker",
+                    marker={"size": 11, "symbol": "diamond-open"},
+                    showlegend="Sleeve termination marker" not in legend_seen,
+                    text=[point[1] for point in termination_points],
+                    hovertemplate=f"{escape(group)}<br>%{{text}}<br>x = %{{x:.3f}} m<extra></extra>",
+                )
+            )
+            legend_seen.add("Sleeve termination marker")
     fig.update_layout(
         height=max(260, 64 + 44 * max(len(active), 1)),
         margin={"l": 20, "r": 20, "t": 30, "b": 30},
         xaxis_title="station x from left support (m)",
-        yaxis={"showticklabels": False, "title": "strand group"},
-        showlegend=False,
+        yaxis={"tickmode": "array", "tickvals": y_tick_values, "ticktext": y_tick_labels, "title": "strand group"},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+        showlegend=True,
     )
     return fig
 
@@ -1924,6 +1977,10 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         st.plotly_chart(_plot_girder_strand_cross_section_layout(normalized, geometry), use_container_width=True)
     with tab_debond:
         st.plotly_chart(_plot_girder_longitudinal_debonding_layout(normalized, float(span)), use_container_width=True)
+        st.caption(
+            "Debonded sleeve symbols show where a strand group is intentionally ignored in the PS5 station preview. "
+            "Diamond markers indicate sleeve termination points; transfer-length force build-up after each marker is a future milestone."
+        )
     with tab_effective:
         st.caption(
             "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Loss calculation is a future milestone."

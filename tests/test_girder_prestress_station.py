@@ -5,6 +5,8 @@ import pandas as pd
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
     active_strand_groups_at_station,
     evaluate_girder_prestress_station,
+    girder_debonding_layout_zones,
+    girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
     station_candidates_from_debonding,
     strand_group_effective_at_station,
@@ -159,3 +161,26 @@ def test_active_strand_groups_at_station_returns_group_level_breakdown() -> None
     groups = active_strand_groups_at_station(_layout(), x_m=5.0, span_length_m=10.0)
     assert [group.group_id for group in groups] == ["Bottom fully bonded", "Upper symmetric debond", "Independent debond"]
     assert [group.no_strands for group in groups] == [4, 2, 2]
+
+
+def test_debonding_zones_for_row_expose_debonded_sleeves_and_effective_zone() -> None:
+    row = _layout().loc[2]
+    zones = girder_debonding_zones_for_row(row, span_length_m=10.0)
+
+    assert [zone.zone_type for zone in zones] == [
+        "Left debonded sleeve",
+        "Bonded / effective",
+        "Right debonded sleeve",
+    ]
+    assert [(zone.x_start_m, zone.x_end_m) for zone in zones] == [(0.0, 1.0), (1.0, 7.0), (7.0, 10.0)]
+    assert [zone.is_effective for zone in zones] == [False, True, False]
+
+
+def test_debonding_layout_zones_ignore_inactive_rows() -> None:
+    zones = girder_debonding_layout_zones(_layout(), span_length_m=10.0)
+    group_ids = [zone.group_id for zone in zones]
+
+    assert "Inactive row" not in group_ids
+    assert group_ids.count("Bottom fully bonded") == 1
+    assert group_ids.count("Upper symmetric debond") == 3
+    assert group_ids.count("Independent debond") == 3

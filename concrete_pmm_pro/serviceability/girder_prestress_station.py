@@ -67,6 +67,37 @@ class ActiveStrandGroup:
 
 
 @dataclass(frozen=True)
+class GirderDebondingZone:
+    """Longitudinal bonded/debonded zone for one strand group.
+
+    The zone is visualization/metadata only.  A debonded sleeve zone means the
+    group is intentionally treated as not effective in the PS5 active-prestress
+    station preview.  Transfer-length force build-up after the sleeve
+    termination is a later milestone and is not represented here.
+    """
+
+    group_id: str
+    zone_type: str
+    x_start_m: float
+    x_end_m: float
+    is_effective: bool
+
+    @property
+    def length_m(self) -> float:
+        return max(0.0, self.x_end_m - self.x_start_m)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "Group ID": self.group_id,
+            "Zone": self.zone_type,
+            "x_start_m": self.x_start_m,
+            "x_end_m": self.x_end_m,
+            "Length_m": self.length_m,
+            "Effective in PS5 preview": self.is_effective,
+        }
+
+
+@dataclass(frozen=True)
 class GirderPrestressStationResult:
     """Effective prestress metadata at one girder station."""
 
@@ -192,6 +223,70 @@ def strand_group_effective_at_station(row: Mapping[str, Any], x_m: float, span_l
     bonded_start = left
     bonded_end = span - right
     return bonded_start - 1e-9 <= float(x) <= bonded_end + 1e-9
+
+
+def girder_debonding_zones_for_row(row: Mapping[str, Any], span_length_m: float) -> tuple[GirderDebondingZone, ...]:
+    """Return debonded sleeve and bonded/effective zones for one row.
+
+    GIRDER.PS5B uses these zones for commercial-style longitudinal graphics.
+    This helper deliberately mirrors the PS5A step-function active strand model:
+    no prestress force is counted within a debonded sleeve zone, and full row
+    force is counted in the bonded/effective zone.  Transfer-length ramping and
+    development checks remain outside this milestone.
+    """
+
+    span = _clamp_span_length(span_length_m)
+    group_id = str(row.get(_GROUP_ID_COLUMN) or "strand group")
+    left = min(max(float(_to_float(row.get(_LEFT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+    right = min(max(float(_to_float(row.get(_RIGHT_DEBOND_COLUMN)) or 0.0), 0.0), span)
+    bonded_start = left
+    bonded_end = span - right
+
+    zones: list[GirderDebondingZone] = []
+    if left > 1e-9:
+        zones.append(
+            GirderDebondingZone(
+                group_id=group_id,
+                zone_type="Left debonded sleeve",
+                x_start_m=0.0,
+                x_end_m=round(left, 6),
+                is_effective=False,
+            )
+        )
+    if bonded_end >= bonded_start and bonded_end - bonded_start > 1e-9:
+        zones.append(
+            GirderDebondingZone(
+                group_id=group_id,
+                zone_type="Bonded / effective",
+                x_start_m=round(bonded_start, 6),
+                x_end_m=round(bonded_end, 6),
+                is_effective=True,
+            )
+        )
+    if right > 1e-9:
+        zones.append(
+            GirderDebondingZone(
+                group_id=group_id,
+                zone_type="Right debonded sleeve",
+                x_start_m=round(span - right, 6),
+                x_end_m=round(span, 6),
+                is_effective=False,
+            )
+        )
+    return tuple(zones)
+
+
+def girder_debonding_layout_zones(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+) -> tuple[GirderDebondingZone, ...]:
+    """Return longitudinal bonded/debonded zones for all active strand rows."""
+
+    zones: list[GirderDebondingZone] = []
+    for row in active_girder_strand_rows(table):
+        zones.extend(girder_debonding_zones_for_row(row, span_length_m))
+    return tuple(zones)
 
 
 def station_candidates_from_debonding(table: pd.DataFrame | Iterable[Mapping[str, Any]] | None, span_length_m: float) -> list[float]:

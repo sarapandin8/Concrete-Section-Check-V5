@@ -783,6 +783,27 @@ def _effective_width_top_width_basis_note(preset: dict[str, Any]) -> str:
     return "Auto from selected section top width metadata."
 
 
+def _precast_composite_girder_metadata_defaults(preset: dict[str, Any]) -> dict[str, float]:
+    """Return UI-only default metadata for precast composite girder presets.
+
+    These defaults seed Streamlit number inputs only; user-entered/session values
+    still take precedence through stable widget keys. They do not change solver
+    equations or effective-width formulas.
+    """
+
+    if _is_precast_box_beam(preset):
+        return {"Tslab_mm": 200.0, "Be_mm": 1000.0, "girder_length_mm": 20000.0}
+    return {"Tslab_mm": 200.0, "Be_mm": 1000.0, "girder_length_mm": 30000.0}
+
+
+def _effective_width_default_spacing(preset: dict[str, Any], manual_be: float, auto_top_width: float) -> float:
+    """Return the default girder spacing for the Be helper controls."""
+
+    if _is_precast_box_beam(preset) or _is_parametric_plank_girder(preset):
+        return 1000.0
+    return max(manual_be, auto_top_width, 1.0)
+
+
 def _effective_width_default_position(preset: dict[str, Any]) -> str:
     preset_key = str(preset.get("key", ""))
     if preset_key.endswith("_exterior"):
@@ -867,7 +888,7 @@ def _render_effective_width_helper(preset: dict[str, Any], params: dict[str, Any
     )
     position = "exterior" if position_label == "Exterior" else "interior"
 
-    default_spacing = max(manual_be, auto_top_width, 1.0)
+    default_spacing = _effective_width_default_spacing(preset, manual_be, auto_top_width)
     columns = st.columns(2)
     with columns[0]:
         spacing = _render_metadata_number_input(
@@ -986,13 +1007,14 @@ def _render_precast_composite_girder_metadata_inputs(preset: dict[str, Any]) -> 
         "It is not merged into the precast polygon and is not used by PMM, prestress, or report logic.</div>",
         unsafe_allow_html=True,
     )
+    defaults = _precast_composite_girder_metadata_defaults(preset)
     columns = st.columns(2)
     with columns[0]:
         tslab = _render_metadata_number_input(
             name="Tslab_mm",
             label="Tslab Deck/topping thickness (mm)",
             preset_key=preset_key,
-            default=200.0,
+            default=defaults["Tslab_mm"],
             min_value=0.0,
             max_value=3000.0,
             step=5.0,
@@ -1002,7 +1024,7 @@ def _render_precast_composite_girder_metadata_inputs(preset: dict[str, Any]) -> 
             name="girder_length_mm",
             label="Girder length / span (mm)",
             preset_key=preset_key,
-            default=30000.0,
+            default=defaults["girder_length_mm"],
             min_value=1.0,
             max_value=1000000.0,
             step=100.0,
@@ -1013,7 +1035,7 @@ def _render_precast_composite_girder_metadata_inputs(preset: dict[str, Any]) -> 
             name="Be_mm",
             label="Be Effective slab width (mm)",
             preset_key=preset_key,
-            default=2000.0,
+            default=defaults["Be_mm"],
             min_value=1.0,
             max_value=50000.0,
             step=10.0,

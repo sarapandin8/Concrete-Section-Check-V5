@@ -418,3 +418,20 @@ def test_section_builder_preview_is_geometry_only_source() -> None:
     assert "preview_prestress_elements: list[Any] = []" in source
     assert "Rebar/prestress display" in source
     assert "Hidden in Section Builder" in source
+
+
+def test_plank_and_box_beam_be_helper_defaults_match_user_request() -> None:
+    interior_plank = preset_by_key("parametric_plank_girder_interior")
+    exterior_plank = preset_by_key("parametric_plank_girder_exterior")
+    interior_box = preset_by_key("box_section_fillet")
+    exterior_box = preset_by_key("precast_box_beam_exterior")
+
+    for preset in [interior_plank, exterior_plank, interior_box, exterior_box]:
+        assert section_builder._effective_width_default_spacing(preset, manual_be=1000.0, auto_top_width=990.0) == 1000.0
+
+    assert next(param for param in interior_plank["parameters"] if param["name"] == "Be_mm")["default"] == 1000
+    assert next(param for param in exterior_plank["parameters"] if param["name"] == "Be_mm")["default"] == 1000
+    assert section_builder._precast_composite_girder_metadata_defaults(interior_box)["Be_mm"] == 1000.0
+    assert section_builder._precast_composite_girder_metadata_defaults(exterior_box)["Be_mm"] == 1000.0
+    assert section_builder._precast_composite_girder_metadata_defaults(interior_box)["girder_length_mm"] == 20000.0
+    assert section_builder._precast_composite_girder_metadata_defaults(exterior_box)["girder_length_mm"] == 20000.0

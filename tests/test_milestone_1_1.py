@@ -59,15 +59,19 @@ def test_box_section_fillet_uses_inner_chamfer() -> None:
     assert geometry.metadata["inner_chamfer_mm"] == pytest.approx(80)
 
 
-def test_precast_box_beam_exterior_uses_straight_outside_face_and_chamfered_void() -> None:
+def test_precast_box_beam_exterior_uses_drawing_variables_with_straight_right_face() -> None:
     geometry = precast_box_beam_exterior(
         width_mm=990,
         height_mm=700,
-        t_top_mm=120,
-        t_bottom_mm=120,
-        t_left_mm=270,
-        t_right_mm=315,
-        r_inner_mm=70,
+        h3_mm=160,
+        h4_mm=80,
+        h5_mm=200,
+        h6_mm=300,
+        h7_mm=400,
+        h8_mm=70,
+        b2_mm=100,
+        b3_mm=360,
+        b4_mm=70,
         r_outer_mm=0,
     )
 
@@ -78,7 +82,21 @@ def test_precast_box_beam_exterior_uses_straight_outside_face_and_chamfered_void
     assert summary.area_mm2 > 0
     assert len(geometry.holes[0]) == 8
     assert geometry.metadata["preset"] == "precast_box_beam_exterior"
+    assert geometry.metadata["geometry_branch"] == "drawing_variable_exterior_box_beam"
     assert geometry.metadata["exterior_side"] == "right"
+    outer = [(round(p.x, 3), round(p.y, 3)) for p in geometry.outer_polygon]
+    hole = [(round(p.x, 3), round(p.y, 3)) for p in geometry.holes[0]]
+    assert (-495.0, -350.0) in outer
+    assert (495.0, -350.0) in outer
+    assert (495.0, 350.0) in outer
+    assert (-450.0, 350.0) in outer
+    assert (-425.0, 120.0) in outer
+    assert (-495.0, 50.0) in outer
+    assert geometry.metadata["drawing_parameters_mm"]["b3"] == pytest.approx(360)
+    assert geometry.metadata["drawing_parameters_mm"]["right_end_b3_to_right_edge"] == pytest.approx(180.0)
+    assert geometry.metadata["drawing_parameters_mm"]["point_B_right"]["x"] == pytest.approx(495.0)
+    assert (-45.0, -190.0) in hole
+    assert (315.0, -190.0) in hole
 
 
 

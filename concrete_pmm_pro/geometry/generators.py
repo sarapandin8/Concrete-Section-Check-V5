@@ -297,6 +297,69 @@ def _precast_box_beam_interior_void_points(
     return points
 
 
+def _precast_box_beam_exterior_void_points(
+    width_mm: float,
+    height_mm: float,
+    *,
+    h3_mm: float,
+    h4_mm: float,
+    h5_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    right_flat_clear_to_edge_mm: float = 180.0,
+) -> list[Point2D]:
+    """Return the chamfered exterior-box-beam void using the user drawing variables.
+
+    The left side follows the interior-box-beam rules, while the void is shifted
+    toward the straight exterior face on the right. The default rule requested by
+    the user is that the right end of b3 is 180 mm from the rightmost outside edge.
+    """
+
+    for name, value in {
+        "h3_mm": h3_mm,
+        "h4_mm": h4_mm,
+        "h5_mm": h5_mm,
+        "b2_mm": b2_mm,
+        "b3_mm": b3_mm,
+        "right_flat_clear_to_edge_mm": right_flat_clear_to_edge_mm,
+    }.items():
+        _require_positive(name, float(value))
+
+    top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
+    if top_cover <= 0.0:
+        raise ValueError("Invalid geometry: H must be greater than h3 + 2*h4 + h5 for the exterior box-beam void.")
+
+    d = float(height_mm) / 2.0
+    w = float(width_mm) / 2.0
+    y0 = -d + float(h3_mm)
+    y1 = y0 + float(h4_mm)
+    y2 = y1 + float(h5_mm)
+    y3 = y2 + float(h4_mm)
+
+    right_flat = w - float(right_flat_clear_to_edge_mm)
+    left_flat = right_flat - float(b3_mm)
+    left_outer = left_flat - float(b2_mm)
+    right_outer = right_flat + float(b2_mm)
+
+    if right_flat <= left_flat:
+        raise ValueError("Invalid geometry: b3 must be positive and produce a valid flat width.")
+    if left_outer <= -w or right_outer >= w:
+        raise ValueError("Invalid geometry: exterior void must remain inside the outer concrete boundary.")
+
+    points = [
+        _point(left_flat, y0),
+        _point(right_flat, y0),
+        _point(right_outer, y1),
+        _point(right_outer, y2),
+        _point(right_flat, y3),
+        _point(left_flat, y3),
+        _point(left_outer, y2),
+        _point(left_outer, y1),
+    ]
+    _ensure_valid_simple_polygon(points, "Precast Box Beam – Exterior void polygon")
+    return points
+
+
 def _require_positive(name: str, value: float) -> None:
     if value <= 0:
         raise ValueError(f"Invalid geometry: {name} must be greater than zero.")
@@ -632,10 +695,123 @@ def precast_box_beam_exterior(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h3_mm: float | None = None,
+    h4_mm: float | None = None,
+    h5_mm: float | None = None,
+    h6_mm: float | None = None,
+    h7_mm: float | None = None,
+    h8_mm: float | None = None,
+    b2_mm: float | None = None,
+    b3_mm: float | None = None,
+    b4_mm: float | None = None,
     name: str = "Precast Box Beam – Exterior",
 ) -> SectionGeometry:
-    """Exterior precast box beam with one straight outside face and chamfered void."""
+    """Exterior precast box beam with drawing-based left break and straight right face."""
 
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
+    if use_drawing_parameters:
+        h3 = float(160.0 if h3_mm is None else h3_mm)
+        h4 = float(80.0 if h4_mm is None else h4_mm)
+        h5 = float(200.0 if h5_mm is None else h5_mm)
+        h6 = float(300.0 if h6_mm is None else h6_mm)
+        h7 = float(400.0 if h7_mm is None else h7_mm)
+        h8 = float(70.0 if h8_mm is None else h8_mm)
+        b2 = float(100.0 if b2_mm is None else b2_mm)
+        b3 = float(360.0 if b3_mm is None else b3_mm)
+        b4 = float(70.0 if b4_mm is None else b4_mm)
+        outer_radius = float(r_outer_mm)
+        if n_fillet < 4:
+            raise ValueError("Invalid geometry: n_fillet must be at least 4.")
+        _require_non_negative("r_outer_mm", outer_radius)
+        if outer_radius > 0.0:
+            raise ValueError("Invalid geometry: r_outer_mm must remain 0 for the drawing-based exterior box beam.")
+        if abs((float(height_mm) - h7) - h6) > 1e-6:
+            raise ValueError("Invalid geometry: h6 and h7 are inconsistent. For the exterior box beam, h6 must equal H - h7.")
+
+        # Outer polygon: left side like interior, right side straight with no notch.
+        w = float(width_mm) / 2.0
+        d = float(height_mm) / 2.0
+        inset = 45.0
+        y1 = -d + h7
+        y2 = y1 + h8
+        if y2 >= d:
+            raise ValueError("Invalid geometry: h7 + h8 must remain below the top edge for the exterior box beam.")
+        outer_polygon = [
+            _point(-w, -d),
+            _point(w, -d),
+            _point(w, d),
+            _point(-w + inset, d),
+            _point(-w + b4, y2),
+            _point(-w, y1),
+        ]
+        _ensure_valid_simple_polygon(outer_polygon, "Precast Box Beam – Exterior outer polygon")
+
+        hole = _precast_box_beam_exterior_void_points(
+            width_mm,
+            height_mm,
+            h3_mm=h3,
+            h4_mm=h4,
+            h5_mm=h5,
+            b2_mm=b2,
+            b3_mm=b3,
+        )
+        top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
+        right_flat = float(width_mm) / 2.0 - 180.0
+        left_flat = right_flat - b3
+        left_outer = left_flat - b2
+        right_outer = right_flat + b2
+        bottom_y = -float(height_mm) / 2.0 + h3
+        top_y = -float(height_mm) / 2.0 + h3 + 2.0 * h4 + h5
+        return SectionGeometry(
+            name=name,
+            outer_polygon=outer_polygon,
+            holes=[list(reversed(hole))],
+            metadata={
+                "preset": "precast_box_beam_exterior",
+                "geometry_branch": "drawing_variable_exterior_box_beam",
+                "exterior_side": "right",
+                "drawing_parameters_mm": {
+                    "B": float(width_mm),
+                    "H": float(height_mm),
+                    "h3": h3,
+                    "h4": h4,
+                    "h5": h5,
+                    "h6": h6,
+                    "h7": h7,
+                    "h8": h8,
+                    "b2": b2,
+                    "b3": b3,
+                    "b4": b4,
+                    "right_end_b3_to_right_edge": 180.0,
+                    "top_cover": top_cover,
+                    "top_edge_offset_left": 45.0,
+                    "point_1_left": {"x": -w, "y": y1},
+                    "point_2_left": {"x": -w + b4, "y": y2},
+                    "point_B_left": {"x": -w + inset, "y": d},
+                    "point_B_right": {"x": w, "y": d},
+                },
+                "wall_thicknesses_mm": {
+                    "top": top_cover,
+                    "bottom": h3,
+                    "left": left_outer + float(width_mm) / 2.0,
+                    "right": float(width_mm) / 2.0 - right_outer,
+                },
+                "inner_chamfer_mm": b2,
+                "r_inner_mm": b2,
+                "r_outer_mm": outer_radius,
+                "n_fillet": n_fillet,
+                "inner_bounds_mm": {
+                    "left_flat": left_flat,
+                    "right_flat": right_flat,
+                    "left_outer": left_outer,
+                    "right_outer": right_outer,
+                    "bottom": bottom_y,
+                    "top": top_y,
+                },
+            },
+        )
+
+    # Legacy branch kept for backward compatibility.
     top, bottom, left, right = _resolve_wall_thicknesses(
         t_top_mm=t_top_mm,
         t_bottom_mm=t_bottom_mm,
@@ -1352,6 +1528,85 @@ def box_section_fillet_dimensions(
     return dims
 
 
+def precast_box_beam_exterior_dimensions(
+    width_mm: float,
+    height_mm: float,
+    t_top_mm: float | None = None,
+    t_bottom_mm: float | None = None,
+    t_left_mm: float | None = None,
+    t_right_mm: float | None = None,
+    r_inner_mm: float | None = None,
+    r_outer_mm: float = 0.0,
+    n_fillet: int = 12,
+    wall_thickness_mm: float | None = None,
+    fillet_radius_mm: float | None = None,
+    h3_mm: float | None = None,
+    h4_mm: float | None = None,
+    h5_mm: float | None = None,
+    h6_mm: float | None = None,
+    h7_mm: float | None = None,
+    h8_mm: float | None = None,
+    b2_mm: float | None = None,
+    b3_mm: float | None = None,
+    b4_mm: float | None = None,
+    **kwargs: object,
+) -> list[DimensionItem]:
+    _ = (n_fillet, wall_thickness_mm, fillet_radius_mm, r_inner_mm, r_outer_mm, t_top_mm, t_bottom_mm, t_left_mm, t_right_mm)
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, h8_mm, b2_mm, b3_mm, b4_mm))
+    if use_drawing_parameters:
+        h3 = float(160.0 if h3_mm is None else h3_mm)
+        h4 = float(80.0 if h4_mm is None else h4_mm)
+        h5 = float(200.0 if h5_mm is None else h5_mm)
+        h6 = float(300.0 if h6_mm is None else h6_mm)
+        h7 = float(400.0 if h7_mm is None else h7_mm)
+        h8 = float(70.0 if h8_mm is None else h8_mm)
+        b2 = float(100.0 if b2_mm is None else b2_mm)
+        b3 = float(360.0 if b3_mm is None else b3_mm)
+        b4 = float(70.0 if b4_mm is None else b4_mm)
+        dims = rectangle_dimensions(width_mm, height_mm, **kwargs)
+        w = width_mm / 2.0
+        h = height_mm / 2.0
+        top_cover = height_mm - (h3 + 2.0 * h4 + h5)
+        right_flat = w - 180.0
+        left_flat = right_flat - b3
+        left_outer = left_flat - b2
+        right_outer = right_flat + b2
+        dims.extend(
+            [
+                _dim("h7", _point(-w - 80.0, -h), _point(-w - 80.0, -h + h7), _point(-w - 105.0, -h + h7 / 2.0), "vertical", h7),
+                _dim("h6", _point(-w - 45.0, -h + h7), _point(-w - 45.0, h), _point(-w - 20.0, -h + h7 + (height_mm - h7) / 2.0), "vertical", h6),
+                _dim("h8", _point(-w - 15.0, -h + h7), _point(-w - 15.0, -h + h7 + h8), _point(-w - 40.0, -h + h7 + h8 / 2.0), "vertical", h8),
+                _dim("b4", _point(-w, -h + h7 - 28.0), _point(-w + b4, -h + h7 - 28.0), _point(-w + b4 / 2.0, -h + h7 - 58.0), "horizontal", b4),
+                _dim("b3", _point(left_flat, -h + h3 - 35.0), _point(right_flat, -h + h3 - 35.0), _point((left_flat + right_flat) / 2.0, -h + h3 - 65.0), "horizontal", b3),
+                _dim("b2", _point(left_outer, -h + h3 + 2.0 * h4 + h5 + 55.0), _point(left_flat, -h + h3 + 2.0 * h4 + h5 + 55.0), _point((left_outer + left_flat) / 2.0, -h + h3 + 2.0 * h4 + h5 + 85.0), "horizontal", b2),
+                _dim("180", _point(right_flat, -h + h3 - 90.0), _point(w, -h + h3 - 90.0), _point((right_flat + w) / 2.0, -h + h3 - 120.0), "horizontal", 180.0),
+                _dim("h3", _point(left_outer - 55.0, -h), _point(left_outer - 55.0, -h + h3), _point(left_outer - 80.0, -h + h3 / 2.0), "vertical", h3),
+                _dim("h4", _point(left_outer - 25.0, -h + h3), _point(left_outer - 25.0, -h + h3 + h4), _point(left_outer - 60.0, -h + h3 + h4 / 2.0), "vertical", h4),
+                _dim("h5", _point(left_outer - 55.0, -h + h3 + h4), _point(left_outer - 55.0, -h + h3 + h4 + h5), _point(left_outer - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),
+                _dim("h4", _point(left_outer - 25.0, -h + h3 + h4 + h5), _point(left_outer - 25.0, -h + h3 + 2.0 * h4 + h5), _point(left_outer - 60.0, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
+            ]
+        )
+        if top_cover > 0:
+            dims.append(_dim("top cover", _point(right_outer + 40.0, -h + h3 + 2.0 * h4 + h5), _point(right_outer + 40.0, h), _point(right_outer + 70.0, -h + h3 + 2.0 * h4 + h5 + top_cover / 2.0), "vertical", top_cover))
+        return dims
+
+    # Legacy dimensions fallback.
+    return box_section_fillet_dimensions(
+        width_mm,
+        height_mm,
+        t_top_mm=t_top_mm,
+        t_bottom_mm=t_bottom_mm,
+        t_left_mm=t_left_mm,
+        t_right_mm=t_right_mm,
+        r_inner_mm=r_inner_mm,
+        r_outer_mm=r_outer_mm,
+        n_fillet=n_fillet,
+        wall_thickness_mm=wall_thickness_mm,
+        fillet_radius_mm=fillet_radius_mm,
+        **kwargs,
+    )
+
+
 def parametric_i_girder_dimensions(
     B1_mm: float,
     B2_mm: float,
@@ -1487,7 +1742,7 @@ def register_builtin_generators(registry: GeometryRegistry) -> None:
         "circular_hollow": (circular_hollow, circular_hollow_dimensions),
         "rectangular_hollow": (rectangular_hollow, rectangular_hollow_dimensions),
         "box_section_fillet": (box_section_fillet, box_section_fillet_dimensions),
-        "precast_box_beam_exterior": (precast_box_beam_exterior, box_section_fillet_dimensions),
+        "precast_box_beam_exterior": (precast_box_beam_exterior, precast_box_beam_exterior_dimensions),
         "psc_i_girder": (psc_i_girder, psc_i_girder_dimensions),
         "parametric_i_girder": (parametric_i_girder, parametric_i_girder_dimensions),
         "parametric_plank_girder_interior": (parametric_plank_girder_interior, parametric_plank_girder_interior_dimensions),

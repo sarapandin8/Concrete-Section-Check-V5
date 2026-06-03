@@ -1435,14 +1435,74 @@ def _section_horizontal_segment_at_y(geometry: SectionGeometry | None, y_abs_mm:
         return None
 
 
+def _strand_point_clearance_review_messages(
+    *,
+    group: str,
+    points_x: list[float],
+    y_abs_mm: float,
+    geometry: SectionGeometry | None,
+    strand_radius_mm: float,
+    required_edge_cl_mm: float,
+) -> list[str]:
+    """Return void-aware strand placement review messages for one row.
+
+    GIRDER.PS4A is a geometry/QA gate only.  It checks the *individual strand
+    circles* against the current concrete polygon, including internal voids and
+    chamfers, but it does not change prestress forces, losses, PMM, SLS stress,
+    or report logic.
+    """
+
+    if geometry is None or not points_x:
+        return []
+    try:
+        polygon = to_shapely_polygon(geometry)
+    except Exception:
+        return [f"REVIEW: {group}: concrete polygon could not be resolved for void-aware strand validation."]
+
+    center_outside_count = 0
+    circle_outside_count = 0
+    low_clearance_count = 0
+    min_clearance: float | None = None
+    for x_value in points_x:
+        point = Point(float(x_value), float(y_abs_mm))
+        if not polygon.covers(point):
+            center_outside_count += 1
+            continue
+        clearance = float(polygon.boundary.distance(point))
+        min_clearance = clearance if min_clearance is None else min(min_clearance, clearance)
+        if clearance + 1e-9 < required_edge_cl_mm:
+            low_clearance_count += 1
+        strand_circle = point.buffer(float(strand_radius_mm), quad_segs=16)
+        if not polygon.covers(strand_circle):
+            circle_outside_count += 1
+
+    messages: list[str] = []
+    if center_outside_count:
+        messages.append(
+            f"REVIEW: {group}: {center_outside_count} strand center(s) fall outside concrete or inside a void/chamfer; "
+            "reduce the number of strands or adjust the row elevation/center."
+        )
+    if circle_outside_count:
+        messages.append(
+            f"REVIEW: {group}: {circle_outside_count} strand diameter circle(s) overlap a concrete boundary, void, or chamfer; "
+            "adjust row elevation/center or reduce the strand count."
+        )
+    if low_clearance_count and min_clearance is not None:
+        messages.append(
+            f"REVIEW: {group}: minimum strand centerline clearance to concrete boundary/void is {min_clearance:.1f} mm, "
+            f"below the configured {required_edge_cl_mm:.1f} mm edge CL; confirm cover and void clearance."
+        )
+    return messages
+
+
 def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -> tuple[list[dict[str, Any]], float, list[str]]:
     """Expand one strand row/group into individual strand points.
 
     Strand rows are placed from the girder centerline outward.  A two-strand
     row is therefore placed close to the centerline rather than stretched to
     the outer edges.  The selected strand size controls the practical minimum
-    center-to-center spacing; section geometry is used only to check whether
-    the compact centered row fits with the required edge centerline distance.
+    center-to-center spacing; section geometry is used to check width, cover,
+    and void/chamfer clearance.
     """
 
     messages: list[str] = []
@@ -1474,39 +1534,34 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
         required_width = spacing * float(count - 1) if count > 1 else 0.0
         max_count = int(available_width // min_spacing) + 1 if available_width >= 0.0 else 1
         if center_x < left_limit - 1e-9 or center_x > right_limit + 1e-9:
-            messages.append(f"{group}: row center is outside the available section width after 45 mm edge CL at this y-level.")
+            messages.append(f"REVIEW: {group}: row center is outside the available section width after 45 mm edge CL at this y-level.")
         if points_x and (min(points_x) < left_limit - 1e-9 or max(points_x) > right_limit + 1e-9):
             messages.append(
-                f"{group}: {count} strands at {spacing:.1f} mm spacing do not fit within the available section width after 45 mm edge CL; "
+                f"REVIEW: {group}: {count} strands at {spacing:.1f} mm spacing do not fit within the available section width after 45 mm edge CL; "
                 f"reduce the number of strands in this row"
                 + (f" to {max_count} or fewer" if max_count > 0 else "")
                 + " or adjust the row center/section width."
             )
         elif count > 1 and required_width > available_width + 1e-9:
             messages.append(
-                f"{group}: strand row requires {required_width:.1f} mm but only {available_width:.1f} mm is available after edge CL; "
+                f"REVIEW: {group}: strand row requires {required_width:.1f} mm but only {available_width:.1f} mm is available after edge CL; "
                 f"reduce the number of strands in this row"
                 + (f" to {max_count} or fewer" if max_count > 0 else "")
                 + "."
             )
     else:
-        messages.append(f"{group}: section width at this y-level could not be resolved; centered layout uses minimum spacing only.")
+        messages.append(f"REVIEW: {group}: section width at this y-level could not be resolved; centered layout uses minimum spacing only.")
 
-    if geometry is not None:
-        try:
-            polygon = to_shapely_polygon(geometry)
-            invalid_count = 0
-            for x_value in points_x:
-                point = Point(float(x_value), float(y_abs))
-                if not (polygon.contains(point) or polygon.touches(point)):
-                    invalid_count += 1
-            if invalid_count:
-                messages.append(
-                    f"{group}: {invalid_count} strand point(s) fall outside the concrete polygon or inside a void/chamfer; "
-                    "reduce the number of strands or adjust the row elevation/center."
-                )
-        except Exception:
-            pass
+    messages.extend(
+        _strand_point_clearance_review_messages(
+            group=group,
+            points_x=points_x,
+            y_abs_mm=y_abs,
+            geometry=geometry,
+            strand_radius_mm=float(props["diameter_mm"]) / 2.0,
+            required_edge_cl_mm=edge_cl,
+        )
+    )
 
     points = [
         {

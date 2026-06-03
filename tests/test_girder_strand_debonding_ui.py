@@ -304,3 +304,135 @@ def test_prestress_source_contains_compact_strand_editor_and_rerun_guard() -> No
     assert "_store_girder_strand_layout_and_rerun_on_change" in PRESTRESS_SOURCE
     assert "centerline outward" in PRESTRESS_SOURCE
     assert "🟨" in PRESTRESS_SOURCE
+
+
+def test_box_beam_default_strand_layout_passes_void_aware_validation(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import box_section_fillet, precast_box_beam_exterior  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _validate_girder_strand_layout,
+    )
+
+    geometries = [
+        box_section_fillet(
+            width_mm=990,
+            height_mm=700,
+            h1_mm=180,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=300,
+            h7_mm=400,
+            h8_mm=70,
+            b2_mm=100,
+            b3_mm=290,
+            b4_mm=70,
+        ),
+        precast_box_beam_exterior(
+            width_mm=990,
+            height_mm=700,
+            h1_mm=180,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=300,
+            h7_mm=400,
+            h8_mm=70,
+            b2_mm=100,
+            b3_mm=360,
+            b4_mm=70,
+        ),
+    ]
+    for geometry in geometries:
+        table = _normalize_girder_strand_layout_table(None, span_length_m=20.0, geometry=geometry)
+        errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
+        assert errors == []
+        assert warnings == []
+        assert table["y_mm_from_bottom"].tolist() == [50.0, 100.0]
+        assert table["No. Strands"].tolist() == [19, 19]
+
+
+def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import box_section_fillet  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _validate_girder_strand_layout,
+    )
+
+    geometry = box_section_fillet(
+        width_mm=990,
+        height_mm=700,
+        h1_mm=180,
+        h3_mm=160,
+        h4_mm=80,
+        h5_mm=200,
+        h6_mm=300,
+        h7_mm=400,
+        h8_mm=70,
+        b2_mm=100,
+        b3_mm=290,
+        b4_mm=70,
+    )
+    void_row = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Void row",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 3,
+                "Row center x_mm": 0.0,
+                "y_mm_from_bottom": 200.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(void_row, span_length_m=20.0, geometry=geometry)
+    errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
+    assert errors == []
+    assert any("inside a void/chamfer" in warning for warning in warnings)
+
+    low_cover_row = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Low cover",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 1,
+                "Row center x_mm": 0.0,
+                "y_mm_from_bottom": 20.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(low_cover_row, span_length_m=20.0, geometry=geometry)
+    errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
+    assert errors == []
+    assert any("minimum strand centerline clearance" in warning for warning in warnings)

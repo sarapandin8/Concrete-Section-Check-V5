@@ -187,14 +187,17 @@ def _precast_box_beam_interior_outer_points(
     top_edge_offset_mm: float = 45.0,
     top_side_drop_mm: float = 70.0,
     lower_side_ledge_mm: float = 70.0,
+    lower_inner_rise_mm: float = 70.0,
 ) -> list[Point2D]:
     """Return the requested interior precast box beam outer profile.
 
     Geometry basis from the user's drawing for the *interior* box beam only:
     - full bottom width B
     - top edge inset 45 mm on each side
-    - short vertical top side drop 70 mm
+    - top edge inset 45 mm on each side
     - lower horizontal side ledge 70 mm at the h7 elevation
+    - vertical rise of 70 mm at the ledge end before the long side slope
+    - the sloped outer side runs directly from point A to the top corner B
     - lower side-break elevation controlled by h7 measured from the bottom
     The section remains left-right symmetric about the center line.
     """
@@ -205,14 +208,17 @@ def _precast_box_beam_interior_outer_points(
     _require_non_negative("top_edge_offset_mm", top_edge_offset_mm)
     _require_non_negative("top_side_drop_mm", top_side_drop_mm)
     _require_non_negative("lower_side_ledge_mm", lower_side_ledge_mm)
+    _require_non_negative("lower_inner_rise_mm", lower_inner_rise_mm)
 
     w = float(width_mm) / 2.0
     d = float(height_mm) / 2.0
     inset = float(top_edge_offset_mm)
     top_drop = float(top_side_drop_mm)
     lower_ledge = float(lower_side_ledge_mm)
+    lower_inner_rise = float(lower_inner_rise_mm)
     y_break_lower = -d + float(h7_mm)
-    y_break_upper = d - top_drop
+    y_break_middle = y_break_lower + lower_inner_rise
+    y_break_upper = d
 
     if inset >= w:
         raise ValueError("Invalid geometry: top edge offset must be less than B/2.")
@@ -221,17 +227,19 @@ def _precast_box_beam_interior_outer_points(
     if top_drop >= height_mm:
         raise ValueError("Invalid geometry: top side drop must be less than H.")
     if y_break_lower <= -d or y_break_lower >= y_break_upper:
-        raise ValueError("Invalid geometry: h7 must place the outer side break between the bottom edge and the top-side drop.")
+        raise ValueError("Invalid geometry: h7 must place the outer side break between the bottom edge and the top edge.")
+    if y_break_middle >= y_break_upper:
+        raise ValueError("Invalid geometry: h7 + lower inner rise must remain below the top edge.")
 
     points = [
         _point(-w, -d),
         _point(w, -d),
         _point(w, y_break_lower),
         _point(w - lower_ledge, y_break_lower),
+        _point(w - lower_ledge, y_break_middle),
         _point(w - inset, y_break_upper),
-        _point(w - inset, d),
-        _point(-w + inset, d),
         _point(-w + inset, y_break_upper),
+        _point(-w + lower_ledge, y_break_middle),
         _point(-w + lower_ledge, y_break_lower),
         _point(-w, y_break_lower),
     ]
@@ -535,6 +543,8 @@ def box_section_fillet(
                     "top_edge_offset": 45.0,
                     "top_side_drop": 70.0,
                     "lower_side_ledge": 70.0,
+                    "lower_inner_rise": 70.0,
+                    "side_slope_connects_to_top_corner": True,
                 },
                 "wall_thicknesses_mm": {
                     "top": top_cover,
@@ -1290,11 +1300,11 @@ def box_section_fillet_dimensions(
                 _dim("h7", _point(-w - 80.0, -h), _point(-w - 80.0, -h + h7), _point(-w - 105.0, -h + h7 / 2.0), "vertical", h7),
                 _dim("h6", _point(-w - 45.0, -h + h7), _point(-w - 45.0, h), _point(-w - 20.0, -h + h7 + (height_mm - h7) / 2.0), "vertical", h6),
                 _dim("b3", _point(-half_b3, -h + h3 - 35.0), _point(half_b3, -h + h3 - 35.0), _point(0.0, -h + h3 - 65.0), "horizontal", b3),
-                _dim("b2", _point(-half_b3 - b2, -h + h3 + h4 + h5 + 25.0), _point(-half_b3, -h + h3 + h4 + h5 + 25.0), _point(-half_b3 - b2 / 2.0, -h + h3 + h4 + h5 + 55.0), "horizontal", b2),
+                _dim("b2", _point(-half_b3 - b2, -h + h3 + 2.0 * h4 + h5 + 35.0), _point(-half_b3, -h + h3 + 2.0 * h4 + h5 + 35.0), _point(-half_b3 - b2 / 2.0, -h + h3 + 2.0 * h4 + h5 + 65.0), "horizontal", b2),
                 _dim("h3", _point(-half_b3 - b2 - 55.0, -h), _point(-half_b3 - b2 - 55.0, -h + h3), _point(-half_b3 - b2 - 80.0, -h + h3 / 2.0), "vertical", h3),
                 _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3), _point(-half_b3 - b2 - 25.0, -h + h3 + h4), _point(-half_b3 - b2, -h + h3 + h4 / 2.0), "vertical", h4),
                 _dim("h5", _point(-half_b3 - b2 - 55.0, -h + h3 + h4), _point(-half_b3 - b2 - 55.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),
-                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 25.0, -h + h3 + 2.0 * h4 + h5), _point(-half_b3 - b2, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
+                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 25.0, -h + h3 + 2.0 * h4 + h5), _point(-half_b3 - b2 - 60.0, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
                 _dim("b2,start", _point(-w, h + 45.0), _point(-w + b2_start, h + 45.0), _point(-w / 2.0 + b2_start / 2.0, h + 75.0), "horizontal", b2_start),
             ]
         )

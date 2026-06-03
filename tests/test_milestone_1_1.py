@@ -109,7 +109,10 @@ def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     assert (-450.0, 350.0) in outer
     assert (450.0, 350.0) in outer
     assert (-495.0, 50.0) in outer
+    assert (-425.0, 50.0) in outer
+    assert (425.0, 50.0) in outer
     assert (495.0, 50.0) in outer
+    assert geometry.metadata["drawing_parameters_mm"]["lower_side_ledge"] == pytest.approx(70)
     assert (-145.0, -190.0) in hole
     assert (145.0, -190.0) in hole
     assert (-245.0, -110.0) in hole

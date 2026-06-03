@@ -186,6 +186,7 @@ def _precast_box_beam_interior_outer_points(
     h7_mm: float,
     top_edge_offset_mm: float = 45.0,
     top_side_drop_mm: float = 70.0,
+    lower_side_ledge_mm: float = 70.0,
 ) -> list[Point2D]:
     """Return the requested interior precast box beam outer profile.
 
@@ -193,6 +194,7 @@ def _precast_box_beam_interior_outer_points(
     - full bottom width B
     - top edge inset 45 mm on each side
     - short vertical top side drop 70 mm
+    - lower horizontal side ledge 70 mm at the h7 elevation
     - lower side-break elevation controlled by h7 measured from the bottom
     The section remains left-right symmetric about the center line.
     """
@@ -202,16 +204,20 @@ def _precast_box_beam_interior_outer_points(
     _require_positive("h7_mm", h7_mm)
     _require_non_negative("top_edge_offset_mm", top_edge_offset_mm)
     _require_non_negative("top_side_drop_mm", top_side_drop_mm)
+    _require_non_negative("lower_side_ledge_mm", lower_side_ledge_mm)
 
     w = float(width_mm) / 2.0
     d = float(height_mm) / 2.0
     inset = float(top_edge_offset_mm)
     top_drop = float(top_side_drop_mm)
+    lower_ledge = float(lower_side_ledge_mm)
     y_break_lower = -d + float(h7_mm)
     y_break_upper = d - top_drop
 
     if inset >= w:
         raise ValueError("Invalid geometry: top edge offset must be less than B/2.")
+    if lower_ledge >= w:
+        raise ValueError("Invalid geometry: lower side ledge must be less than B/2.")
     if top_drop >= height_mm:
         raise ValueError("Invalid geometry: top side drop must be less than H.")
     if y_break_lower <= -d or y_break_lower >= y_break_upper:
@@ -221,10 +227,12 @@ def _precast_box_beam_interior_outer_points(
         _point(-w, -d),
         _point(w, -d),
         _point(w, y_break_lower),
+        _point(w - lower_ledge, y_break_lower),
         _point(w - inset, y_break_upper),
         _point(w - inset, d),
         _point(-w + inset, d),
         _point(-w + inset, y_break_upper),
+        _point(-w + lower_ledge, y_break_lower),
         _point(-w, y_break_lower),
     ]
     _ensure_valid_simple_polygon(points, "Precast Box Beam – Interior outer polygon")
@@ -526,6 +534,7 @@ def box_section_fillet(
                     "top_cover": top_cover,
                     "top_edge_offset": 45.0,
                     "top_side_drop": 70.0,
+                    "lower_side_ledge": 70.0,
                 },
                 "wall_thicknesses_mm": {
                     "top": top_cover,

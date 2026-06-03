@@ -295,7 +295,7 @@
       "display_name": "Precast Box Beam – Exterior",
       "category": "Precast Composite Girder",
       "generator": "precast_box_beam_exterior",
-      "dimensions_generator": "precast_box_beam_exterior_dimensions",
+      "dimensions_generator": "precast_box_beam_exterior",
       "parameters": [
         {
           "name": "width_mm",

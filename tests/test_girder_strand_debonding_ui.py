@@ -30,6 +30,8 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert 'name="Debonded"' in PRESTRESS_SOURCE
     assert "diamond-open" in PRESTRESS_SOURCE
     assert "Row status labels" in PRESTRESS_SOURCE
+    assert "label_gap = max(260.0" in PRESTRESS_SOURCE
+    assert "on_change=_sync_girder_strand_layout_editor_to_table" in PRESTRESS_SOURCE
     assert "Row 1 at the bottom" in PRESTRESS_SOURCE
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
 
@@ -200,6 +202,9 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     trace_names = [trace.name for trace in fig.data]
     assert "Bonded" in trace_names or "Debonded" in trace_names
     assert "Row status labels" in trace_names
+    label_trace = next(trace for trace in fig.data if trace.name == "Row status labels")
+    assert all("<br>" not in label for label in label_trace.text)
+    assert any("Row 1 · 2 strands · Debonded both ends · L=1.00 m · R=1.00 m" == label for label in label_trace.text)
 
     schedule = _girder_debonding_schedule_dataframe(table, span_length_m=10.0)
     assert schedule.loc[0, "Debond status"] == "Debonded both ends"
@@ -595,6 +600,36 @@ def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(mo
     errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
     assert errors == []
     assert any("minimum strand centerline clearance" in warning for warning in warnings)
+
+
+def test_girder_strand_editor_first_edit_callback_persists_table(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    import concrete_pmm_pro.ui.prestress_page as page  # noqa: PLC0415
+
+    monkeypatch.setattr(page, "st", st)
+    edited = page._normalize_girder_strand_layout_table(None, span_length_m=30.0)
+    edited.loc[0, "Left debond m"] = 1.25
+    edited.loc[0, "Right debond m"] = 0.75
+    st.session_state["girder_strand_layout_editor"] = edited
+
+    page._sync_girder_strand_layout_editor_to_table(30.0, "Left/right independent", None)
+
+    stored = st.session_state["girder_strand_layout_table"]
+    assert float(stored.loc[0, "Left debond m"]) == 1.25
+    assert float(stored.loc[0, "Right debond m"]) == 0.75
+
 
 
 def test_girder_strand_editor_store_does_not_force_rerun_during_numeric_edit(monkeypatch) -> None:

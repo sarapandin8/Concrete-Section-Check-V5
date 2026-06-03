@@ -1597,22 +1597,49 @@ def _apply_computed_girder_strand_spacing(table: pd.DataFrame, geometry: Section
         df.at[index, "Computed spacing_mm"] = spacing
     return df
 
+def _persist_girder_strand_layout_table(normalized_table: pd.DataFrame) -> None:
+    """Persist the normalized girder strand table without forcing a rerun."""
+
+    st.session_state["girder_strand_layout_table"] = pd.DataFrame(normalized_table).reset_index(drop=True)
+
+
+def _sync_girder_strand_layout_editor_to_table(
+    span_length_m: float,
+    debond_model: str,
+    geometry: SectionGeometry | None,
+) -> None:
+    """Persist the current data-editor payload during the first edit callback.
+
+    Streamlit's ``data_editor`` can keep widget-local edits one rerun ahead of
+    the separate project/session table if we only persist after the widget
+    returns.  This callback copies the editor payload into the canonical girder
+    strand table before the next script run, so debond lengths and row counts do
+    not need to be typed twice to stick.
+    """
+
+    edited = st.session_state.get("girder_strand_layout_editor")
+    if edited is None:
+        return
+    normalized = _normalize_girder_strand_layout_table(
+        pd.DataFrame(edited),
+        span_length_m=float(span_length_m),
+        debond_model=str(debond_model),
+        geometry=geometry,
+    )
+    normalized = _apply_computed_girder_strand_spacing(normalized, geometry)
+    _persist_girder_strand_layout_table(normalized)
+
+
 def _store_girder_strand_layout_and_rerun_on_change(previous_table: pd.DataFrame | None, normalized_table: pd.DataFrame) -> None:
     """Persist normalized strand editor output without interrupting active edits.
 
-    PS5B.1 deliberately avoids an immediate ``st.rerun()`` here.  The girder
-    strand editor contains numeric cells for debond length and stage force input;
-    rerunning as soon as the data editor emits an intermediate value can make the
-    cell appear locked or reject typing in some Streamlit/browser combinations.
-
-    The current run already uses ``normalized_table`` for validation, plots, and
-    preview tables, while storing the normalized dataframe keeps the edits stable
-    for the next natural rerun.  Do not reintroduce an automatic rerun here unless
-    it is guarded so it cannot fire while a data-editor cell is being edited.
+    PS5B.1 deliberately avoids an immediate ``st.rerun()`` here.  PS5B.4 adds an
+    ``on_change`` sync callback to persist the first data-editor edit before the
+    next run.  This helper remains as the no-rerun persistence path for the
+    already-returned edited dataframe.
     """
 
-    normalized = pd.DataFrame(normalized_table).reset_index(drop=True)
-    st.session_state["girder_strand_layout_table"] = normalized
+    _persist_girder_strand_layout_table(normalized_table)
     # Keep the historical helper name for regression compatibility, but avoid
     # programmatic reruns that steal focus from editable debond-length cells.
     _ = previous_table
@@ -1844,16 +1871,19 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
             y_value = float(group_points["y_mm_abs"].mean())
             x_anchor = float(group_points["x_mm"].max())
             if status == "Fully bonded":
-                label = f"{group} · {count} strands<br>Bonded"
+                label = f"{group} · {count} strands · Bonded"
             else:
-                label = f"{group} · {count} strands<br>{status}<br>L={left:.2f} m · R={right:.2f} m"
+                label = f"{group} · {count} strands · {status} · L={left:.2f} m · R={right:.2f} m"
             group_stats.append((str(group), y_value, x_anchor, label))
 
         if section_x_max is None:
             section_x_max = float(points["x_mm"].max())
         if section_x_min is None:
             section_x_min = float(points["x_mm"].min())
-        label_gap = max(90.0, 0.15 * max(section_x_max - section_x_min, 200.0))
+        section_width = max(section_x_max - section_x_min, 200.0)
+        # Keep row labels outside the concrete outline with enough air to avoid
+        # the text visually touching the section, even for wide box beams.
+        label_gap = max(260.0, 0.24 * section_width)
         label_x = section_x_max + label_gap
         fig.add_trace(
             go.Scatter(
@@ -1871,16 +1901,16 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
         for _, y_value, x_anchor, _ in group_stats:
             fig.add_shape(
                 type="line",
-                x0=x_anchor + 12.0,
-                x1=label_x - 12.0,
+                x0=x_anchor + 16.0,
+                x1=label_x - 22.0,
                 y0=y_value,
                 y1=y_value,
-                line={"color": "rgba(100, 116, 139, 0.55)", "width": 1.0},
+                line={"color": "rgba(100, 116, 139, 0.50)", "width": 1.0},
             )
-        fig.update_xaxes(range=[section_x_min - 0.15 * max(section_x_max - section_x_min, 200.0), label_x + 260.0])
+        fig.update_xaxes(range=[section_x_min - 0.15 * section_width, label_x + 620.0])
     fig.update_layout(
         height=410,
-        margin={"l": 20, "r": 140, "t": 30, "b": 20},
+        margin={"l": 20, "r": 240, "t": 30, "b": 20},
         xaxis_title="section x (mm)",
         yaxis_title="section y (mm)",
         showlegend=True,
@@ -2087,6 +2117,8 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             "Note": st.column_config.TextColumn("Note"),
         },
         key="girder_strand_layout_editor",
+        on_change=_sync_girder_strand_layout_editor_to_table,
+        args=(float(span), str(debond_model), geometry),
     )
     normalized = _normalize_girder_strand_layout_table(edited, span_length_m=float(span), debond_model=str(debond_model), geometry=geometry)
     normalized = _apply_computed_girder_strand_spacing(normalized, geometry)

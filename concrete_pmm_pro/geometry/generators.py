@@ -179,6 +179,116 @@ def _precast_box_beam_outer_points(
     return points
 
 
+def _precast_box_beam_interior_outer_points(
+    width_mm: float,
+    height_mm: float,
+    *,
+    h7_mm: float,
+    top_edge_offset_mm: float = 45.0,
+    top_side_drop_mm: float = 70.0,
+) -> list[Point2D]:
+    """Return the requested interior precast box beam outer profile.
+
+    Geometry basis from the user's drawing for the *interior* box beam only:
+    - full bottom width B
+    - top edge inset 45 mm on each side
+    - short vertical top side drop 70 mm
+    - lower side-break elevation controlled by h7 measured from the bottom
+    The section remains left-right symmetric about the center line.
+    """
+
+    _require_positive("width_mm", width_mm)
+    _require_positive("height_mm", height_mm)
+    _require_positive("h7_mm", h7_mm)
+    _require_non_negative("top_edge_offset_mm", top_edge_offset_mm)
+    _require_non_negative("top_side_drop_mm", top_side_drop_mm)
+
+    w = float(width_mm) / 2.0
+    d = float(height_mm) / 2.0
+    inset = float(top_edge_offset_mm)
+    top_drop = float(top_side_drop_mm)
+    y_break_lower = -d + float(h7_mm)
+    y_break_upper = d - top_drop
+
+    if inset >= w:
+        raise ValueError("Invalid geometry: top edge offset must be less than B/2.")
+    if top_drop >= height_mm:
+        raise ValueError("Invalid geometry: top side drop must be less than H.")
+    if y_break_lower <= -d or y_break_lower >= y_break_upper:
+        raise ValueError("Invalid geometry: h7 must place the outer side break between the bottom edge and the top-side drop.")
+
+    points = [
+        _point(-w, -d),
+        _point(w, -d),
+        _point(w, y_break_lower),
+        _point(w - inset, y_break_upper),
+        _point(w - inset, d),
+        _point(-w + inset, d),
+        _point(-w + inset, y_break_upper),
+        _point(-w, y_break_lower),
+    ]
+    _ensure_valid_simple_polygon(points, "Precast Box Beam – Interior outer polygon")
+    return points
+
+
+def _precast_box_beam_interior_void_points(
+    width_mm: float,
+    height_mm: float,
+    *,
+    h3_mm: float,
+    h4_mm: float,
+    h5_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+) -> list[Point2D]:
+    """Return the chamfered interior-box-beam void using the user drawing variables.
+
+    Vertical stack: bottom cover h3, lower chamfer h4, side wall h5,
+    upper chamfer h4, and the remaining top cover = H - (h3 + 2*h4 + h5).
+
+    Horizontal stack about the center line: top/bottom flat width b3, with
+    chamfer projection b2 on each side.
+    """
+
+    for name, value in {
+        "h3_mm": h3_mm,
+        "h4_mm": h4_mm,
+        "h5_mm": h5_mm,
+        "b2_mm": b2_mm,
+        "b3_mm": b3_mm,
+    }.items():
+        _require_positive(name, float(value))
+
+    top_cover = float(height_mm) - (float(h3_mm) + 2.0 * float(h4_mm) + float(h5_mm))
+    if top_cover <= 0.0:
+        raise ValueError("Invalid geometry: H must be greater than h3 + 2*h4 + h5 for the interior box-beam void.")
+
+    d = float(height_mm) / 2.0
+    half_b3 = float(b3_mm) / 2.0
+    chamfer_run = float(b2_mm)
+    y0 = -d + float(h3_mm)
+    y1 = y0 + float(h4_mm)
+    y2 = y1 + float(h5_mm)
+    y3 = y2 + float(h4_mm)
+    x0 = half_b3
+    x1 = half_b3 + chamfer_run
+    if x1 * 2.0 >= float(width_mm):
+        raise ValueError("Invalid geometry: b3 + 2*b2 must be less than B for the interior box-beam void.")
+
+    points = [
+        _point(-x0, y0),
+        _point(x0, y0),
+        _point(x1, y1),
+        _point(x1, y2),
+        _point(x0, y3),
+        _point(-x0, y3),
+        _point(-x1, y2),
+        _point(-x1, y1),
+    ]
+    _ensure_valid_simple_polygon(points, "Precast Box Beam – Interior void polygon")
+    return points
+
+
 def _require_positive(name: str, value: float) -> None:
     if value <= 0:
         raise ValueError(f"Invalid geometry: {name} must be greater than zero.")
@@ -344,8 +454,98 @@ def box_section_fillet(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h3_mm: float | None = None,
+    h4_mm: float | None = None,
+    h5_mm: float | None = None,
+    h6_mm: float | None = None,
+    h7_mm: float | None = None,
+    b2_mm: float | None = None,
+    b3_mm: float | None = None,
+    b2_start_from_left_mm: float | None = None,
     name: str = "Precast Box Beam – Interior",
 ) -> SectionGeometry:
+    # New drawing-variable branch for the interior precast box beam. Legacy
+    # wall-thickness inputs are intentionally preserved for project-file
+    # compatibility when the new parameters are absent.
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, b2_mm, b3_mm, b2_start_from_left_mm))
+    if use_drawing_parameters:
+        h3 = float(160.0 if h3_mm is None else h3_mm)
+        h4 = float(80.0 if h4_mm is None else h4_mm)
+        h5 = float(200.0 if h5_mm is None else h5_mm)
+        h6 = float(300.0 if h6_mm is None else h6_mm)
+        h7 = float(400.0 if h7_mm is None else h7_mm)
+        b2 = float(100.0 if b2_mm is None else b2_mm)
+        b3 = float(290.0 if b3_mm is None else b3_mm)
+        outer_radius = float(r_outer_mm)
+        if n_fillet < 4:
+            raise ValueError("Invalid geometry: n_fillet must be at least 4.")
+        _require_non_negative("r_outer_mm", outer_radius)
+        if outer_radius > 0.0:
+            raise ValueError("Invalid geometry: r_outer_mm must remain 0 for the drawing-based interior box beam.")
+
+        # Ruthless check: h6 and h7 describe the same outer break from opposite
+        # reference edges in the drawing. Allow a small numerical tolerance but
+        # reject inconsistent free-form inputs instead of silently distorting
+        # the section.
+        if abs((float(height_mm) - h7) - h6) > 1e-6:
+            raise ValueError("Invalid geometry: h6 and h7 are inconsistent. For the interior box beam, h6 must equal H - h7.")
+
+        derived_b2_start = (float(width_mm) - (2.0 * b2 + b3)) / 2.0
+        if derived_b2_start <= 0.0:
+            raise ValueError("Invalid geometry: B must be greater than 2*b2 + b3 for the centered interior void.")
+        if b2_start_from_left_mm is not None and abs(derived_b2_start - float(b2_start_from_left_mm)) > 1e-6:
+            raise ValueError(
+                "Invalid geometry: b2_start_from_left must equal (B - (2*b2 + b3)) / 2 for the centered interior void."
+            )
+
+        outer_polygon = _precast_box_beam_interior_outer_points(width_mm, height_mm, h7_mm=h7)
+        hole = _precast_box_beam_interior_void_points(width_mm, height_mm, h3_mm=h3, h4_mm=h4, h5_mm=h5, b2_mm=b2, b3_mm=b3)
+        top_cover = float(height_mm) - (h3 + 2.0 * h4 + h5)
+        left_inner_x = -(b3 / 2.0 + b2)
+        right_inner_x = (b3 / 2.0 + b2)
+        bottom_y = -float(height_mm) / 2.0 + h3
+        top_y = -float(height_mm) / 2.0 + h3 + 2.0 * h4 + h5
+        return SectionGeometry(
+            name=name,
+            outer_polygon=outer_polygon,
+            holes=[list(reversed(hole))],
+            metadata={
+                "preset": "box_section_fillet",
+                "geometry_branch": "drawing_variable_interior_box_beam",
+                "drawing_parameters_mm": {
+                    "B": float(width_mm),
+                    "H": float(height_mm),
+                    "h3": h3,
+                    "h4": h4,
+                    "h5": h5,
+                    "h6": h6,
+                    "h7": h7,
+                    "b2": b2,
+                    "b3": b3,
+                    "b2_start_from_left": derived_b2_start,
+                    "top_cover": top_cover,
+                    "top_edge_offset": 45.0,
+                    "top_side_drop": 70.0,
+                },
+                "wall_thicknesses_mm": {
+                    "top": top_cover,
+                    "bottom": h3,
+                    "left": float(width_mm) / 2.0 + left_inner_x,
+                    "right": float(width_mm) / 2.0 - right_inner_x,
+                },
+                "inner_chamfer_mm": b2,
+                "r_inner_mm": b2,
+                "r_outer_mm": outer_radius,
+                "n_fillet": n_fillet,
+                "inner_bounds_mm": {
+                    "left": left_inner_x,
+                    "right": right_inner_x,
+                    "bottom": bottom_y,
+                    "top": top_y,
+                },
+            },
+        )
+
     top, bottom, left, right = _resolve_wall_thicknesses(
         t_top_mm=t_top_mm,
         t_bottom_mm=t_bottom_mm,
@@ -1046,11 +1246,53 @@ def box_section_fillet_dimensions(
     n_fillet: int = 12,
     wall_thickness_mm: float | None = None,
     fillet_radius_mm: float | None = None,
+    h3_mm: float | None = None,
+    h4_mm: float | None = None,
+    h5_mm: float | None = None,
+    h6_mm: float | None = None,
+    h7_mm: float | None = None,
+    b2_mm: float | None = None,
+    b3_mm: float | None = None,
+    b2_start_from_left_mm: float | None = None,
     **kwargs: object,
 ) -> list[DimensionItem]:
     # n_fillet is intentionally kept in the dimension-helper signature to
     # mirror the geometry generator; dimension annotations do not discretize arcs.
     _ = n_fillet
+    use_drawing_parameters = any(value is not None for value in (h3_mm, h4_mm, h5_mm, h6_mm, h7_mm, b2_mm, b3_mm, b2_start_from_left_mm))
+    if use_drawing_parameters:
+        h3 = float(160.0 if h3_mm is None else h3_mm)
+        h4 = float(80.0 if h4_mm is None else h4_mm)
+        h5 = float(200.0 if h5_mm is None else h5_mm)
+        h6 = float(300.0 if h6_mm is None else h6_mm)
+        h7 = float(400.0 if h7_mm is None else h7_mm)
+        b2 = float(100.0 if b2_mm is None else b2_mm)
+        b3 = float(290.0 if b3_mm is None else b3_mm)
+        derived_b2_start = (float(width_mm) - (2.0 * b2 + b3)) / 2.0
+        b2_start = derived_b2_start if b2_start_from_left_mm is None else float(b2_start_from_left_mm)
+        dims = rectangle_dimensions(width_mm, height_mm, **kwargs)
+        w = width_mm / 2.0
+        h = height_mm / 2.0
+        half_b3 = b3 / 2.0
+        top_cover = height_mm - (h3 + 2.0 * h4 + h5)
+        # Outer profile note dimensions.
+        dims.extend(
+            [
+                _dim("h7", _point(-w - 80.0, -h), _point(-w - 80.0, -h + h7), _point(-w - 105.0, -h + h7 / 2.0), "vertical", h7),
+                _dim("h6", _point(-w - 45.0, -h + h7), _point(-w - 45.0, h), _point(-w - 20.0, -h + h7 + (height_mm - h7) / 2.0), "vertical", h6),
+                _dim("b3", _point(-half_b3, -h + h3 - 35.0), _point(half_b3, -h + h3 - 35.0), _point(0.0, -h + h3 - 65.0), "horizontal", b3),
+                _dim("b2", _point(-half_b3 - b2, -h + h3 + h4 + h5 + 25.0), _point(-half_b3, -h + h3 + h4 + h5 + 25.0), _point(-half_b3 - b2 / 2.0, -h + h3 + h4 + h5 + 55.0), "horizontal", b2),
+                _dim("h3", _point(-half_b3 - b2 - 55.0, -h), _point(-half_b3 - b2 - 55.0, -h + h3), _point(-half_b3 - b2 - 80.0, -h + h3 / 2.0), "vertical", h3),
+                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3), _point(-half_b3 - b2 - 25.0, -h + h3 + h4), _point(-half_b3 - b2, -h + h3 + h4 / 2.0), "vertical", h4),
+                _dim("h5", _point(-half_b3 - b2 - 55.0, -h + h3 + h4), _point(-half_b3 - b2 - 55.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 80.0, -h + h3 + h4 + h5 / 2.0), "vertical", h5),
+                _dim("h4", _point(-half_b3 - b2 - 25.0, -h + h3 + h4 + h5), _point(-half_b3 - b2 - 25.0, -h + h3 + 2.0 * h4 + h5), _point(-half_b3 - b2, -h + h3 + h4 + h5 + h4 / 2.0), "vertical", h4),
+                _dim("b2,start", _point(-w, h + 45.0), _point(-w + b2_start, h + 45.0), _point(-w / 2.0 + b2_start / 2.0, h + 75.0), "horizontal", b2_start),
+            ]
+        )
+        if top_cover > 0:
+            dims.append(_dim("top cover", _point(half_b3 + b2 + 55.0, -h + h3 + 2.0 * h4 + h5), _point(half_b3 + b2 + 55.0, h), _point(half_b3 + b2 + 85.0, -h + h3 + 2.0 * h4 + h5 + top_cover / 2.0), "vertical", top_cover))
+        return dims
+
     top, bottom, left, right = _resolve_wall_thicknesses(
         t_top_mm=t_top_mm,
         t_bottom_mm=t_bottom_mm,

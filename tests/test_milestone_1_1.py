@@ -83,15 +83,17 @@ def test_precast_box_beam_exterior_uses_straight_outside_face_and_chamfered_void
 
 
 
-def test_precast_box_beam_interior_uses_drawing_based_outer_profile() -> None:
+def test_precast_box_beam_interior_uses_user_drawing_variables() -> None:
     geometry = box_section_fillet(
         width_mm=990,
         height_mm=700,
-        t_top_mm=230,
-        t_bottom_mm=230,
-        t_left_mm=320,
-        t_right_mm=320,
-        r_inner_mm=60,
+        h3_mm=160,
+        h4_mm=80,
+        h5_mm=200,
+        h6_mm=300,
+        h7_mm=400,
+        b2_mm=100,
+        b3_mm=290,
         r_outer_mm=0,
     )
 
@@ -99,12 +101,50 @@ def test_precast_box_beam_interior_uses_drawing_based_outer_profile() -> None:
 
     assert result.is_valid, result.errors
     outer = [(round(p.x, 3), round(p.y, 3)) for p in geometry.outer_polygon]
+    hole = [(round(p.x, 3), round(p.y, 3)) for p in geometry.holes[0]]
+    assert geometry.metadata["geometry_branch"] == "drawing_variable_interior_box_beam"
+    assert geometry.metadata["drawing_parameters_mm"]["b2_start_from_left"] == pytest.approx(250)
     assert (-495.0, -350.0) in outer
     assert (495.0, -350.0) in outer
     assert (-450.0, 350.0) in outer
     assert (450.0, 350.0) in outer
-    assert not ((-495.0, 350.0) in outer or (495.0, 350.0) in outer)
+    assert (-495.0, 50.0) in outer
+    assert (495.0, 50.0) in outer
+    assert (-145.0, -190.0) in hole
+    assert (145.0, -190.0) in hole
+    assert (-245.0, -110.0) in hole
+    assert (245.0, 90.0) in hole
     assert len(geometry.holes[0]) == 8
+
+
+def test_precast_box_beam_interior_rejects_inconsistent_h6_h7_or_optional_b2_start() -> None:
+    with pytest.raises(ValueError, match="h6 and h7"):
+        box_section_fillet(
+            width_mm=990,
+            height_mm=700,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=320,
+            h7_mm=400,
+            b2_mm=100,
+            b3_mm=290,
+            b2_start_from_left_mm=250,
+        )
+
+    with pytest.raises(ValueError, match="b2_start_from_left"):
+        box_section_fillet(
+            width_mm=990,
+            height_mm=700,
+            h3_mm=160,
+            h4_mm=80,
+            h5_mm=200,
+            h6_mm=300,
+            h7_mm=400,
+            b2_mm=100,
+            b3_mm=290,
+            b2_start_from_left_mm=260,
+        )
 
 
 def test_precast_box_beam_exterior_keeps_right_outside_face_straight() -> None:

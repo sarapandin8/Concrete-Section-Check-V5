@@ -214,6 +214,61 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     assert schedule.loc[1, "Bonded zone m"] == "0.000 → 8.000"
 
 
+def test_data_editor_patch_payload_persists_first_edit_without_dataframe_value_error(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    import concrete_pmm_pro.ui.prestress_page as prestress_page  # noqa: PLC0415
+
+    _data_editor_payload_to_dataframe = prestress_page._data_editor_payload_to_dataframe
+    _normalize_girder_strand_layout_table = prestress_page._normalize_girder_strand_layout_table
+    _sync_girder_strand_layout_editor_to_table = prestress_page._sync_girder_strand_layout_editor_to_table
+
+    base = _normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 19,
+                    "y_mm_from_bottom": 50.0,
+                    "Left debond m": 0.0,
+                    "Right debond m": 0.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    prestress_page.st.session_state.clear()
+    prestress_page.st.session_state["girder_strand_layout_table"] = base
+    prestress_page.st.session_state["girder_strand_layout_editor"] = {
+        "edited_rows": {0: {"Left debond m": 1.5, "Right debond m": 1.0}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+
+    patched = _data_editor_payload_to_dataframe(prestress_page.st.session_state["girder_strand_layout_editor"], base)
+    assert patched.loc[0, "Left debond m"] == 1.5
+    assert patched.loc[0, "Right debond m"] == 1.0
+
+    _sync_girder_strand_layout_editor_to_table(30.0, "Left/right independent", None)
+    saved = prestress_page.st.session_state["girder_strand_layout_table"]
+    assert saved.loc[0, "Left debond m"] == 1.5
+    assert saved.loc[0, "Right debond m"] == 1.0
+
+
+
 def test_longitudinal_plot_orders_row_1_at_bottom_and_hides_termination_text(monkeypatch) -> None:
     import sys
     import types

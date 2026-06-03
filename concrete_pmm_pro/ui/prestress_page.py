@@ -1603,25 +1603,79 @@ def _persist_girder_strand_layout_table(normalized_table: pd.DataFrame) -> None:
     st.session_state["girder_strand_layout_table"] = pd.DataFrame(normalized_table).reset_index(drop=True)
 
 
+def _data_editor_payload_to_dataframe(payload: Any, fallback_table: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Return a dataframe from a Streamlit data_editor return/state payload.
+
+    ``st.data_editor`` returns a normal dataframe from the widget call, but the
+    widget value stored under ``st.session_state[key]`` during ``on_change`` is a
+    patch dictionary such as ``edited_rows`` / ``added_rows`` / ``deleted_rows``.
+    Passing that patch dictionary directly to ``pd.DataFrame`` raises Pandas'
+    ``Mixing dicts with non-Series`` ValueError.  This helper reconstructs the
+    edited table from the canonical fallback table plus the patch payload.
+    """
+
+    if isinstance(payload, pd.DataFrame):
+        return payload.reset_index(drop=True).copy()
+    if payload is None:
+        return pd.DataFrame(fallback_table).reset_index(drop=True).copy() if fallback_table is not None else pd.DataFrame()
+    if isinstance(payload, list):
+        return pd.DataFrame(payload).reset_index(drop=True)
+    if not isinstance(payload, dict):
+        return pd.DataFrame(payload).reset_index(drop=True)
+
+    patch_keys = {"edited_rows", "added_rows", "deleted_rows"}
+    if patch_keys.intersection(payload.keys()):
+        df = pd.DataFrame(fallback_table).reset_index(drop=True).copy() if fallback_table is not None else pd.DataFrame()
+        edited_rows = payload.get("edited_rows") or {}
+        for raw_index, changes in edited_rows.items():
+            try:
+                row_index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if row_index < 0:
+                continue
+            while row_index >= len(df.index):
+                df.loc[len(df.index)] = {column: None for column in df.columns}
+            if isinstance(changes, dict):
+                for column, value in changes.items():
+                    if column not in df.columns:
+                        df[column] = None
+                    df.at[row_index, column] = value
+        deleted_rows = payload.get("deleted_rows") or []
+        delete_indices: list[int] = []
+        for raw_index in deleted_rows:
+            try:
+                delete_indices.append(int(raw_index))
+            except (TypeError, ValueError):
+                continue
+        if delete_indices and not df.empty:
+            df = df.drop(index=[index for index in set(delete_indices) if index in df.index]).reset_index(drop=True)
+        added_rows = payload.get("added_rows") or []
+        if added_rows:
+            df = pd.concat([df, pd.DataFrame(added_rows)], ignore_index=True)
+        return df.reset_index(drop=True)
+
+    try:
+        return pd.DataFrame(payload).reset_index(drop=True)
+    except ValueError:
+        return pd.DataFrame([payload]).reset_index(drop=True)
+
+
 def _sync_girder_strand_layout_editor_to_table(
     span_length_m: float,
     debond_model: str,
     geometry: SectionGeometry | None,
 ) -> None:
-    """Persist the current data-editor payload during the first edit callback.
-
-    Streamlit's ``data_editor`` can keep widget-local edits one rerun ahead of
-    the separate project/session table if we only persist after the widget
-    returns.  This callback copies the editor payload into the canonical girder
-    strand table before the next script run, so debond lengths and row counts do
-    not need to be typed twice to stick.
-    """
+    """Persist current data-editor edits during the first edit callback."""
 
     edited = st.session_state.get("girder_strand_layout_editor")
     if edited is None:
         return
+    current = st.session_state.get("girder_strand_layout_table")
+    fallback = pd.DataFrame(current) if current is not None else None
+    edited_df = _data_editor_payload_to_dataframe(edited, fallback)
     normalized = _normalize_girder_strand_layout_table(
-        pd.DataFrame(edited),
+        edited_df,
         span_length_m=float(span_length_m),
         debond_model=str(debond_model),
         geometry=geometry,

@@ -34,6 +34,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "on_change=_sync_girder_strand_layout_editor_to_table" in PRESTRESS_SOURCE
     assert "Row 1 at the bottom" in PRESTRESS_SOURCE
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
+    assert "Advisory recommendation" in PRESTRESS_SOURCE
+    assert "Apply advisory layout to strand table" in PRESTRESS_SOURCE
+    assert "girder_advisory_debonding_recommendation_dataframe" in PRESTRESS_SOURCE
     assert "Debonding QA" in PRESTRESS_SOURCE
     assert "_render_girder_debonding_rule_dashboard" in PRESTRESS_SOURCE
     assert "Debonding rule audit — individual preview" in PRESTRESS_SOURCE
@@ -778,3 +781,60 @@ def test_girder_strand_editor_store_does_not_force_rerun_during_numeric_edit(mon
     stored = st.session_state["girder_strand_layout_table"]
     assert float(stored.loc[0, "Left debond m"]) == 1.5
     assert float(stored.loc[0, "Right debond m"]) == 1.0
+
+
+def test_advisory_recommendation_apply_helper_updates_selected_strands(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    import concrete_pmm_pro.ui.prestress_page as prestress_page  # noqa: PLC0415
+
+    table = prestress_page._normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 19,
+                    "y_mm_from_bottom": 50.0,
+                    "Left debond m": 0.0,
+                    "Right debond m": 0.0,
+                    "Debonded strand nos": "",
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    recommendation = pd.DataFrame(
+        [
+            {
+                "Group ID": "Row 1",
+                "Recommended debonded strand nos": "1,19",
+                "Recommended count": 2,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+            }
+        ]
+    )
+    applied = prestress_page._apply_girder_advisory_debonding_recommendation(
+        table,
+        recommendation,
+        span_length_m=30.0,
+        debond_model="Left/right independent",
+        geometry=None,
+    )
+    assert applied.loc[0, "Debonded strand nos"] == "1,19"
+    assert applied.loc[0, "Left debond m"] == 1.0
+    assert applied.loc[0, "Right debond m"] == 1.0
+    assert "PS6B advisory candidate applied" in applied.loc[0, "Note"]

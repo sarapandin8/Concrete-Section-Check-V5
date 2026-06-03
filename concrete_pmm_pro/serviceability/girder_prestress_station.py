@@ -54,6 +54,18 @@ CRITICAL_TRANSFER_STATION_COLUMNS = [
     "Review note",
 ]
 
+ADVISORY_DEBONDING_RECOMMENDATION_COLUMNS = [
+    "Group ID",
+    "Row order",
+    "No. strands",
+    "Recommended debonded strand nos",
+    "Recommended count",
+    "Left debond m",
+    "Right debond m",
+    "Guardrail status",
+    "Engineering reason",
+]
+
 
 @dataclass(frozen=True)
 class ActiveStrandGroup:
@@ -155,6 +167,43 @@ class GirderCriticalTransferStation:
             "Station type": self.station_type,
             "Source": self.source,
             "Review note": self.note,
+        }
+
+
+@dataclass(frozen=True)
+class GirderDebondingAdvisoryRecommendation:
+    """One code-aware advisory debonding recommendation row.
+
+    PS6B is intentionally advisory.  It uses common debonding guardrails
+    (total 25%, per-row 40%, symmetric strand-pair selection, and L/5 length
+    cap) to propose candidate debonded strand numbers.  It does not perform
+    final transfer stress, development, shear, end-zone, or loss checks.
+    """
+
+    group_id: str
+    row_order: int
+    no_strands: int
+    recommended_numbers: tuple[int, ...]
+    left_debond_m: float
+    right_debond_m: float
+    guardrail_status: str
+    engineering_reason: str
+
+    @property
+    def recommended_numbers_label(self) -> str:
+        return ",".join(str(value) for value in self.recommended_numbers) if self.recommended_numbers else "—"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "Group ID": self.group_id,
+            "Row order": self.row_order,
+            "No. strands": self.no_strands,
+            "Recommended debonded strand nos": self.recommended_numbers_label,
+            "Recommended count": len(self.recommended_numbers),
+            "Left debond m": self.left_debond_m,
+            "Right debond m": self.right_debond_m,
+            "Guardrail status": self.guardrail_status,
+            "Engineering reason": self.engineering_reason,
         }
 
 
@@ -693,6 +742,121 @@ def girder_debonding_preview_status(
     if "REVIEW" in statuses:
         return "REVIEW"
     return "OK"
+
+
+def _symmetric_outer_pair_numbers(no_strands: int, requested_count: int) -> tuple[int, ...]:
+    """Return symmetric outer strand numbers, limited to an even count."""
+
+    count = max(0, int(no_strands))
+    requested = max(0, int(requested_count))
+    if count < 2 or requested < 2:
+        return ()
+    even_requested = requested if requested % 2 == 0 else requested - 1
+    max_even = (count // 2) * 2
+    selected_count = min(even_requested, max_even)
+    selected: list[int] = []
+    pair_count = selected_count // 2
+    for offset in range(pair_count):
+        selected.extend([1 + offset, count - offset])
+    return tuple(sorted(set(selected)))
+
+
+def girder_advisory_debonding_recommendations(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+    max_pairs_per_row: int = 1,
+    base_debond_length_m: float = 1.0,
+    length_step_m: float = 0.5,
+) -> tuple[GirderDebondingAdvisoryRecommendation, ...]:
+    """Return a conservative code-aware advisory debonding layout.
+
+    The recommendation is intentionally a starter layout, not final design. It
+    selects symmetric outer strand pairs from lower rows first because those
+    strands usually have the largest eccentricity in straight pretensioned
+    girders.  Selection is limited by common code guardrails: total debonded
+    strands <= 25%, per-row debonded strands <= 40%, symmetric pair selection,
+    and debond length <= L/5.
+    """
+
+    span = _clamp_span_length(span_length_m)
+    active_rows = list(active_girder_strand_rows(table))
+    total_strands = sum(max(0, int(round(_to_float(row.get(_COUNT_COLUMN)) or 0.0))) for row in active_rows)
+    total_limit = int(total_strands * 0.25)
+    total_limit -= total_limit % 2  # preserve symmetric pair selection globally
+    remaining = max(0, total_limit)
+    length_limit = span / 5.0
+    sorted_rows = sorted(
+        enumerate(active_rows, start=1),
+        key=lambda item: (float(_to_float(item[1].get(_Y_FROM_BOTTOM_COLUMN)) or 0.0), item[0]),
+    )
+    recommendations: list[GirderDebondingAdvisoryRecommendation] = []
+    proposed_row_index = 0
+    for row_order, row in sorted_rows:
+        group_id = str(row.get(_GROUP_ID_COLUMN) or f"Row {row_order}")
+        row_total = max(0, int(round(_to_float(row.get(_COUNT_COLUMN)) or 0.0)))
+        per_row_limit = int(row_total * 0.40)
+        per_row_limit -= per_row_limit % 2
+        requested = max(0, int(max_pairs_per_row)) * 2
+        select_count = min(requested, per_row_limit, remaining)
+        numbers = _symmetric_outer_pair_numbers(row_total, select_count)
+        if numbers:
+            length = min(length_limit, base_debond_length_m + proposed_row_index * length_step_m)
+            length = max(0.0, round(length, 3))
+            remaining -= len(numbers)
+            proposed_row_index += 1
+            recommendations.append(
+                GirderDebondingAdvisoryRecommendation(
+                    group_id=group_id,
+                    row_order=row_order,
+                    no_strands=row_total,
+                    recommended_numbers=numbers,
+                    left_debond_m=length,
+                    right_debond_m=length,
+                    guardrail_status="ADVISORY OK",
+                    engineering_reason=(
+                        "Symmetric outer pair selected from lower rows first. Guardrails applied: "
+                        "total <=25%, row <=40%, symmetric pair, debond length <=L/5. "
+                        "Final transfer stress, development, shear, and end-zone checks are still required."
+                    ),
+                )
+            )
+        else:
+            if row_total < 2:
+                reason = "Skipped: fewer than two strands; symmetric pair selection is not possible."
+            elif per_row_limit < 2:
+                reason = "Skipped: 40% per-row preview limit permits no symmetric pair in this row."
+            elif remaining < 2:
+                reason = "Skipped: 25% total preview limit is already used by lower candidate rows."
+            else:
+                reason = "Skipped: no code-aware symmetric pair selected by the conservative starter rule."
+            recommendations.append(
+                GirderDebondingAdvisoryRecommendation(
+                    group_id=group_id,
+                    row_order=row_order,
+                    no_strands=row_total,
+                    recommended_numbers=(),
+                    left_debond_m=0.0,
+                    right_debond_m=0.0,
+                    guardrail_status="NO ACTION",
+                    engineering_reason=reason,
+                )
+            )
+    return tuple(recommendations)
+
+
+def girder_advisory_debonding_recommendation_dataframe(
+    table: pd.DataFrame | Iterable[Mapping[str, Any]] | None,
+    *,
+    span_length_m: float,
+    max_pairs_per_row: int = 1,
+) -> pd.DataFrame:
+    recommendations = girder_advisory_debonding_recommendations(
+        table,
+        span_length_m=span_length_m,
+        max_pairs_per_row=max_pairs_per_row,
+    )
+    return pd.DataFrame([item.as_dict() for item in recommendations], columns=ADVISORY_DEBONDING_RECOMMENDATION_COLUMNS)
 
 
 def _active_group_from_row(row: Mapping[str, Any], *, effective_no_strands: int | None = None) -> ActiveStrandGroup:

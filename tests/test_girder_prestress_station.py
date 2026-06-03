@@ -7,6 +7,8 @@ from concrete_pmm_pro.serviceability.girder_prestress_station import (
     debonded_strand_numbers_for_row,
     effective_strand_count_in_row_at_station,
     evaluate_girder_prestress_station,
+    girder_advisory_debonding_recommendation_dataframe,
+    girder_advisory_debonding_recommendations,
     girder_critical_transfer_station_dataframe,
     girder_debonding_layout_zones,
     girder_debonding_preview_status,
@@ -249,3 +251,50 @@ def test_critical_transfer_station_dataframe_includes_end_faces_and_sleeve_trans
     assert critical.loc[0, "Station type"] == "End face"
     assert "Sleeve transition" in set(critical["Station type"])
     assert any("transfer-length" in note for note in critical["Review note"])
+
+
+def test_advisory_debonding_recommendation_selects_symmetric_outer_pairs_with_code_guardrails() -> None:
+    layout = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "No. Strands": 19,
+                "Area/Strand_mm2": 98.7,
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            },
+            {
+                "Active": True,
+                "Group ID": "Row 2",
+                "No. Strands": 17,
+                "Area/Strand_mm2": 98.7,
+                "y_mm_from_bottom": 100.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            },
+        ]
+    )
+    recommendations = girder_advisory_debonding_recommendations(layout, span_length_m=30.0)
+    assert recommendations[0].group_id == "Row 1"
+    assert recommendations[0].recommended_numbers == (1, 19)
+    assert recommendations[0].left_debond_m == 1.0
+    assert recommendations[0].right_debond_m == 1.0
+    assert recommendations[0].guardrail_status == "ADVISORY OK"
+    assert recommendations[1].recommended_numbers == (1, 17)
+    assert recommendations[1].left_debond_m == 1.5
+    proposed = sum(len(item.recommended_numbers) for item in recommendations)
+    assert proposed <= int((19 + 17) * 0.25)
+
+
+def test_advisory_debonding_recommendation_dataframe_reports_no_action_when_limits_are_exhausted() -> None:
+    layout = pd.DataFrame(
+        [
+            {"Active": True, "Group ID": "Small row", "No. Strands": 3, "y_mm_from_bottom": 50.0},
+        ]
+    )
+    df = girder_advisory_debonding_recommendation_dataframe(layout, span_length_m=10.0)
+    assert df.loc[0, "Guardrail status"] == "NO ACTION"
+    assert df.loc[0, "Recommended debonded strand nos"] == "—"
+    assert "25%" in df.loc[0, "Engineering reason"] or "40%" in df.loc[0, "Engineering reason"]

@@ -39,6 +39,7 @@ from concrete_pmm_pro.serviceability.girder_prestress_station import (
     debonded_strand_count_for_row,
     debonded_strand_numbers_for_row,
     explicit_debonded_strand_numbers,
+    girder_advisory_debonding_recommendation_dataframe,
     girder_critical_transfer_station_dataframe,
     girder_debonding_preview_status,
     girder_debonding_rule_audit_dataframe,
@@ -1900,6 +1901,110 @@ def _render_girder_debonding_rule_dashboard(table: pd.DataFrame, span_length_m: 
         )
 
 
+def _apply_girder_advisory_debonding_recommendation(
+    table: pd.DataFrame,
+    recommendation: pd.DataFrame,
+    *,
+    span_length_m: float,
+    debond_model: str,
+    geometry: SectionGeometry | None,
+) -> pd.DataFrame:
+    """Apply PS6B advisory recommendation to a copy of the strand layout table."""
+
+    updated = pd.DataFrame(table).copy()
+    if updated.empty or recommendation.empty:
+        return _normalize_girder_strand_layout_table(updated, span_length_m=span_length_m, debond_model=debond_model, geometry=geometry)
+    recommendation_by_group = {str(row.get("Group ID") or ""): row.to_dict() for _, row in recommendation.iterrows()}
+    for index, row in updated.iterrows():
+        group = str(row.get("Group ID") or "")
+        rec = recommendation_by_group.get(group)
+        if rec is None:
+            continue
+        selected = str(rec.get("Recommended debonded strand nos") or "").strip()
+        count = int(_to_float(rec.get("Recommended count")) or 0)
+        if count <= 0 or selected in {"", "—"}:
+            continue
+        updated.at[index, "Debonded strand nos"] = selected
+        updated.at[index, "Left debond m"] = float(_to_float(rec.get("Left debond m")) or 0.0)
+        updated.at[index, "Right debond m"] = float(_to_float(rec.get("Right debond m")) or 0.0)
+        note = str(row.get("Note") or "").strip()
+        advisory_note = "PS6B advisory candidate applied; verify final code checks."
+        updated.at[index, "Note"] = advisory_note if not note else f"{note} | {advisory_note}"
+    normalized = _normalize_girder_strand_layout_table(updated, span_length_m=span_length_m, debond_model=debond_model, geometry=geometry)
+    normalized = _apply_computed_girder_strand_spacing(normalized, geometry)
+    return normalized
+
+
+def _render_girder_advisory_debonding_recommendation(
+    table: pd.DataFrame,
+    *,
+    span_length_m: float,
+    debond_model: str,
+    geometry: SectionGeometry | None,
+) -> None:
+    """Render PS6B code-aware advisory recommendation workflow."""
+
+    st.markdown("#### Code-aware advisory debonding recommendation")
+    st.caption(
+        "PS6B proposes candidate debonded strand pairs using code guardrails only: total ≤25%, per-row ≤40%, symmetric outer pairs, and debond length ≤L/5. "
+        "It is not a final automatic design; transfer stress, development, shear, end-zone reinforcement, and loss checks remain engineering review items."
+    )
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        max_pairs = st.number_input(
+            "Max symmetric pairs per row",
+            min_value=1,
+            max_value=3,
+            value=1,
+            step=1,
+            key="girder_ps6b_max_pairs_per_row",
+            help="Conservative starter: one outer pair per eligible row. Increase only for advisory exploration.",
+        )
+    with col2:
+        st.info(
+            "Recommendation order is bottom row upward. The app does not claim final PASS; it only prepares a reviewable candidate layout.",
+            icon="ℹ️",
+        )
+
+    generated = girder_advisory_debonding_recommendation_dataframe(
+        table,
+        span_length_m=span_length_m,
+        max_pairs_per_row=int(max_pairs),
+    )
+    proposed_count = int(generated.get("Recommended count", pd.Series(dtype=float)).sum()) if not generated.empty else 0
+    total_strands = int(_active_girder_strand_layout_rows(table).get("No. Strands", pd.Series(dtype=float)).sum()) if not _active_girder_strand_layout_rows(table).empty else 0
+    ratio = proposed_count / total_strands if total_strands > 0 else 0.0
+    metrics = [
+        PrestressMetric("Advisory status", "PREVIEW", "Code guardrails only", "review", strong=True),
+        PrestressMetric("Proposed debonded", f"{proposed_count} / {total_strands}", f"ratio = {ratio:.1%}", "info"),
+        PrestressMetric("Total limit", f"≤ {int(total_strands * 0.25)} strands", "25% preview guardrail", "neutral"),
+        PrestressMetric("Length limit", f"≤ {span_length_m / 5.0:.3f} m", "L/5 preview guardrail", "neutral"),
+    ]
+    st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
+    st.dataframe(generated, use_container_width=True, hide_index=True)
+    st.warning(
+        "This is an advisory starter layout, not final code-certified debonding design. Apply only after engineering review.",
+        icon="⚠️",
+    )
+    if proposed_count <= 0:
+        st.info("No candidate strands were selected by the conservative code-aware starter rule.")
+        return
+    if st.button("Apply advisory layout to strand table", key="girder_ps6b_apply_advisory_layout"):
+        applied = _apply_girder_advisory_debonding_recommendation(
+            table,
+            generated,
+            span_length_m=span_length_m,
+            debond_model=debond_model,
+            geometry=geometry,
+        )
+        _persist_girder_strand_layout_table(applied)
+        st.session_state.pop("girder_strand_layout_editor", None)
+        st.success("Advisory debonding layout applied to the strand table. Re-check Debonding QA before using results.")
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
+
+
 def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: SectionGeometry | None) -> go.Figure:
     fig = go.Figure()
     bottom_y = _section_bottom_y_from_geometry(geometry)
@@ -2329,7 +2434,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             for message in warnings:
                 st.warning(message)
 
-    tab_layout, tab_debond, tab_rules, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Debonding QA", "Effective prestress preview"])
+    tab_layout, tab_debond, tab_rules, tab_advisory, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Debonding QA", "Advisory recommendation", "Effective prestress preview"])
     with tab_layout:
         st.plotly_chart(_plot_girder_strand_cross_section_layout(normalized, geometry), use_container_width=True)
         with st.expander("Plot assumptions", expanded=False):
@@ -2349,6 +2454,13 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             )
     with tab_rules:
         _render_girder_debonding_rule_dashboard(normalized, float(span))
+    with tab_advisory:
+        _render_girder_advisory_debonding_recommendation(
+            normalized,
+            span_length_m=float(span),
+            debond_model=str(debond_model),
+            geometry=geometry,
+        )
     with tab_effective:
         st.caption(
             "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Loss calculation is a future milestone."

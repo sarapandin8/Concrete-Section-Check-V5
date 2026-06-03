@@ -17,7 +17,7 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Effective prestress preview" in PRESTRESS_SOURCE
     assert "12.7 mm low-relaxation strand" in PRESTRESS_SOURCE
     assert "15.2 mm low-relaxation strand" in PRESTRESS_SOURCE
-    assert "Individual strands" in PRESTRESS_SOURCE
+    assert "individual bonded/unbonded strand selection within a row is a future advisory-design milestone" in PRESTRESS_SOURCE
     assert "Computed spacing_mm" in PRESTRESS_SOURCE
     assert "3db minimum spacing" in PRESTRESS_SOURCE
     assert "reduce the number of strands in this row" in PRESTRESS_SOURCE
@@ -25,12 +25,12 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "does not change current Analysis results" in PRESTRESS_SOURCE
     assert "Rebuild default strand layout from current section" in PRESTRESS_SOURCE
     assert "2 rows at y=50/100 mm" in PRESTRESS_SOURCE
-    assert 'line={"dash": "solid"}' in PRESTRESS_SOURCE
-    assert "Debonded sleeve — Pe ignored in PS5 preview" in PRESTRESS_SOURCE
-    assert "Sleeve termination marker" in PRESTRESS_SOURCE
+    assert 'line={"color": section_line_color, "width": 2.0, "dash": "solid"}' in PRESTRESS_SOURCE
+    assert 'name="Bonded"' in PRESTRESS_SOURCE
+    assert 'name="Debonded"' in PRESTRESS_SOURCE
     assert "diamond-open" in PRESTRESS_SOURCE
-    assert "Row labels with debond length" in PRESTRESS_SOURCE
-    assert "Bonded/effective line intentionally uses one color for all rows" in PRESTRESS_SOURCE
+    assert "Row status labels" in PRESTRESS_SOURCE
+    assert "Row 1 at the bottom" in PRESTRESS_SOURCE
     assert "_girder_debonding_schedule_dataframe" in PRESTRESS_SOURCE
 
 
@@ -143,13 +143,12 @@ def test_longitudinal_debonding_plot_shows_sleeve_symbols_with_streamlit_stub(mo
     trace_names = [trace.name for trace in fig.data]
     marker_symbols = [getattr(getattr(trace, "marker", None), "symbol", None) for trace in fig.data]
 
-    assert "Debonded sleeve — Pe ignored in PS5 preview" in trace_names
-    assert "Bonded / effective — Pe counted" in trace_names
-    assert "Sleeve termination marker" in trace_names
+    assert "Debonded" in trace_names
+    assert "Bonded" in trace_names
     assert "diamond-open" in marker_symbols
     assert any(annotation.text == "L=1.00 m" for annotation in fig.layout.annotations)
     assert any(annotation.text == "R=2.00 m" for annotation in fig.layout.annotations)
-    bonded_traces = [trace for trace in fig.data if trace.name == "Bonded / effective — Pe counted"]
+    bonded_traces = [trace for trace in fig.data if trace.name == "Bonded"]
     assert bonded_traces
     assert all(trace.line.color == "#1f77b4" for trace in bonded_traces)
 
@@ -199,9 +198,8 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
     fig = _plot_girder_strand_cross_section_layout(table, None)
     trace_names = [trace.name for trace in fig.data]
-    assert "Debonded both ends" in trace_names
-    assert "Right debonded" in trace_names
-    assert "Row labels with debond length" in trace_names
+    assert "Bonded" in trace_names or "Debonded" in trace_names
+    assert "Row status labels" in trace_names
 
     schedule = _girder_debonding_schedule_dataframe(table, span_length_m=10.0)
     assert schedule.loc[0, "Debond status"] == "Debonded both ends"
@@ -209,6 +207,55 @@ def test_cross_section_plot_and_debond_schedule_show_row_debond_status(monkeypat
     assert schedule.loc[0, "Right debond m"] == 1.0
     assert schedule.loc[1, "Debond status"] == "Right debonded"
     assert schedule.loc[1, "Bonded zone m"] == "0.000 → 8.000"
+
+
+def test_longitudinal_plot_orders_row_1_at_bottom_and_hides_termination_text(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _plot_girder_longitudinal_debonding_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+            },
+            {
+                "Active": True,
+                "Group ID": "Row 2",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "y_mm_from_bottom": 100.0,
+                "Left debond m": 0.0,
+                "Right debond m": 0.0,
+            },
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
+    fig = _plot_girder_longitudinal_debonding_layout(table, span_length_m=10.0)
+    assert list(fig.layout.yaxis.tickvals) == [1, 2]
+    assert fig.layout.yaxis.ticktext[0].startswith("Row 1")
+    assert all("termination" not in str(getattr(trace, "text", "")).lower() for trace in fig.data)
+
 
 
 def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> None:

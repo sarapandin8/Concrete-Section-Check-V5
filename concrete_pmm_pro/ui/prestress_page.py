@@ -3168,7 +3168,7 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
 
         for _, point in points.iterrows():
             props = _strand_size_properties(point.get("Strand Size"))
-            radius = max(float(props["diameter_mm"]) / 2.0, 9.0)
+            radius = float(props["diameter_mm"]) / 2.0
             color = debonded_color if bool(point.get("Debonded selected")) else bonded_color
             x_value = float(point["x_mm"])
             y_value = float(point["y_mm_abs"])
@@ -3229,10 +3229,10 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
                     y=[float(point["y_mm_abs"]) for point, _, _, _ in debonded_points],
                     mode="markers",
                     marker={
-                        "size": 11,
+                        "size": 10,
                         "color": "rgba(255,255,255,0.0)",
-                        "symbol": "diamond",
-                        "line": {"color": debonded_color, "width": 1.8},
+                        "symbol": "circle",
+                        "line": {"color": debonded_color, "width": 2.0},
                     },
                     name="Debonded",
                     text=[_point_hover(record) for record in debonded_points],

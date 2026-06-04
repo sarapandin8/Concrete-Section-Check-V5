@@ -930,7 +930,53 @@ def test_cross_section_legend_uses_open_markers_matching_section_symbols(monkeyp
     assert debonded.marker.color == "rgba(255,255,255,0.0)"
     assert bonded.marker.line.color == "#1f77b4"
     assert debonded.marker.line.color == "#dc2626"
+    assert bonded.marker.symbol == "circle"
+    assert debonded.marker.symbol == "circle"
 
+
+def test_cross_section_strand_shapes_are_true_scale_circles(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _plot_girder_strand_cross_section_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "x coordinates (mm)": "-25,25",
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+                "Debonded strand nos": "1",
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
+    fig = _plot_girder_strand_cross_section_layout(table, None)
+    strand_circles = [shape for shape in fig.layout.shapes if getattr(shape, "type", None) == "circle"]
+    assert len(strand_circles) == 2
+    diameters = sorted(round(float(shape.x1) - float(shape.x0), 3) for shape in strand_circles)
+    assert diameters == [12.7, 12.7]
+    line_colors = {shape.line.color for shape in strand_circles}
+    assert "#1f77b4" in line_colors
+    assert "#dc2626" in line_colors
 
 
 def test_x_coordinate_list_mismatch_warns_without_crashing(monkeypatch) -> None:

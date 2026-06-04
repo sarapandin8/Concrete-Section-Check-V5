@@ -401,6 +401,33 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
     return assignment
 
 
+def _render_section_builder_status_strip(preset: dict[str, Any], material_assignment: dict[str, Any]) -> None:
+    """Render the compact default context strip for the definition workspace."""
+
+    settings = _analysis_mode_from_session_state()
+    primary = str(material_assignment.get("primary_material_name", "N/A"))
+    deck = str(material_assignment.get("deck_topping_material_name", "N/A"))
+    material_detail = f"Precast {primary}"
+    if _is_composite_capable_preset(preset):
+        material_detail += f" / topping {deck}"
+
+    rebar_status = "Enabled" if ordinary_rebar_enabled(st.session_state) else "Disabled"
+    prestress_status = "Enabled" if prestressing_steel_enabled(st.session_state) else "Disabled"
+
+    st.markdown("##### Section Workspace Status")
+    st.markdown(
+        _property_strip_html(
+            [
+                SectionMetric("Section", str(preset.get("display_name", "N/A")), str(preset.get("category", "General")), "info", True),
+                SectionMetric("Workflow", analysis_mode_label(settings), _girder_section_family_label(preset), "ready", True),
+                SectionMetric("Axis", "x/y/z", "x horizontal, y vertical, z longitudinal", "neutral"),
+                SectionMetric("Rebar / Prestress", f"{rebar_status} / {prestress_status}", "stored reinforcement is previewed on its own page", "ready" if prestress_status == "Enabled" or rebar_status == "Enabled" else "neutral"),
+                SectionMetric("Concrete", material_detail, "material controls are in the details expander", "info"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
 
 def _preset_option_label(preset: dict[str, Any]) -> str:
     """Return the user-facing label for a section preset selector option."""
@@ -1221,7 +1248,9 @@ def _render_validation_panel(result: ValidationResult) -> None:
 def _render_section_definition_panel(
     presets: list[dict[str, Any]],
     categories: list[str],
-) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Render the compact top context panel and return the active preset/materials."""
+
     analysis_mode_settings = _analysis_mode_from_session_state()
     available_presets = _filter_presets_for_member_type(presets, analysis_mode_settings)
     available_categories = _categories_for_filtered_presets(categories, available_presets)
@@ -1229,11 +1258,10 @@ def _render_section_definition_panel(
     with st.container(border=True):
         st.markdown("#### Section Definition")
         st.markdown(
-            '<div class="cpmm-section-note">Define the concrete section geometry used by downstream analysis.</div>',
+            '<div class="cpmm-section-note">Select the active concrete section. The main dimension editor is shown below beside the live section preview.</div>',
             unsafe_allow_html=True,
         )
 
-        st.markdown("##### Section Type")
         preset_keys, preset_map, label_map = _preset_maps(available_presets)
         if not preset_keys:
             st.error("No section presets are available.")
@@ -1271,12 +1299,13 @@ def _render_section_definition_panel(
 
         st.caption(
             f"Geometry family: {selected_category} · "
-            "Select a parametric preset, then edit the dimensions below."
+            "Geometry inputs are edited in the definition workspace below."
         )
 
-        _render_member_type_section_guidance(preset)
-        _render_axis_convention_card()
-        _render_reinforcement_prestress_system_panel(preset)
+        with st.expander("Project / workflow / axis / reinforcement details", expanded=False):
+            _render_member_type_section_guidance(preset)
+            _render_axis_convention_card()
+            _render_reinforcement_prestress_system_panel(preset)
 
         with st.expander("Browse by geometry family", expanded=False):
             st.caption(
@@ -1293,13 +1322,31 @@ def _render_section_definition_panel(
             else:
                 st.caption("No presets are available in this family yet.")
 
-        material_assignment = _render_concrete_material_assignment(preset)
+        with st.expander("Concrete Material Assignment", expanded=False):
+            material_assignment = _render_concrete_material_assignment(preset)
 
-        st.markdown("##### Dimension Labels")
-        label_mode_label = st.selectbox("Dimension label mode", ["Symbol + Value", "Symbol only", "Value only"], index=0)
+        _render_section_builder_status_strip(preset, material_assignment)
+
+    return preset, material_assignment
+
+
+def _render_geometry_parameters_workspace(
+    preset: dict[str, Any],
+    material_assignment: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Render the main geometry input workspace shown beside the live preview."""
+
+    with st.container(border=True):
+        st.markdown("#### Geometry Parameters")
+        st.markdown(
+            '<div class="cpmm-section-note">Primary section dimensions are kept at the same level as the live preview. '
+            'Workflow, axis, reinforcement, and material details remain collapsed above.</div>',
+            unsafe_allow_html=True,
+        )
+
+        label_mode_label = st.selectbox("Dimension labels", ["Symbol + Value", "Symbol only", "Value only"], index=0)
         label_mode = {"Symbol + Value": "symbol_value", "Symbol only": "symbol", "Value only": "value"}[label_mode_label]
 
-        st.markdown("##### Geometry Parameters")
         params: dict[str, Any] = {}
         hidden_material_parameters = _hidden_material_parameter_names(preset)
         visible_parameters = [
@@ -1345,8 +1392,7 @@ def _render_section_definition_panel(
         if _is_parametric_plank_girder(preset):
             _render_parametric_plank_girder_dimension_qa(preset, params)
 
-    return preset, label_mode, params
-
+    return label_mode, params
 
 def _build_geometry(
     preset: dict[str, Any],
@@ -1674,14 +1720,17 @@ def render_section_builder() -> None:
     presets = load_section_presets()
     categories = load_section_categories()
 
-    definition_col, preview_col = st.columns([0.92, 1.08], gap="large")
-    with definition_col:
-        selection = _render_section_definition_panel(presets, categories)
+    selection = _render_section_definition_panel(presets, categories)
 
     if selection is None:
         return
 
-    preset, label_mode, params = selection
+    preset, material_assignment = selection
+
+    parameter_col, preview_col = st.columns([0.92, 1.08], gap="large")
+    with parameter_col:
+        label_mode, params = _render_geometry_parameters_workspace(preset, material_assignment)
+
     geometry, dimensions, validation = _build_geometry(preset, params)
 
     if geometry is not None and validation.is_valid:

@@ -435,3 +435,39 @@ def test_plank_and_box_beam_be_helper_defaults_match_user_request() -> None:
     assert section_builder._precast_composite_girder_metadata_defaults(exterior_box)["Be_mm"] == 1000.0
     assert section_builder._precast_composite_girder_metadata_defaults(interior_box)["girder_length_mm"] == 20000.0
     assert section_builder._precast_composite_girder_metadata_defaults(exterior_box)["girder_length_mm"] == 20000.0
+
+
+def test_section_builder_definition_workspace_layout_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "Section Workspace Status" in source
+    assert "Project / workflow / axis / reinforcement details" in source
+    assert "Primary section dimensions are kept at the same level as the live preview" in source
+    assert "Dimension labels" in source
+    assert "material controls are in the details expander" in source
+
+
+def test_section_builder_status_strip_helper_includes_workflow_and_material(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {"analysis_mode_settings": AnalysisModeSettings(member_type="beam_girder")}
+    rendered: list[str] = []
+    st.markdown = lambda body, **kwargs: rendered.append(str(body))
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui import section_builder as sb  # noqa: PLC0415
+    monkeypatch.setattr(sb, "st", st)
+
+    preset = preset_by_key("parametric_plank_girder_voided_interior")
+    sb._render_section_builder_status_strip(
+        preset,
+        {"primary_material_name": "C45_PRECAST", "deck_topping_material_name": "C35_TOPPING"},
+    )
+
+    output = "\n".join(rendered)
+    assert "Section Workspace Status" in output
+    assert "Precast Voided Plank Girder" in output
+    assert "C45_PRECAST" in output
+    assert "C35_TOPPING" in output

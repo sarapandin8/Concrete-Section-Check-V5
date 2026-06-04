@@ -140,6 +140,59 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
 ]
 
 GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss", "Approximate code-based loss", "Refined AASHTO time-dependent loss"]
+
+REFINED_COEFFICIENT_USER_DEFINED = "User-defined / project-specific"
+REFINED_COEFFICIENT_PRESETS: dict[str, dict[str, float]] = {
+    "Thailand high humidity typical (RH ≈ 75%)": {
+        "humidity_percent": 75.0,
+        "Kid": 0.85,
+        "Kdf": 0.85,
+        "eps_bid_microstrain": 80.0,
+        "eps_bdf_microstrain": 60.0,
+        "psi_td_ti": 0.60,
+        "psi_tf_ti": 1.60,
+        "psi_tf_td": 1.00,
+        "delta_fcd_MPa": 0.0,
+        "delta_fcdf_MPa": 0.0,
+    },
+    "Moderate humidity (RH ≈ 60%)": {
+        "humidity_percent": 60.0,
+        "Kid": 0.85,
+        "Kdf": 0.85,
+        "eps_bid_microstrain": 100.0,
+        "eps_bdf_microstrain": 75.0,
+        "psi_td_ti": 0.70,
+        "psi_tf_ti": 1.80,
+        "psi_tf_td": 1.10,
+        "delta_fcd_MPa": 0.0,
+        "delta_fcdf_MPa": 0.0,
+    },
+    "Dry climate conservative (RH ≈ 45%)": {
+        "humidity_percent": 45.0,
+        "Kid": 0.85,
+        "Kdf": 0.85,
+        "eps_bid_microstrain": 130.0,
+        "eps_bdf_microstrain": 95.0,
+        "psi_td_ti": 0.85,
+        "psi_tf_ti": 2.10,
+        "psi_tf_td": 1.25,
+        "delta_fcd_MPa": 0.0,
+        "delta_fcdf_MPa": 0.0,
+    },
+}
+REFINED_COEFFICIENT_PRESET_OPTIONS = [*REFINED_COEFFICIENT_PRESETS.keys(), REFINED_COEFFICIENT_USER_DEFINED]
+DEFAULT_REFINED_COEFFICIENT_PRESET = "Thailand high humidity typical (RH ≈ 75%)"
+REFINED_PRESET_WIDGET_KEYS = {
+    "Kid": "girder_refined_kid",
+    "Kdf": "girder_refined_kdf",
+    "eps_bid_microstrain": "girder_refined_eps_bid",
+    "eps_bdf_microstrain": "girder_refined_eps_bdf",
+    "psi_td_ti": "girder_refined_psi_td_ti",
+    "psi_tf_ti": "girder_refined_psi_tf_ti",
+    "psi_tf_td": "girder_refined_psi_tf_td",
+    "delta_fcd_MPa": "girder_refined_delta_fcd",
+    "delta_fcdf_MPa": "girder_refined_delta_fcdf",
+}
 GIRDER_LOSS_FORCE_STATE_COLUMNS = [
     "Active",
     "Group ID",
@@ -1490,18 +1543,82 @@ def _girder_code_loss_settings_from_session() -> dict[str, Any]:
     settings.setdefault("age_transfer_days", 1.0)
     settings.setdefault("age_deck_days", 30.0)
     settings.setdefault("final_age_days", 10000.0)
-    settings.setdefault("Kid", 1.0)
-    settings.setdefault("Kdf", 1.0)
-    settings.setdefault("eps_bid_microstrain", 150.0)
-    settings.setdefault("eps_bdf_microstrain", 100.0)
-    settings.setdefault("psi_td_ti", 1.0)
-    settings.setdefault("psi_tf_ti", 2.0)
-    settings.setdefault("psi_tf_td", 1.0)
-    settings.setdefault("delta_fcd_MPa", 0.0)
-    settings.setdefault("delta_fcdf_MPa", 0.0)
+    settings.setdefault("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET)
+    refined_defaults = REFINED_COEFFICIENT_PRESETS[DEFAULT_REFINED_COEFFICIENT_PRESET]
+    settings.setdefault("Kid", refined_defaults["Kid"])
+    settings.setdefault("Kdf", refined_defaults["Kdf"])
+    settings.setdefault("eps_bid_microstrain", refined_defaults["eps_bid_microstrain"])
+    settings.setdefault("eps_bdf_microstrain", refined_defaults["eps_bdf_microstrain"])
+    settings.setdefault("psi_td_ti", refined_defaults["psi_td_ti"])
+    settings.setdefault("psi_tf_ti", refined_defaults["psi_tf_ti"])
+    settings.setdefault("psi_tf_td", refined_defaults["psi_tf_td"])
+    settings.setdefault("delta_fcd_MPa", refined_defaults["delta_fcd_MPa"])
+    settings.setdefault("delta_fcdf_MPa", refined_defaults["delta_fcdf_MPa"])
     settings.setdefault("fpy_MPa", DEFAULT_STRAND_FPY_MPA)
     return settings
 
+
+
+
+def _apply_refined_coefficient_preset(
+    settings: dict[str, Any],
+    preset_name: str,
+    *,
+    sync_widget_state: bool = False,
+) -> dict[str, Any]:
+    """Apply LOSS3A.2 refined coefficient preset values to settings.
+
+    Presets are starting values for the manual-coefficient refined workflow,
+    not automatic AASHTO coefficient prediction.
+    """
+
+    if preset_name not in REFINED_COEFFICIENT_PRESETS:
+        settings["refined_coefficient_preset"] = REFINED_COEFFICIENT_USER_DEFINED
+        return settings
+    settings["refined_coefficient_preset"] = preset_name
+    for key, value in REFINED_COEFFICIENT_PRESETS[preset_name].items():
+        settings[key] = float(value)
+        widget_key = REFINED_PRESET_WIDGET_KEYS.get(key)
+        if sync_widget_state and widget_key:
+            st.session_state[widget_key] = float(value)
+    return settings
+
+
+def _refined_coefficient_review_messages(settings: dict[str, Any]) -> list[str]:
+    """Return practical REVIEW messages for LOSS3A refined manual coefficients."""
+
+    messages: list[str] = []
+    eps_total = float(settings.get("eps_bid_microstrain", 0.0) or 0.0) + float(settings.get("eps_bdf_microstrain", 0.0) or 0.0)
+    if eps_total > 250.0:
+        messages.append("Shrinkage strain sum exceeds 250 microstrain; review humidity, V/S, concrete age, and project-specific shrinkage assumptions.")
+    if float(settings.get("psi_tf_ti", 0.0) or 0.0) > 2.5:
+        messages.append("Ψb(tf,ti) exceeds 2.5; review creep coefficient source before relying on refined loss results.")
+    if float(settings.get("Kid", 0.0) or 0.0) > 1.0 or float(settings.get("Kdf", 0.0) or 0.0) > 1.0:
+        messages.append("Kid/Kdf above 1.0 may amplify losses; verify transformed-section interaction coefficients.")
+    humidity = float(settings.get("humidity_percent", 0.0) or 0.0)
+    if humidity < 40.0 or humidity > 100.0:
+        messages.append("Preset RH basis is outside 40%–100%; use project/site mean relative humidity.")
+    return messages
+
+
+def _refined_coefficient_preset_dataframe() -> pd.DataFrame:
+    rows = []
+    for name, values in REFINED_COEFFICIENT_PRESETS.items():
+        rows.append(
+            {
+                "Preset": name,
+                "RH basis %": values["humidity_percent"],
+                "Kid": values["Kid"],
+                "Kdf": values["Kdf"],
+                "εbid με": values["eps_bid_microstrain"],
+                "εbdf με": values["eps_bdf_microstrain"],
+                "Ψb(td,ti)": values["psi_td_ti"],
+                "Ψb(tf,ti)": values["psi_tf_ti"],
+                "Ψb(tf,td)": values["psi_tf_td"],
+                "Use case": "Typical Thailand/high RH" if "Thailand" in name else ("Moderate RH" if "Moderate" in name else "Dry/conservative check"),
+            }
+        )
+    return pd.DataFrame(rows)
 
 def _active_force_state_rows_by_group(force_table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
     return _loss_force_state_existing_rows_by_group(force_table)
@@ -1822,7 +1939,49 @@ def _render_girder_code_based_loss_estimate(
                 key="girder_refined_loss_fpy_mpa",
             )
         settings.update({"fci_MPa": float(fci), "relaxation_class": str(relaxation), "fpy_MPa": float(fpy)})
+        preset_previous = str(settings.get("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET))
+        if preset_previous not in REFINED_COEFFICIENT_PRESET_OPTIONS:
+            preset_previous = DEFAULT_REFINED_COEFFICIENT_PRESET
+        preset = st.selectbox(
+            "🟨 Refined coefficient preset",
+            REFINED_COEFFICIENT_PRESET_OPTIONS,
+            index=REFINED_COEFFICIENT_PRESET_OPTIONS.index(preset_previous),
+            help=(
+                "Select practical starting values for LOSS3A manual coefficients. "
+                "The RH shown in each preset is a basis for choosing a climate set; it is not automatic AASHTO coefficient prediction."
+            ),
+            key="girder_refined_coefficient_preset",
+        )
+        preset_changed = preset != settings.get("refined_coefficient_preset")
+        if preset != REFINED_COEFFICIENT_USER_DEFINED and (preset_changed or not settings.get("refined_coefficient_preset_applied", False)):
+            settings = _apply_refined_coefficient_preset(settings, preset, sync_widget_state=True)
+            settings["refined_coefficient_preset_applied"] = True
+        else:
+            settings["refined_coefficient_preset"] = preset
+            settings["refined_coefficient_preset_applied"] = True
+        if preset == REFINED_COEFFICIENT_USER_DEFINED:
+            settings["humidity_percent"] = st.number_input(
+                "🟨 RH basis H (%)",
+                min_value=20.0,
+                max_value=100.0,
+                step=5.0,
+                value=float(settings.get("humidity_percent", 75.0)),
+                format="%.0f",
+                key="girder_refined_user_humidity_percent",
+                help="Use project/site mean relative humidity when manual refined coefficients are project-specific.",
+            )
+            st.caption("User-defined refined coefficients: use project-specific AASHTO coefficient calculations or approved design assumptions.")
+        else:
+            st.caption(
+                f"Preset RH basis: {float(settings.get('humidity_percent', 75.0)):.0f}%. "
+                "Lower RH generally increases shrinkage-related prestress loss. Use project/site mean RH where available."
+            )
         st.markdown("###### Refined AASHTO manual coefficients")
+        with st.expander("Preset coefficient guide", expanded=False):
+            st.dataframe(_loss_display_dataframe(_refined_coefficient_preset_dataframe()), use_container_width=True, hide_index=True)
+            st.caption(
+                "These are practical starter values for the LOSS3A manual-coefficient workflow, not automatic AASHTO creep/shrinkage coefficient prediction."
+            )
         time_cols = st.columns(3)
         with time_cols[0]:
             settings["age_transfer_days"] = st.number_input("🟨 Age at transfer ti (days)", min_value=0.0, step=1.0, value=float(settings.get("age_transfer_days", 1.0)), format="%.1f", key="girder_refined_age_transfer_days")
@@ -1832,25 +1991,30 @@ def _render_girder_code_based_loss_estimate(
             settings["final_age_days"] = st.number_input("🟨 Final age tf (days)", min_value=0.0, step=100.0, value=float(settings.get("final_age_days", 10000.0)), format="%.1f", key="girder_refined_final_age_days")
         coeff_cols = st.columns(4)
         with coeff_cols[0]:
-            settings["Kid"] = st.number_input("🟨 Kid", min_value=0.0, step=0.05, value=float(settings.get("Kid", 1.0)), format="%.3f", key="girder_refined_kid")
+            settings["Kid"] = st.number_input("🟨 Kid", min_value=0.0, step=0.05, value=float(settings.get("Kid", 0.85)), format="%.3f", key="girder_refined_kid", help="Refined transformed-section interaction coefficient for transfer-to-deck interval; preset starter values are typically below 1.0.")
         with coeff_cols[1]:
-            settings["Kdf"] = st.number_input("🟨 Kdf", min_value=0.0, step=0.05, value=float(settings.get("Kdf", 1.0)), format="%.3f", key="girder_refined_kdf")
+            settings["Kdf"] = st.number_input("🟨 Kdf", min_value=0.0, step=0.05, value=float(settings.get("Kdf", 0.85)), format="%.3f", key="girder_refined_kdf", help="Refined transformed-section interaction coefficient for deck-to-final interval; verify against project-specific AASHTO calculations.")
         with coeff_cols[2]:
-            settings["eps_bid_microstrain"] = st.number_input("🟨 εbid (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bid_microstrain", 150.0)), format="%.1f", key="girder_refined_eps_bid")
+            settings["eps_bid_microstrain"] = st.number_input("🟨 εbid (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bid_microstrain", 80.0)), format="%.1f", key="girder_refined_eps_bid", help="Shrinkage strain for transfer-to-deck interval. Use project/site RH, V/S, age, and concrete model where available.")
         with coeff_cols[3]:
-            settings["eps_bdf_microstrain"] = st.number_input("🟨 εbdf (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bdf_microstrain", 100.0)), format="%.1f", key="girder_refined_eps_bdf")
+            settings["eps_bdf_microstrain"] = st.number_input("🟨 εbdf (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bdf_microstrain", 60.0)), format="%.1f", key="girder_refined_eps_bdf", help="Shrinkage strain for deck-to-final interval. This is manual coefficient input in LOSS3A.")
         creep_cols = st.columns(5)
         with creep_cols[0]:
-            settings["psi_td_ti"] = st.number_input("🟨 Ψb(td,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_td_ti", 1.0)), format="%.3f", key="girder_refined_psi_td_ti")
+            settings["psi_td_ti"] = st.number_input("🟨 Ψb(td,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_td_ti", 0.60)), format="%.3f", key="girder_refined_psi_td_ti", help="Creep coefficient from transfer age ti to deck placement age td.")
         with creep_cols[1]:
-            settings["psi_tf_ti"] = st.number_input("🟨 Ψb(tf,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_ti", 2.0)), format="%.3f", key="girder_refined_psi_tf_ti")
+            settings["psi_tf_ti"] = st.number_input("🟨 Ψb(tf,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_ti", 1.60)), format="%.3f", key="girder_refined_psi_tf_ti", help="Total creep coefficient from transfer age ti to final age tf.")
         with creep_cols[2]:
-            settings["psi_tf_td"] = st.number_input("🟨 Ψb(tf,td)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_td", 1.0)), format="%.3f", key="girder_refined_psi_tf_td")
+            settings["psi_tf_td"] = st.number_input("🟨 Ψb(tf,td)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_td", 1.00)), format="%.3f", key="girder_refined_psi_tf_td", help="Creep coefficient from deck placement age td to final age tf.")
         with creep_cols[3]:
             settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcd")
         with creep_cols[4]:
-            settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcdf")
-        settings["humidity_percent"] = settings.get("humidity_percent", 70.0)
+            settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcdf", help="Concrete stress change for deck shrinkage effect. Use 0.0 until load-derived/project-specific values are available.")
+        settings["humidity_percent"] = settings.get("humidity_percent", REFINED_COEFFICIENT_PRESETS[DEFAULT_REFINED_COEFFICIENT_PRESET]["humidity_percent"])
+        review_messages = _refined_coefficient_review_messages(settings)
+        if review_messages:
+            st.warning("Refined coefficient REVIEW: " + " ".join(review_messages))
+        else:
+            st.success("Refined coefficient preset/check: practical starter values are within the LOSS3A advisory range.")
         st.session_state["girder_prestress_code_loss_settings"] = settings
     else:
         with common_cols[1]:

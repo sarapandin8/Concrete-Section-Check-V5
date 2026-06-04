@@ -63,10 +63,54 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Refined AASHTO time-dependent loss" in PRESTRESS_SOURCE
     assert "Calculate and use refined AASHTO losses" in PRESTRESS_SOURCE
     assert "manual-coefficient preview" in PRESTRESS_SOURCE
+    assert "Thailand high humidity typical (RH ≈ 75%)" in PRESTRESS_SOURCE
+    assert "Moderate humidity (RH ≈ 60%)" in PRESTRESS_SOURCE
+    assert "Dry climate conservative (RH ≈ 45%)" in PRESTRESS_SOURCE
+    assert "Preset coefficient guide" in PRESTRESS_SOURCE
+    assert "Refined coefficient REVIEW" in PRESTRESS_SOURCE
+    assert "These are practical starter values for the LOSS3A manual-coefficient workflow" in PRESTRESS_SOURCE
     assert "Apply calculated losses to force states and strand table" not in PRESTRESS_SOURCE
     assert "girder_prestress_code_loss_settings" in PRESTRESS_SOURCE
     assert "calculate_approximate_prestress_loss" in PRESTRESS_SOURCE
     assert "calculate_refined_aashto_time_dependent_loss" in PRESTRESS_SOURCE
+
+
+
+def test_refined_coefficient_presets_are_rh_labeled_and_practical(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        DEFAULT_REFINED_COEFFICIENT_PRESET,
+        REFINED_COEFFICIENT_PRESETS,
+        _apply_refined_coefficient_preset,
+        _refined_coefficient_review_messages,
+    )
+
+    thailand = REFINED_COEFFICIENT_PRESETS[DEFAULT_REFINED_COEFFICIENT_PRESET]
+    assert thailand["humidity_percent"] == 75.0
+    assert thailand["Kid"] == 0.85
+    assert thailand["eps_bid_microstrain"] == 80.0
+    settings = _apply_refined_coefficient_preset({}, DEFAULT_REFINED_COEFFICIENT_PRESET)
+    assert settings["humidity_percent"] == 75.0
+    assert settings["psi_tf_ti"] == 1.60
+    assert _refined_coefficient_review_messages(settings) == []
+
+    risky = dict(settings)
+    risky.update({"eps_bid_microstrain": 180.0, "eps_bdf_microstrain": 110.0, "psi_tf_ti": 2.8})
+    messages = _refined_coefficient_review_messages(risky)
+    assert any("Shrinkage strain sum" in message for message in messages)
+    assert any("Ψb(tf,ti)" in message for message in messages)
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:

@@ -32,6 +32,38 @@ def _circle_points(radius_mm: float, segments: int = 96) -> list[Point2D]:
     ]
 
 
+def _translated_points(points: list[Point2D], dx_mm: float, dy_mm: float) -> list[Point2D]:
+    return [_point(point.x + dx_mm, point.y + dy_mm) for point in points]
+
+
+def _circular_hole_from_left_edge(
+    *,
+    B_mm: float,
+    H_mm: float,
+    diameter_mm: float,
+    x_from_left_mm: float,
+    y_from_bottom_mm: float,
+    segments: int = 96,
+) -> list[Point2D]:
+    _require_positive("void diameter", diameter_mm)
+    radius = float(diameter_mm) / 2.0
+    if x_from_left_mm - radius < -1e-9 or x_from_left_mm + radius > B_mm + 1e-9:
+        raise ValueError("Invalid geometry: circular void must remain within the overall plank width.")
+    if y_from_bottom_mm - radius < -1e-9 or y_from_bottom_mm + radius > H_mm + 1e-9:
+        raise ValueError("Invalid geometry: circular void must remain within the overall plank depth.")
+    center_x = -float(B_mm) / 2.0 + float(x_from_left_mm)
+    center_y = -float(H_mm) / 2.0 + float(y_from_bottom_mm)
+    return _translated_points(_circle_points(radius, segments=segments), center_x, center_y)
+
+
+def _ensure_valid_polygon_with_holes(outer: list[Point2D], holes: list[list[Point2D]], name: str) -> None:
+    polygon = Polygon([point.as_tuple() for point in outer], [[point.as_tuple() for point in hole] for hole in holes])
+    if not polygon.is_valid:
+        raise ValueError(f"Invalid geometry: {name} polygon is invalid ({explain_validity(polygon)}).")
+    if polygon.area <= 0:
+        raise ValueError(f"Invalid geometry: {name} polygon area must be positive.")
+
+
 def _rounded_rectangle_from_bounds(
     left: float,
     bottom: float,
@@ -1202,6 +1234,86 @@ def parametric_plank_girder_interior(
     )
 
 
+def parametric_plank_girder_voided_interior(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    void_diameter_mm: float = 150.0,
+    void_y_mm_from_bottom: float = 225.0,
+    void_left_x_from_left_mm: float = 245.0,
+    void_middle_x_from_left_mm: float = 495.0,
+    void_right_x_from_left_mm: float = 745.0,
+    Tslab_mm: float = 100.0,
+    Be_mm: float = 1000.0,
+    Ebeam_MPa: float = 35000.0,
+    Edeck_MPa: float = 28560.0,
+    girder_length_mm: float = 12000.0,
+    name: str = "Precast Voided Plank Girder — Interior",
+) -> SectionGeometry:
+    """Generate an interior precast plank girder with three circular voids.
+
+    The outer profile intentionally reuses the accepted interior plank girder
+    geometry. The three circular voids are real section holes, not preview-only
+    graphics, so gross properties and void-aware prestress validation use the
+    reduced concrete polygon.
+    """
+
+    base = parametric_plank_girder_interior(
+        B_mm=B_mm,
+        b1_mm=b1_mm,
+        b2_mm=b2_mm,
+        b3_mm=b3_mm,
+        H_mm=H_mm,
+        h1_mm=h1_mm,
+        h2_mm=h2_mm,
+        Tslab_mm=Tslab_mm,
+        Be_mm=Be_mm,
+        Ebeam_MPa=Ebeam_MPa,
+        Edeck_MPa=Edeck_MPa,
+        girder_length_mm=girder_length_mm,
+        name=name,
+    )
+    x_positions = [void_left_x_from_left_mm, void_middle_x_from_left_mm, void_right_x_from_left_mm]
+    holes = [
+        _circular_hole_from_left_edge(
+            B_mm=B_mm,
+            H_mm=H_mm,
+            diameter_mm=void_diameter_mm,
+            x_from_left_mm=x,
+            y_from_bottom_mm=void_y_mm_from_bottom,
+        )
+        for x in x_positions
+    ]
+    _ensure_valid_polygon_with_holes(base.outer_polygon, holes, "Precast voided plank girder — Interior")
+    metadata = dict(base.metadata)
+    parameters = dict(metadata.get("parameters", {}))
+    parameters.update(
+        {
+            "void_diameter_mm": void_diameter_mm,
+            "void_y_mm_from_bottom": void_y_mm_from_bottom,
+            "void_left_x_from_left_mm": void_left_x_from_left_mm,
+            "void_middle_x_from_left_mm": void_middle_x_from_left_mm,
+            "void_right_x_from_left_mm": void_right_x_from_left_mm,
+        }
+    )
+    metadata.update(
+        {
+            "preset": "parametric_plank_girder_voided_interior",
+            "girder_type": "Voided Plank Girder",
+            "plank_position": "Interior",
+            "void_type": "3 circular voids",
+            "parameters": parameters,
+        }
+    )
+    return SectionGeometry(name=name, outer_polygon=base.outer_polygon, holes=holes, metadata=metadata)
+
+
+
+
 def parametric_plank_girder_exterior(
     B_mm: float,
     b1_mm: float,
@@ -1680,6 +1792,82 @@ def parametric_i_girder_dimensions(
 
 
 
+def parametric_plank_girder_voided_exterior(
+    B_mm: float,
+    b1_mm: float,
+    b2_mm: float,
+    b3_mm: float,
+    H_mm: float,
+    h1_mm: float,
+    h2_mm: float,
+    void_diameter_mm: float = 150.0,
+    void_y_mm_from_bottom: float = 225.0,
+    void_left_x_from_left_mm: float = 240.0,
+    void_middle_x_from_left_mm: float = 540.0,
+    void_right_x_from_left_mm: float = 810.0,
+    Tslab_mm: float = 100.0,
+    Be_mm: float = 1000.0,
+    Ebeam_MPa: float = 35000.0,
+    Edeck_MPa: float = 28560.0,
+    girder_length_mm: float = 12000.0,
+    overhang_mm: float = 500.0,
+    name: str = "Precast Voided Plank Girder — Exterior",
+) -> SectionGeometry:
+    """Generate an exterior precast plank girder with three circular voids."""
+
+    base = parametric_plank_girder_exterior(
+        B_mm=B_mm,
+        b1_mm=b1_mm,
+        b2_mm=b2_mm,
+        b3_mm=b3_mm,
+        H_mm=H_mm,
+        h1_mm=h1_mm,
+        h2_mm=h2_mm,
+        Tslab_mm=Tslab_mm,
+        Be_mm=Be_mm,
+        Ebeam_MPa=Ebeam_MPa,
+        Edeck_MPa=Edeck_MPa,
+        girder_length_mm=girder_length_mm,
+        overhang_mm=overhang_mm,
+        name=name,
+    )
+    x_positions = [void_left_x_from_left_mm, void_middle_x_from_left_mm, void_right_x_from_left_mm]
+    holes = [
+        _circular_hole_from_left_edge(
+            B_mm=B_mm,
+            H_mm=H_mm,
+            diameter_mm=void_diameter_mm,
+            x_from_left_mm=x,
+            y_from_bottom_mm=void_y_mm_from_bottom,
+        )
+        for x in x_positions
+    ]
+    _ensure_valid_polygon_with_holes(base.outer_polygon, holes, "Precast voided plank girder — Exterior")
+    metadata = dict(base.metadata)
+    parameters = dict(metadata.get("parameters", {}))
+    parameters.update(
+        {
+            "void_diameter_mm": void_diameter_mm,
+            "void_y_mm_from_bottom": void_y_mm_from_bottom,
+            "void_left_x_from_left_mm": void_left_x_from_left_mm,
+            "void_middle_x_from_left_mm": void_middle_x_from_left_mm,
+            "void_right_x_from_left_mm": void_right_x_from_left_mm,
+        }
+    )
+    metadata.update(
+        {
+            "preset": "parametric_plank_girder_voided_exterior",
+            "girder_type": "Voided Plank Girder",
+            "plank_position": "Exterior",
+            "void_type": "3 circular voids",
+            "parameters": parameters,
+        }
+    )
+    return SectionGeometry(name=name, outer_polygon=base.outer_polygon, holes=holes, metadata=metadata)
+
+
+
+
 def parametric_plank_girder_interior_dimensions(
     B_mm: float,
     b1_mm: float,
@@ -1773,6 +1961,8 @@ def register_builtin_generators(registry: GeometryRegistry) -> None:
         "parametric_i_girder": (parametric_i_girder, parametric_i_girder_dimensions),
         "parametric_plank_girder_interior": (parametric_plank_girder_interior, parametric_plank_girder_interior_dimensions),
         "parametric_plank_girder_exterior": (parametric_plank_girder_exterior, parametric_plank_girder_exterior_dimensions),
+        "parametric_plank_girder_voided_interior": (parametric_plank_girder_voided_interior, parametric_plank_girder_interior_dimensions),
+        "parametric_plank_girder_voided_exterior": (parametric_plank_girder_voided_exterior, parametric_plank_girder_exterior_dimensions),
         "u_girder": (u_girder, u_girder_dimensions),
         "single_cell_box_girder": (single_cell_box_girder, single_cell_box_girder_dimensions),
     }

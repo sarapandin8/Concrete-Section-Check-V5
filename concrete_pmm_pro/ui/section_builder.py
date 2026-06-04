@@ -452,6 +452,10 @@ def _is_parametric_plank_girder(preset: dict[str, Any]) -> bool:
     return str(preset.get("key", "")).startswith("parametric_plank_girder_")
 
 
+def _is_interior_plank_girder_key(preset_key: str) -> bool:
+    return str(preset_key) in {"parametric_plank_girder_interior", "parametric_plank_girder_voided_interior"}
+
+
 def _geometry_parameter_names(preset: dict[str, Any]) -> set[str]:
     """Return parameter names accepted by the section geometry generator.
 
@@ -761,7 +765,7 @@ def _effective_width_top_w(preset: dict[str, Any], params: dict[str, Any]) -> fl
     if _is_parametric_plank_girder(preset):
         b = float(params.get("B_mm", 0.0) or 0.0)
         b1 = float(params.get("b1_mm", 0.0) or 0.0)
-        if str(preset.get("key", "")) == "parametric_plank_girder_interior":
+        if _is_interior_plank_girder_key(str(preset.get("key", ""))):
             return max(b - 2.0 * b1, 0.0)
         return max(b - b1, 0.0)
     return float(params.get("B_mm", 0.0) or 0.0)
@@ -777,7 +781,7 @@ def _effective_width_top_width_basis_note(preset: dict[str, Any]) -> str:
     if _is_precast_box_beam(preset):
         return "Auto from Box Beam top slab width."
     if _is_parametric_plank_girder(preset):
-        if str(preset.get("key", "")) == "parametric_plank_girder_interior":
+        if _is_interior_plank_girder_key(str(preset.get("key", ""))):
             return "Auto from Interior Plank top width B - 2b1."
         return "Auto from Exterior Plank top contact width B - b1."
     return "Auto from selected section top width metadata."
@@ -1132,7 +1136,7 @@ def _render_parametric_plank_girder_dimension_qa(preset: dict[str, Any], params:
     girder_length = float(params.get("girder_length_mm", 0.0))
     n_ratio = edeck / ebeam if ebeam > 0 else 0.0
     btransformed = n_ratio * be
-    is_interior = str(preset.get("key", "")) == "parametric_plank_girder_interior"
+    is_interior = _is_interior_plank_girder_key(str(preset.get("key", "")))
     width_rule = b - b3 - (2.0 * b2 if is_interior else b2)
     width_ok = abs(width_rule) <= max(2.0, 0.005 * max(b, 1.0))
     side_label = "Interior" if is_interior else "Exterior"

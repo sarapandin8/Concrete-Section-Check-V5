@@ -140,3 +140,53 @@ def test_parametric_plank_exterior_user_confirmed_right_vertical_profile():
     assert any(abs(p.x - (x_left + params["b2_mm"])) < 1e-6 and abs(p.y - y2) < 1e-6 for p in pts)
     assert any(abs(p.x - (x_left + params["b1_mm"])) < 1e-6 and abs(p.y - top_y) < 1e-6 for p in pts)
     assert _width_at_y(pts, y2) == pytest.approx(params["b3_mm"])
+
+
+def _void_centers_from_left(geometry, B_mm):
+    centers = []
+    for hole in geometry.holes:
+        xs = [point.x for point in hole]
+        ys = [point.y for point in hole]
+        centers.append((round((min(xs) + max(xs)) / 2.0 + B_mm / 2.0, 6), round((min(ys) + max(ys)) / 2.0 + geometry.metadata["parameters"]["H_mm"] / 2.0, 6)))
+    return centers
+
+
+def test_voided_plank_interior_adds_three_circular_voids_at_user_coordinates():
+    params = _interior_params()
+    geometry = default_registry.geometry("parametric_plank_girder_voided_interior")(**params)
+    validation = validate_section_geometry(geometry)
+    solid = default_registry.geometry("parametric_plank_girder_interior")(**params)
+    solid_summary = summarize_geometry(solid)
+    voided_summary = summarize_geometry(geometry)
+
+    assert validation.is_valid
+    assert geometry.metadata["preset"] == "parametric_plank_girder_voided_interior"
+    assert geometry.metadata["girder_type"] == "Voided Plank Girder"
+    assert len(geometry.holes) == 3
+    assert [center[0] for center in _void_centers_from_left(geometry, params["B_mm"])] == [245.0, 495.0, 745.0]
+    assert [center[1] for center in _void_centers_from_left(geometry, params["B_mm"])] == [225.0, 225.0, 225.0]
+    assert voided_summary.area_mm2 < solid_summary.area_mm2
+
+
+def test_voided_plank_exterior_adds_three_circular_voids_at_user_coordinates():
+    params = _exterior_params()
+    geometry = default_registry.geometry("parametric_plank_girder_voided_exterior")(**params)
+    validation = validate_section_geometry(geometry)
+
+    assert validation.is_valid
+    assert geometry.metadata["preset"] == "parametric_plank_girder_voided_exterior"
+    assert geometry.metadata["plank_position"] == "Exterior"
+    assert len(geometry.holes) == 3
+    assert [center[0] for center in _void_centers_from_left(geometry, params["B_mm"])] == [240.0, 540.0, 810.0]
+    assert [center[1] for center in _void_centers_from_left(geometry, params["B_mm"])] == [225.0, 225.0, 225.0]
+
+
+def test_voided_plank_presets_are_available_in_section_preset_json():
+    from concrete_pmm_pro.geometry.presets import preset_by_key  # noqa: PLC0415
+
+    interior = preset_by_key("parametric_plank_girder_voided_interior")
+    exterior = preset_by_key("parametric_plank_girder_voided_exterior")
+    assert interior["display_name"] == "Precast Voided Plank Girder — Interior"
+    assert exterior["display_name"] == "Precast Voided Plank Girder — Exterior"
+    assert any(param["name"] == "void_diameter_mm" for param in interior["parameters"])
+    assert any(param["name"] == "void_middle_x_from_left_mm" for param in exterior["parameters"])

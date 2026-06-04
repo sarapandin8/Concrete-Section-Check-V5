@@ -251,7 +251,14 @@ DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS = [8, 6]
 
 BOX_PLANK_PRACTICAL_DEBOND_PATTERN = "Symmetric spaced pairs"
 PRECAST_BOX_BEAM_PRESET_KEYS = frozenset({"box_section_fillet", "precast_box_beam_exterior"})
-PRECAST_PLANK_GIRDER_PRESET_KEYS = frozenset({"parametric_plank_girder_interior", "parametric_plank_girder_exterior"})
+PRECAST_PLANK_GIRDER_PRESET_KEYS = frozenset(
+    {
+        "parametric_plank_girder_interior",
+        "parametric_plank_girder_exterior",
+        "parametric_plank_girder_voided_interior",
+        "parametric_plank_girder_voided_exterior",
+    }
+)
 BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M = 1.0
 
 GIRDER_PRESTRESS_UI_PRESET_KEYS = frozenset(
@@ -262,6 +269,8 @@ GIRDER_PRESTRESS_UI_PRESET_KEYS = frozenset(
         "precast_box_beam_exterior",
         "parametric_plank_girder_interior",
         "parametric_plank_girder_exterior",
+        "parametric_plank_girder_voided_interior",
+        "parametric_plank_girder_voided_exterior",
         "psc_i_girder",
         "single_cell_box_girder",
     }
@@ -1476,7 +1485,7 @@ def _practical_plank_girder_strand_layout_table(geometry: SectionGeometry | None
     if scale != 1.0:
         bottom_positions = [round(value * scale, 3) for value in bottom_positions]
     preset_key = _current_or_geometry_section_preset_key(geometry)
-    top_edge_offset_mm = 190.0 if preset_key == "parametric_plank_girder_exterior" else 120.0
+    top_edge_offset_mm = 190.0 if str(preset_key).endswith("_exterior") else 120.0
     top_pair_x = max(0.0, width / 2.0 - top_edge_offset_mm)
     rows = [
         {

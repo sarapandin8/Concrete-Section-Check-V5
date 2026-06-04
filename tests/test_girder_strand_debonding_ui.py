@@ -1147,3 +1147,87 @@ def test_advisory_recommendation_apply_helper_updates_selected_strands(monkeypat
     assert applied.loc[0, "Left debond m"] == 1.0
     assert applied.loc[0, "Right debond m"] == 1.0
     assert "PS6B advisory candidate applied" in applied.loc[0, "Note"]
+
+
+def test_voided_plank_reuses_practical_plank_prestress_preset(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import parametric_plank_girder_voided_interior  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+    )
+
+    geometry = parametric_plank_girder_voided_interior(
+        B_mm=990,
+        b1_mm=45,
+        b2_mm=70,
+        b3_mm=850,
+        H_mm=450,
+        h1_mm=80,
+        h2_mm=140,
+        Tslab_mm=100,
+        Be_mm=1000,
+        Ebeam_MPa=35000,
+        Edeck_MPa=28560,
+        girder_length_mm=12000,
+    )
+    table = _normalize_girder_strand_layout_table(None, span_length_m=12.0, geometry=geometry)
+    assert table["Group ID"].tolist() == ["Row 1", "Row 2"]
+    assert table["No. Strands"].tolist() == [16, 2]
+    assert table.loc[0, "Debonded strand nos"] == "1,3,14,16"
+    assert table.loc[0, "Left debond m"] == 1.0
+    assert table.loc[0, "Right debond m"] == 1.0
+    points = _girder_strand_point_layout_dataframe(table, geometry)
+    assert points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist() == [-375.0, 375.0]
+
+
+def test_voided_exterior_plank_top_pair_uses_exterior_practical_offset(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import parametric_plank_girder_voided_exterior  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+    )
+
+    geometry = parametric_plank_girder_voided_exterior(
+        B_mm=990,
+        b1_mm=45,
+        b2_mm=70,
+        b3_mm=920,
+        H_mm=450,
+        h1_mm=80,
+        h2_mm=140,
+        Tslab_mm=100,
+        Be_mm=1000,
+        Ebeam_MPa=35000,
+        Edeck_MPa=28560,
+        girder_length_mm=12000,
+        overhang_mm=500,
+    )
+    table = _normalize_girder_strand_layout_table(None, span_length_m=12.0, geometry=geometry)
+    points = _girder_strand_point_layout_dataframe(table, geometry)
+    assert points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist() == [-305.0, 305.0]

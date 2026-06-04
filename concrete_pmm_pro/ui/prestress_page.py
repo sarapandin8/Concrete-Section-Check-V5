@@ -1355,7 +1355,7 @@ def _practical_box_beam_strand_layout_table(geometry: SectionGeometry | None) ->
     pe_final = _default_pe_final_per_strand_kn(strand_size)
     width = _section_width_from_geometry(geometry, fallback_mm=990.0)
     depth = _section_depth_from_geometry(geometry, fallback_mm=700.0)
-    top_pair_x = max(0.0, width / 2.0 - 100.0)
+    top_pair_x = max(0.0, width / 2.0 - 145.0)
     row2_outer = max(150.0, width / 2.0 - 145.0)
     rows = [
         {
@@ -1422,7 +1422,7 @@ def _practical_box_beam_strand_layout_table(geometry: SectionGeometry | None) ->
             "Left debond m": 0.0,
             "Right debond m": 0.0,
             "Debonded strand nos": "",
-            "Note": "BP1 practical box preset: top pair 100 mm from top corners.",
+            "Note": "BP1.1 practical box preset: top pair 145 mm from left/right top corners.",
         },
     ]
     return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
@@ -1447,7 +1447,9 @@ def _practical_plank_girder_strand_layout_table(geometry: SectionGeometry | None
     scale = target_outer / 425.0 if abs(target_outer - 425.0) > 1e-9 and target_outer > 0.0 else 1.0
     if scale != 1.0:
         bottom_positions = [round(value * scale, 3) for value in bottom_positions]
-    top_pair_x = max(0.0, width / 2.0 - 75.0)
+    preset_key = _current_or_geometry_section_preset_key(geometry)
+    top_edge_offset_mm = 190.0 if preset_key == "parametric_plank_girder_exterior" else 120.0
+    top_pair_x = max(0.0, width / 2.0 - top_edge_offset_mm)
     rows = [
         {
             "Active": True,
@@ -1491,7 +1493,7 @@ def _practical_plank_girder_strand_layout_table(geometry: SectionGeometry | None
             "Left debond m": 0.0,
             "Right debond m": 0.0,
             "Debonded strand nos": "",
-            "Note": "BP1 practical plank preset: top pair 75 mm from top corners.",
+            "Note": f"BP1.1 practical plank preset: top pair {top_edge_offset_mm:.0f} mm from left/right top corners.",
         },
     ]
     return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
@@ -2401,10 +2403,10 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
                     y=[float(point["y_mm_abs"]) for point, _, _, _ in bonded_points],
                     mode="markers",
                     marker={
-                        "size": 9,
-                        "color": bonded_color,
+                        "size": 10,
+                        "color": "rgba(255,255,255,0.0)",
                         "symbol": "circle",
-                        "line": {"color": "white", "width": 1.0},
+                        "line": {"color": bonded_color, "width": 1.8},
                     },
                     name="Bonded",
                     text=[_point_hover(record) for record in bonded_points],
@@ -2418,10 +2420,10 @@ def _plot_girder_strand_cross_section_layout(table: pd.DataFrame, geometry: Sect
                     y=[float(point["y_mm_abs"]) for point, _, _, _ in debonded_points],
                     mode="markers",
                     marker={
-                        "size": 10,
-                        "color": debonded_color,
+                        "size": 11,
+                        "color": "rgba(255,255,255,0.0)",
                         "symbol": "diamond",
-                        "line": {"color": "white", "width": 1.0},
+                        "line": {"color": debonded_color, "width": 1.8},
                     },
                     name="Debonded",
                     text=[_point_hover(record) for record in debonded_points],

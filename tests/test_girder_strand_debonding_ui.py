@@ -461,6 +461,7 @@ def test_girder_strand_size_controls_spacing_and_edge_clearance(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "streamlit", st)
 
     from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
         _normalize_girder_strand_layout_table,
         _validate_girder_strand_layout,
     )
@@ -604,6 +605,7 @@ def test_box_beam_default_strand_layout_passes_void_aware_validation(monkeypatch
 
     from concrete_pmm_pro.geometry.generators import box_section_fillet, precast_box_beam_exterior  # noqa: PLC0415
     from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
         _normalize_girder_strand_layout_table,
         _validate_girder_strand_layout,
     )
@@ -650,6 +652,11 @@ def test_box_beam_default_strand_layout_passes_void_aware_validation(monkeypatch
         assert table.loc[0, "Right debond m"] == 1.0
         assert table.loc[1, "Debonded strand nos"] == ""
         assert table.loc[2, "Debonded strand nos"] == ""
+        points = _girder_strand_point_layout_dataframe(table, geometry)
+        row2_x = points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist()
+        row3_x = points.loc[points["Group ID"] == "Row 3", "x_mm"].round(6).tolist()
+        assert row2_x == [-350.0, -210.0, -70.0, 70.0, 210.0, 350.0]
+        assert row3_x == [-350.0, 350.0]
 
 
 
@@ -699,9 +706,93 @@ def test_bp1_plank_practical_preset_uses_user_confirmed_layout(monkeypatch) -> N
     row1_x = points.loc[points["Group ID"] == "Row 1", "x_mm"].round(6).tolist()
     row2_x = points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist()
     assert row1_x == [-425.0, -375.0, -325.0, -275.0, -225.0, -175.0, -125.0, -75.0, 75.0, 125.0, 175.0, 225.0, 275.0, 325.0, 375.0, 425.0]
-    assert row2_x == [-420.0, 420.0]
+    assert row2_x == [-375.0, 375.0]
     assert 0.0 not in row1_x
 
+
+
+def test_bp1_exterior_plank_top_pair_uses_190_mm_edge_offset(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import parametric_plank_girder_exterior  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+    )
+
+    geometry = parametric_plank_girder_exterior(
+        B_mm=990,
+        b1_mm=45,
+        b2_mm=140,
+        b3_mm=850,
+        H_mm=450,
+        h1_mm=80,
+        h2_mm=140,
+        Tslab_mm=100,
+        Be_mm=1000,
+        Ebeam_MPa=35000,
+        Edeck_MPa=28560,
+        girder_length_mm=12000,
+        overhang_mm=500,
+    )
+    table = _normalize_girder_strand_layout_table(None, span_length_m=30.0, geometry=geometry)
+    points = _girder_strand_point_layout_dataframe(table, geometry)
+    row2_x = points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist()
+    assert row2_x == [-305.0, 305.0]
+
+
+def test_cross_section_legend_uses_open_markers_matching_section_symbols(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _plot_girder_strand_cross_section_layout,
+    )
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 4,
+                "y_mm_from_bottom": 50.0,
+                "Left debond m": 1.0,
+                "Right debond m": 1.0,
+                "Debonded strand nos": "1,4",
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=10.0)
+    fig = _plot_girder_strand_cross_section_layout(table, None)
+    bonded = next(trace for trace in fig.data if trace.name == "Bonded")
+    debonded = next(trace for trace in fig.data if trace.name == "Debonded")
+    assert bonded.marker.color == "rgba(255,255,255,0.0)"
+    assert debonded.marker.color == "rgba(255,255,255,0.0)"
+    assert bonded.marker.line.color == "#1f77b4"
+    assert debonded.marker.line.color == "#dc2626"
 
 def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(monkeypatch) -> None:
     import sys

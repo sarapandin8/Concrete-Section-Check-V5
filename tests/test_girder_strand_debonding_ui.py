@@ -1231,3 +1231,108 @@ def test_voided_exterior_plank_top_pair_uses_exterior_practical_offset(monkeypat
     table = _normalize_girder_strand_layout_table(None, span_length_m=12.0, geometry=geometry)
     points = _girder_strand_point_layout_dataframe(table, geometry)
     assert points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist() == [-305.0, 305.0]
+
+
+def test_girder_loss1a_manual_force_state_table_and_apply(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _apply_girder_loss_force_states_to_strand_layout,
+        _girder_loss_force_state_qa_summary,
+        _normalize_girder_loss_force_state_table,
+        _normalize_girder_strand_layout_table,
+    )
+
+    strand_table = _normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "y_mm_from_bottom": 50.0,
+                    "Pe_transfer/strand_kN": 128.0,
+                    "Pe_construction/strand_kN": 120.0,
+                    "Pe_eff_final/strand_kN": 110.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    force_table = _normalize_girder_loss_force_state_table(None, strand_table, mode="Manual stage Pe")
+    assert force_table.loc[0, "Group ID"] == "Row 1"
+    assert force_table.loc[0, "QA status"] == "OK"
+    assert force_table.loc[0, "Total loss %"] > 0.0
+    status, messages = _girder_loss_force_state_qa_summary(force_table)
+    assert status == "OK"
+    assert messages == []
+
+    force_table.loc[0, "Pe_eff_final/strand_kN"] = 100.0
+    updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, force_table)
+    assert float(updated.loc[0, "Pe_eff_final/strand_kN"]) == 100.0
+
+
+def test_girder_loss1a_percentage_mode_derives_stage_pe(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_loss_force_state_table,
+        _normalize_girder_strand_layout_table,
+    )
+
+    strand_table = _normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "y_mm_from_bottom": 50.0,
+                    "Pe_transfer/strand_kN": 120.0,
+                    "Pe_construction/strand_kN": 115.0,
+                    "Pe_eff_final/strand_kN": 105.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    loss_input = pd.DataFrame(
+        [
+            {
+                "Group ID": "Row 1",
+                "Pjack/strand_kN": 150.0,
+                "Transfer loss %": 10.0,
+                "Construction loss %": 5.0,
+                "Long-term loss %": 10.0,
+            }
+        ]
+    )
+    force_table = _normalize_girder_loss_force_state_table(loss_input, strand_table, mode="Percentage loss")
+    assert round(float(force_table.loc[0, "Pe_transfer/strand_kN"]), 3) == 135.0
+    assert round(float(force_table.loc[0, "Pe_construction/strand_kN"]), 3) == 128.25
+    assert round(float(force_table.loc[0, "Pe_eff_final/strand_kN"]), 3) == 115.425
+    assert force_table.loc[0, "QA status"] == "OK"

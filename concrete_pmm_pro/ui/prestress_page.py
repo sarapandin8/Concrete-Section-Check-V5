@@ -127,6 +127,23 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
     ),
 ]
 
+GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss"]
+GIRDER_LOSS_FORCE_STATE_COLUMNS = [
+    "Active",
+    "Group ID",
+    "No. strands",
+    "Pjack/strand_kN",
+    "Transfer loss %",
+    "Pe_transfer/strand_kN",
+    "Construction loss %",
+    "Pe_construction/strand_kN",
+    "Long-term loss %",
+    "Pe_eff_final/strand_kN",
+    "Total loss %",
+    "QA status",
+    "Note",
+]
+
 GIRDER_STRAND_LAYOUT_COLUMNS = [
     "Active",
     "Group ID",
@@ -1183,6 +1200,256 @@ def _render_girder_prestress_force_state_inputs(
     st.caption(
         f"{ready_count} stage prestress force state(s) have positive Pe. Analysis will auto-enable prestress for stages with positive Pe."
     )
+
+
+
+def _default_pjack_per_strand_kn(strand_size: Any) -> float:
+    props = _strand_size_properties(strand_size)
+    return 0.75 * float(props.get("fpu_mpa", DEFAULT_STRAND_FPU_MPA)) * float(props.get("area_mm2", DEFAULT_STRAND_AREA_MM2)) / 1000.0
+
+
+def _safe_loss_percent(reference: float, current: float) -> float:
+    if reference <= 1e-9:
+        return 0.0
+    return (1.0 - current / reference) * 100.0
+
+
+def _loss_force_state_existing_rows_by_group(table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    if table is None:
+        return {}
+    df = pd.DataFrame(table)
+    if df.empty or "Group ID" not in df.columns:
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for _, row in df.iterrows():
+        group = "" if _is_blank(row.get("Group ID")) else str(row.get("Group ID")).strip()
+        if group:
+            rows[group] = row.to_dict()
+    return rows
+
+
+def _girder_force_state_qa_status(pjack: float, pe_transfer: float, pe_construction: float, pe_final: float) -> tuple[str, str]:
+    if pjack <= 1e-9:
+        return "REVIEW", "Pjack is required."
+    if pe_transfer <= 1e-9 or pe_final <= 1e-9:
+        return "REVIEW", "Transfer/final Pe must be positive before SLS stress use."
+    if pe_transfer - pjack > 1e-6:
+        return "REVIEW", "Pe_transfer exceeds Pjack."
+    if pe_construction - pe_transfer > 1e-6:
+        return "REVIEW", "Pe_construction exceeds Pe_transfer."
+    if pe_final - pe_construction > 1e-6:
+        return "REVIEW", "Pe_final exceeds Pe_construction."
+    total_loss = _safe_loss_percent(pjack, pe_final)
+    if total_loss < -1e-6:
+        return "REVIEW", "Total loss is negative."
+    if total_loss > 45.0:
+        return "REVIEW", "Total loss exceeds 45%; verify force states."
+    if total_loss < 5.0:
+        return "REVIEW", "Total loss is below 5%; verify if this is intentional."
+    return "OK", "Manual/advisory force state order is consistent."
+
+
+def _normalize_girder_loss_force_state_table(
+    table: pd.DataFrame | None,
+    strand_table: pd.DataFrame | None,
+    mode: str = "Manual stage Pe",
+) -> pd.DataFrame:
+    """Return GIRDER.LOSS1A manual/percentage force-state rows per strand group.
+
+    LOSS1A is a stage-force workflow only.  It does not calculate AASHTO/ACI
+    prestress losses, transfer-length force build-up, development, shear, or
+    end-zone reinforcement.  Values can be applied back to the strand layout
+    table for downstream SLS previews.
+    """
+
+    existing = _loss_force_state_existing_rows_by_group(table)
+    active = _active_girder_strand_layout_rows(strand_table if strand_table is not None else pd.DataFrame())
+    rows: list[dict[str, Any]] = []
+    for _, row in active.iterrows():
+        group = str(row.get("Group ID") or "strand group")
+        current = existing.get(group, {})
+        count = int(_to_float(row.get("No. Strands")) or 0)
+        pe_transfer_seed = float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
+        pe_construction_seed = float(_to_float(row.get("Pe_construction/strand_kN")) or 0.0)
+        pe_final_seed = float(_to_float(row.get("Pe_eff_final/strand_kN")) or 0.0)
+        pjack_default = max(
+            _default_pjack_per_strand_kn(row.get("Strand Size")),
+            pe_transfer_seed,
+            pe_construction_seed,
+            pe_final_seed,
+        )
+        pjack = float(_to_float(current.get("Pjack/strand_kN")) or pjack_default)
+        pe_transfer = float(_to_float(current.get("Pe_transfer/strand_kN")) or pe_transfer_seed)
+        pe_construction = float(_to_float(current.get("Pe_construction/strand_kN")) or pe_construction_seed)
+        pe_final = float(_to_float(current.get("Pe_eff_final/strand_kN")) or pe_final_seed)
+
+        transfer_loss = _to_float(current.get("Transfer loss %"))
+        construction_loss = _to_float(current.get("Construction loss %"))
+        long_term_loss = _to_float(current.get("Long-term loss %"))
+        if transfer_loss is None:
+            transfer_loss = _safe_loss_percent(pjack, pe_transfer)
+        if construction_loss is None:
+            construction_loss = _safe_loss_percent(pe_transfer, pe_construction)
+        if long_term_loss is None:
+            long_term_loss = _safe_loss_percent(pe_construction, pe_final)
+
+        if mode == "Percentage loss":
+            transfer_loss = max(float(transfer_loss), 0.0)
+            construction_loss = max(float(construction_loss), 0.0)
+            long_term_loss = max(float(long_term_loss), 0.0)
+            pe_transfer = max(pjack * (1.0 - transfer_loss / 100.0), 0.0)
+            pe_construction = max(pe_transfer * (1.0 - construction_loss / 100.0), 0.0)
+            pe_final = max(pe_construction * (1.0 - long_term_loss / 100.0), 0.0)
+        else:
+            transfer_loss = _safe_loss_percent(pjack, pe_transfer)
+            construction_loss = _safe_loss_percent(pe_transfer, pe_construction)
+            long_term_loss = _safe_loss_percent(pe_construction, pe_final)
+
+        total_loss = _safe_loss_percent(pjack, pe_final)
+        status, message = _girder_force_state_qa_status(pjack, pe_transfer, pe_construction, pe_final)
+        note = "" if _is_blank(current.get("Note")) else str(current.get("Note")).strip()
+        if not note:
+            note = message
+        rows.append(
+            {
+                "Active": bool(row.get("Active", True)),
+                "Group ID": group,
+                "No. strands": count,
+                "Pjack/strand_kN": pjack,
+                "Transfer loss %": float(transfer_loss),
+                "Pe_transfer/strand_kN": pe_transfer,
+                "Construction loss %": float(construction_loss),
+                "Pe_construction/strand_kN": pe_construction,
+                "Long-term loss %": float(long_term_loss),
+                "Pe_eff_final/strand_kN": pe_final,
+                "Total loss %": total_loss,
+                "QA status": status,
+                "Note": note,
+            }
+        )
+    return pd.DataFrame(rows, columns=GIRDER_LOSS_FORCE_STATE_COLUMNS)
+
+
+def _apply_girder_loss_force_states_to_strand_layout(strand_table: pd.DataFrame, force_table: pd.DataFrame) -> pd.DataFrame:
+    updated = pd.DataFrame(strand_table).copy()
+    if updated.empty or force_table is None or pd.DataFrame(force_table).empty:
+        return updated
+    force_by_group = _loss_force_state_existing_rows_by_group(pd.DataFrame(force_table))
+    for idx, row in updated.iterrows():
+        group = "" if _is_blank(row.get("Group ID")) else str(row.get("Group ID")).strip()
+        state = force_by_group.get(group)
+        if not state:
+            continue
+        for source, target in [
+            ("Pe_transfer/strand_kN", "Pe_transfer/strand_kN"),
+            ("Pe_construction/strand_kN", "Pe_construction/strand_kN"),
+            ("Pe_eff_final/strand_kN", "Pe_eff_final/strand_kN"),
+        ]:
+            value = _to_float(state.get(source))
+            if value is not None and value >= 0.0:
+                updated.at[idx, target] = float(value)
+    return updated
+
+
+def _girder_loss_force_state_qa_summary(table: pd.DataFrame) -> tuple[str, list[str]]:
+    df = pd.DataFrame(table)
+    if df.empty:
+        return "MISSING", ["No active strand rows are available for force-state definition."]
+    messages: list[str] = []
+    statuses = set(str(value) for value in df.get("QA status", pd.Series(dtype=str)).tolist())
+    for _, row in df.iterrows():
+        if str(row.get("QA status")) != "OK":
+            group = str(row.get("Group ID") or "strand group")
+            messages.append(f"{group}: {row.get('Note') or 'force state requires review.'}")
+    return ("OK" if statuses == {"OK"} else "REVIEW"), messages
+
+
+def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geometry: SectionGeometry | None = None) -> None:
+    st.markdown("#### Prestress Force States / Losses")
+    st.markdown(
+        '<div class="cpmm-prestress-table-note">'
+        "Define stage prestress per strand for girder SLS. LOSS1A is a manual/percentage force-state workflow only; "
+        "AASHTO/ACI loss formulas, transfer-length ramp, development, shear, and end-zone reinforcement are future milestones."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    settings = st.session_state.get("girder_prestress_loss_settings", {}) or {}
+    mode_default = settings.get("mode", "Manual stage Pe")
+    if mode_default not in GIRDER_LOSS_INPUT_MODE_OPTIONS:
+        mode_default = "Manual stage Pe"
+    mode = st.selectbox(
+        "Loss input mode",
+        GIRDER_LOSS_INPUT_MODE_OPTIONS,
+        index=GIRDER_LOSS_INPUT_MODE_OPTIONS.index(mode_default),
+        help="Manual stage Pe edits Pe directly. Percentage loss derives Pe from Pjack and staged loss percentages. Code-estimate formulas are not active in LOSS1A.",
+        key="girder_prestress_loss_input_mode",
+    )
+    settings["mode"] = str(mode)
+    st.session_state["girder_prestress_loss_settings"] = settings
+
+    current = st.session_state.get("girder_prestress_loss_force_state_table")
+    force_table = _normalize_girder_loss_force_state_table(
+        pd.DataFrame(current) if current is not None else None,
+        strand_table,
+        mode=str(mode),
+    )
+    pe_disabled = mode == "Percentage loss"
+    loss_disabled = mode == "Manual stage Pe"
+    edited = st.data_editor(
+        force_table,
+        num_rows="fixed",
+        use_container_width=True,
+        hide_index=True,
+        column_order=GIRDER_LOSS_FORCE_STATE_COLUMNS,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active", disabled=True),
+            "Group ID": st.column_config.TextColumn("Group ID", disabled=True),
+            "No. strands": st.column_config.NumberColumn("No. strands", disabled=True, format="%d"),
+            "Pjack/strand_kN": st.column_config.NumberColumn("🟨 Pjack / strand (kN)", min_value=0.0, step=5.0, format="%.3f"),
+            "Transfer loss %": st.column_config.NumberColumn("Transfer loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_transfer/strand_kN": st.column_config.NumberColumn("Pe_transfer / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Construction loss %": st.column_config.NumberColumn("Construction loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Long-term loss %": st.column_config.NumberColumn("Long-term loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_eff_final/strand_kN": st.column_config.NumberColumn("Pe_final / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Total loss %": st.column_config.NumberColumn("Total loss %", disabled=True, format="%.2f"),
+            "QA status": st.column_config.TextColumn("QA status", disabled=True),
+            "Note": st.column_config.TextColumn("Note", disabled=True),
+        },
+        key="girder_prestress_loss_force_state_editor",
+    )
+    normalized = _normalize_girder_loss_force_state_table(edited, strand_table, mode=str(mode))
+    st.session_state["girder_prestress_loss_force_state_table"] = normalized
+    status, messages = _girder_loss_force_state_qa_summary(normalized)
+    total_strands = int(pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not normalized.empty else 0
+    pe_transfer_total = float((pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0) * pd.to_numeric(normalized.get("Pe_transfer/strand_kN", pd.Series(dtype=float)), errors="coerce").fillna(0)).sum()) if not normalized.empty else 0.0
+    pe_final_total = float((pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0) * pd.to_numeric(normalized.get("Pe_eff_final/strand_kN", pd.Series(dtype=float)), errors="coerce").fillna(0)).sum()) if not normalized.empty else 0.0
+    total_losses = pd.to_numeric(normalized.get("Total loss %", pd.Series(dtype=float)), errors="coerce").dropna() if not normalized.empty else pd.Series(dtype=float)
+    loss_range = "—" if total_losses.empty else f"{float(total_losses.min()):.1f}%–{float(total_losses.max()):.1f}%"
+    metrics = [
+        PrestressMetric("Force states", status, "manual / percentage workflow", "ready" if status == "OK" else "review", strong=True),
+        PrestressMetric("Active strands", f"{total_strands:,}", "force-state rows"),
+        PrestressMetric("Pe_transfer total", f"{pe_transfer_total:,.1f} kN", "sum by group"),
+        PrestressMetric("Pe_final total", f"{pe_final_total:,.1f} kN", "sum by group"),
+        PrestressMetric("Loss range", loss_range, "per strand group"),
+    ]
+    st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
+    if messages:
+        with st.expander("Force-state QA / review messages", expanded=False):
+            for message in messages:
+                st.warning(message)
+    st.warning(
+        "LOSS1A values are stage force states, not final code-certified AASHTO/ACI loss calculations. "
+        "Apply only after engineering review."
+    )
+    if st.button("Apply force states to strand table", key="apply_girder_force_states_to_strand_table"):
+        updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
+        st.session_state["girder_strand_layout_table"] = updated
+        st.session_state.pop("girder_strand_layout_editor", None)
+        st.success("Force states applied to strand layout Pe columns.")
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
 
 
 
@@ -2774,7 +3041,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             for message in warnings:
                 st.warning(message)
 
-    tab_layout, tab_debond, tab_rules, tab_advisory, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Debonding QA", "Advisory recommendation", "Effective prestress preview"])
+    tab_layout, tab_debond, tab_rules, tab_losses, tab_advisory, tab_effective = st.tabs(["Cross-section layout", "Debonding along span", "Debonding QA", "Force States / Losses", "Advisory recommendation", "Effective prestress preview"])
     with tab_layout:
         st.plotly_chart(_plot_girder_strand_cross_section_layout(normalized, geometry), use_container_width=True)
         with st.expander("Plot assumptions", expanded=False):
@@ -2794,6 +3061,8 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             )
     with tab_rules:
         _render_girder_debonding_rule_dashboard(normalized, float(span))
+    with tab_losses:
+        _render_girder_force_states_losses_workspace(normalized, geometry)
     with tab_advisory:
         _render_girder_advisory_debonding_recommendation(
             normalized,
@@ -2803,7 +3072,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         )
     with tab_effective:
         st.caption(
-            "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Loss calculation is a future milestone."
+            "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Stage Pe values come from the Force States / Losses workflow."
         )
         preview = _girder_effective_prestress_preview_dataframe(normalized, float(span))
         st.dataframe(preview, use_container_width=True, hide_index=True)
@@ -3409,8 +3678,8 @@ def _girder_strand_layout_status_metrics() -> list[PrestressMetric]:
     return [
         PrestressMetric("Girder strand layout", f"{total_strands:,} strands", detail="layout metadata", status="info", strong=True),
         PrestressMetric("Layout Aps", f"{total_aps:,.1f} mm2", detail="from strand rows"),
-        PrestressMetric("Layout Pe_transfer", f"{pe_transfer:,.1f} kN", detail="not yet auto-linked"),
-        PrestressMetric("Layout Pe_eff_final", f"{pe_final:,.1f} kN", detail="not yet auto-linked"),
+        PrestressMetric("Layout Pe_transfer", f"{pe_transfer:,.1f} kN", detail="from strand force states"),
+        PrestressMetric("Layout Pe_eff_final", f"{pe_final:,.1f} kN", detail="from strand force states"),
     ]
 
 def _build_girder_prestress_summary_metrics() -> list[PrestressMetric]:
@@ -3802,7 +4071,6 @@ def render_prestress_page() -> None:
     girder_prestress_layout_active = _is_girder_prestress_layout_workflow_active()
     with main_col:
         if girder_prestress_layout_active:
-            _render_girder_prestress_force_state_inputs(result.elements, geometry)
             _render_girder_strand_layout_and_debonding_ui(geometry)
         elif _session_member_type() == "beam_girder":
             st.info(

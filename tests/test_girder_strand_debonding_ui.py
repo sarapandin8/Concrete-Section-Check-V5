@@ -62,6 +62,10 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Calculate and use approximate losses" in PRESTRESS_SOURCE
     assert "Refined AASHTO time-dependent loss" in PRESTRESS_SOURCE
     assert "Calculate and use refined AASHTO losses" in PRESTRESS_SOURCE
+    assert "🟨 fpj / fpu" in PRESTRESS_SOURCE
+    assert "DEFAULT_CODE_LOSS_FPJ_RATIO = 0.75" in PRESTRESS_SOURCE
+    assert "Jacking stress assumption: fpj" in PRESTRESS_SOURCE
+    assert "derive Pjack per strand from fpj ratio" in PRESTRESS_SOURCE
     assert "manual-coefficient preview" in PRESTRESS_SOURCE
     assert "Thailand high humidity typical (RH ≈ 75%)" in PRESTRESS_SOURCE
     assert "Moderate humidity (RH ≈ 60%)" in PRESTRESS_SOURCE
@@ -111,6 +115,43 @@ def test_refined_coefficient_presets_are_rh_labeled_and_practical(monkeypatch) -
     messages = _refined_coefficient_review_messages(risky)
     assert any("Shrinkage strain sum" in message for message in messages)
     assert any("Ψb(tf,ti)" in message for message in messages)
+
+
+def test_code_based_loss_groups_derive_pjack_from_fpj_ratio(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_approximate_loss_groups_from_tables,
+    )
+
+    strand_table = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 2,
+                "Area/Strand_mm2": 98.7,
+                "y_mm_from_bottom": 50.0,
+            }
+        ]
+    )
+    force_table = pd.DataFrame([{ "Group ID": "Row 1", "Pjack/strand_kN": 999.0 }])
+    groups = _girder_approximate_loss_groups_from_tables(strand_table, force_table, fpj_ratio=0.75)
+    assert len(groups) == 1
+    assert round(groups[0].pjack_per_strand_kN, 3) == round(0.75 * 1860.0 * 98.7 / 1000.0, 3)
+
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:

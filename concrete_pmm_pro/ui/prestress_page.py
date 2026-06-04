@@ -140,6 +140,7 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
 ]
 
 GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss", "Approximate code-based loss", "Refined AASHTO time-dependent loss"]
+DEFAULT_CODE_LOSS_FPJ_RATIO = 0.75
 
 REFINED_COEFFICIENT_USER_DEFINED = "User-defined / project-specific"
 REFINED_COEFFICIENT_PRESETS: dict[str, dict[str, float]] = {
@@ -1555,6 +1556,7 @@ def _girder_code_loss_settings_from_session() -> dict[str, Any]:
     settings.setdefault("delta_fcd_MPa", refined_defaults["delta_fcd_MPa"])
     settings.setdefault("delta_fcdf_MPa", refined_defaults["delta_fcdf_MPa"])
     settings.setdefault("fpy_MPa", DEFAULT_STRAND_FPY_MPA)
+    settings.setdefault("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO)
     return settings
 
 
@@ -1624,7 +1626,12 @@ def _active_force_state_rows_by_group(force_table: pd.DataFrame | None) -> dict[
     return _loss_force_state_existing_rows_by_group(force_table)
 
 
-def _girder_approximate_loss_groups_from_tables(strand_table: pd.DataFrame, force_table: pd.DataFrame) -> list[GirderLossStrandGroupInput]:
+def _girder_approximate_loss_groups_from_tables(
+    strand_table: pd.DataFrame,
+    force_table: pd.DataFrame,
+    *,
+    fpj_ratio: float | None = None,
+) -> list[GirderLossStrandGroupInput]:
     force_by_group = _active_force_state_rows_by_group(force_table)
     groups: list[GirderLossStrandGroupInput] = []
     for _, row in _active_girder_strand_layout_rows(strand_table).iterrows():
@@ -1633,8 +1640,14 @@ def _girder_approximate_loss_groups_from_tables(strand_table: pd.DataFrame, forc
         area = float(_to_float(row.get("Area/Strand_mm2")) or _strand_size_properties(row.get("Strand Size"))["area_mm2"])
         count = int(_to_float(row.get("No. Strands")) or 0)
         y_from_bottom = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
-        pjack = float(_to_float(force.get("Pjack/strand_kN")) or _default_pjack_per_strand_kn(row.get("Strand Size")))
         props = _strand_size_properties(row.get("Strand Size"))
+        if fpj_ratio is None:
+            pjack = float(_to_float(force.get("Pjack/strand_kN")) or _default_pjack_per_strand_kn(row.get("Strand Size")))
+        else:
+            # Code-based loss modes own the jacking stress assumption.  Derive
+            # Pjack from fpj = ratio*fpu so users do not have to edit duplicate
+            # Pjack values in the manual/percentage force-state table.
+            pjack = max(float(fpj_ratio), 0.0) * float(props.get("fpu_mpa", DEFAULT_STRAND_FPU_MPA) or DEFAULT_STRAND_FPU_MPA) * area / 1000.0
         groups.append(
             GirderLossStrandGroupInput(
                 group_id=group,
@@ -1657,6 +1670,7 @@ def _girder_code_loss_input_audit_dataframe(
     fci_MPa: float,
     humidity_percent: float,
     relaxation_class: str,
+    fpj_ratio: float | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     concrete = st.session_state.get("concrete_material")
@@ -1665,7 +1679,7 @@ def _girder_code_loss_input_audit_dataframe(
         props = compute_gross_section_properties(geometry) if geometry is not None else None
     except Exception:
         props = None
-    groups = _girder_approximate_loss_groups_from_tables(strand_table, force_table)
+    groups = _girder_approximate_loss_groups_from_tables(strand_table, force_table, fpj_ratio=fpj_ratio)
     total_aps = sum(group.total_aps_mm2 for group in groups)
     rows.extend(
         [
@@ -1691,6 +1705,13 @@ def _girder_code_loss_input_audit_dataframe(
                 "Engineering note": "Advisory range is 40%–100% for this approximate estimate.",
             },
             {
+                "Item": "Jacking stress fpj",
+                "Value": f"{float(fpj_ratio if fpj_ratio is not None else DEFAULT_CODE_LOSS_FPJ_RATIO):.2f} fpu",
+                "Source": "Loss workspace input",
+                "Status": "READY" if 0.0 < float(fpj_ratio if fpj_ratio is not None else DEFAULT_CODE_LOSS_FPJ_RATIO) <= 0.90 else "REVIEW",
+                "Engineering note": "Code-based/refined modes derive Pjack per strand from fpj ratio, strand fpu, and strand area.",
+            },
+            {
                 "Item": "Gross section Ag / Ix",
                 "Value": f"Ag={props.area_mm2:,.0f} mm², Ix={props.Ix_mm4:,.0f} mm⁴" if props is not None else "—",
                 "Source": "Section geometry",
@@ -1702,7 +1723,7 @@ def _girder_code_loss_input_audit_dataframe(
                 "Value": f"{len(groups)} row(s), Aps={total_aps:,.1f} mm²",
                 "Source": "Strand layout + Force States",
                 "Status": "READY" if groups and total_aps > 0 else "MISSING",
-                "Engineering note": "Uses Pjack from Force States and strand product properties from the layout.",
+                "Engineering note": "Code-based loss modes derive Pjack from fpj/fpu, strand fpu, and strand area; manual/percentage modes still use Force States Pjack.",
             },
             {
                 "Item": "Relaxation class",
@@ -1724,6 +1745,7 @@ def _build_girder_approximate_loss_input(
     fci_MPa: float,
     humidity_percent: float,
     relaxation_class: str,
+    fpj_ratio: float | None = None,
 ) -> GirderApproximateLossInput | None:
     if geometry is None:
         return None
@@ -1736,7 +1758,11 @@ def _build_girder_approximate_loss_input(
     Eci = 4700.0 * max(float(fci_MPa), 1.0) ** 0.5
     bottom_y = _section_bottom_y_from_geometry(geometry)
     cy_from_bottom = float(props.centroid_y_mm) - bottom_y
-    groups = tuple(_girder_approximate_loss_groups_from_tables(strand_table, force_table))
+    groups = tuple(_girder_approximate_loss_groups_from_tables(
+        strand_table,
+        force_table,
+        fpj_ratio=float(fpj_ratio if fpj_ratio is not None else DEFAULT_CODE_LOSS_FPJ_RATIO),
+    ))
     if not groups:
         return None
     return GirderApproximateLossInput(
@@ -1824,7 +1850,7 @@ def _build_girder_refined_aashto_loss_input(
     Ec = 4700.0 * max(fc, 1.0) ** 0.5
     bottom_y = _section_bottom_y_from_geometry(geometry)
     cy_from_bottom = float(props.centroid_y_mm) - bottom_y
-    groups = tuple(_girder_approximate_loss_groups_from_tables(strand_table, force_table))
+    groups = tuple(_girder_approximate_loss_groups_from_tables(strand_table, force_table, fpj_ratio=float(settings.get("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO) or DEFAULT_CODE_LOSS_FPJ_RATIO)))
     if not groups:
         return None
     return RefinedAashtoManualCoefficientInput(
@@ -1911,7 +1937,7 @@ def _render_girder_code_based_loss_estimate(
     concrete = st.session_state.get("concrete_material")
     fc_detected = float(getattr(concrete, "fc_MPa", 45.0) or 45.0)
 
-    common_cols = st.columns(3)
+    common_cols = st.columns(4)
     with common_cols[0]:
         fci = st.number_input(
             "🟨 f'ci at transfer (MPa)",
@@ -1921,15 +1947,30 @@ def _render_girder_code_based_loss_estimate(
             format="%.1f",
             key="girder_code_loss_fci_mpa",
         )
+    with common_cols[1]:
+        fpj_ratio = st.number_input(
+            "🟨 fpj / fpu",
+            min_value=0.0,
+            max_value=0.90,
+            step=0.01,
+            value=float(settings.get("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO)),
+            format="%.2f",
+            key="girder_code_loss_fpj_ratio",
+            help="Jacking stress assumption for code-based loss modes. Default fpj = 0.75 fpu; Pjack/strand is derived from fpj ratio, strand fpu, and strand area.",
+        )
+    st.caption(
+        f"Jacking stress assumption: fpj = {float(fpj_ratio):.2f} fpu. "
+        "Code-based loss modes derive Pjack/strand from this value; manual/percentage modes still allow direct Pjack editing."
+    )
     if refined_mode:
-        with common_cols[1]:
+        with common_cols[2]:
             relaxation = st.selectbox(
                 "🟨 Strand relaxation class",
                 ["Low relaxation", "Stress-relieved"],
                 index=0 if str(settings.get("relaxation_class", "Low relaxation")) != "Stress-relieved" else 1,
                 key="girder_code_loss_relaxation_class",
             )
-        with common_cols[2]:
+        with common_cols[3]:
             fpy = st.number_input(
                 "🟨 fpy (MPa)",
                 min_value=1.0,
@@ -1938,7 +1979,7 @@ def _render_girder_code_based_loss_estimate(
                 format="%.1f",
                 key="girder_refined_loss_fpy_mpa",
             )
-        settings.update({"fci_MPa": float(fci), "relaxation_class": str(relaxation), "fpy_MPa": float(fpy)})
+        settings.update({"fci_MPa": float(fci), "fpj_ratio": float(fpj_ratio), "relaxation_class": str(relaxation), "fpy_MPa": float(fpy)})
         preset_previous = str(settings.get("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET))
         if preset_previous not in REFINED_COEFFICIENT_PRESET_OPTIONS:
             preset_previous = DEFAULT_REFINED_COEFFICIENT_PRESET
@@ -2017,7 +2058,7 @@ def _render_girder_code_based_loss_estimate(
             st.success("Refined coefficient preset/check: practical starter values are within the LOSS3A advisory range.")
         st.session_state["girder_prestress_code_loss_settings"] = settings
     else:
-        with common_cols[1]:
+        with common_cols[2]:
             humidity = st.number_input(
                 "🟨 Relative humidity H (%)",
                 min_value=20.0,
@@ -2027,14 +2068,14 @@ def _render_girder_code_based_loss_estimate(
                 format="%.0f",
                 key="girder_code_loss_humidity_percent",
             )
-        with common_cols[2]:
+        with common_cols[3]:
             relaxation = st.selectbox(
                 "🟨 Strand relaxation class",
                 ["Low relaxation", "Stress-relieved"],
                 index=0 if str(settings.get("relaxation_class", "Low relaxation")) != "Stress-relieved" else 1,
                 key="girder_code_loss_relaxation_class",
             )
-        settings.update({"fci_MPa": float(fci), "humidity_percent": float(humidity), "relaxation_class": str(relaxation)})
+        settings.update({"fci_MPa": float(fci), "fpj_ratio": float(fpj_ratio), "humidity_percent": float(humidity), "relaxation_class": str(relaxation)})
         st.session_state["girder_prestress_code_loss_settings"] = settings
 
     audit = _girder_code_loss_input_audit_dataframe(
@@ -2044,6 +2085,7 @@ def _render_girder_code_based_loss_estimate(
         fci_MPa=float(settings.get("fci_MPa", fci)),
         humidity_percent=float(settings.get("humidity_percent", 70.0)),
         relaxation_class=str(settings.get("relaxation_class", "Low relaxation")),
+        fpj_ratio=float(settings.get("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO) or DEFAULT_CODE_LOSS_FPJ_RATIO),
     )
     with st.expander("Auto-detected loss inputs", expanded=False):
         st.dataframe(audit, use_container_width=True, hide_index=True)
@@ -2092,6 +2134,7 @@ def _render_girder_code_based_loss_estimate(
             fci_MPa=float(settings.get("fci_MPa", fci)),
             humidity_percent=float(settings.get("humidity_percent", 70.0)),
             relaxation_class=str(settings.get("relaxation_class", "Low relaxation")),
+            fpj_ratio=float(settings.get("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO) or DEFAULT_CODE_LOSS_FPJ_RATIO),
         )
         calc_clicked = st.button(
             "Calculate and use approximate losses",

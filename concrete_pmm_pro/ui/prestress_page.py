@@ -205,9 +205,6 @@ GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS = [
     "Left debond m",
     "Right debond m",
     "Debonded strand nos",
-    "Pe_transfer/strand_kN",
-    "Pe_construction/strand_kN",
-    "Pe_eff_final/strand_kN",
     "Note",
 ]
 
@@ -1635,18 +1632,18 @@ def _render_girder_loss_apply_workflow_guidance(
     status = "Applied / SLS feed ready" if synced else "Pending apply"
     if mode == "Approximate code-based loss":
         step_1 = "Confirm code-loss inputs"
-        step_2 = "Calculate and review loss estimate"
-        step_3 = "Apply calculated losses"
+        step_2 = "Calculate and use loss estimate"
+        step_3 = "Confirm SLS feed"
         status_detail = (
-            "Code-based Pe values are applied to the force-state table and strand table."
+            "Code-based Pe values are the active force-state source for the strand table."
             if synced
-            else "Calculate an estimate, then use the Apply button below the loss result table. No manual/percentage Apply button is needed in this mode."
+            else "Calculate and use an estimate to update the active force states and strand table in one step."
         )
         st.info(
             "Code-based loss workflow: 1) confirm detected inputs and required assumptions → "
-            "2) calculate and review the approximate loss estimate → "
-            "3) press Apply calculated losses directly below the result table → "
-            "4) confirm SLS feed is Ready."
+            "2) press Calculate and use approximate losses → "
+            "3) review the loss breakdown → "
+            "4) confirm SLS feed is Ready. No separate Apply button is required in this mode."
         )
     else:
         step_1 = "Edit force-state table"
@@ -1744,21 +1741,39 @@ def _render_girder_code_based_loss_estimate(
         humidity_percent=float(humidity),
         relaxation_class=str(relaxation),
     )
-    calc_clicked = st.button("Calculate approximate loss estimate", key="calculate_girder_code_loss_estimate", type="primary")
+    calc_clicked = st.button(
+        "Calculate and use approximate losses",
+        key="calculate_girder_code_loss_estimate",
+        type="primary",
+        use_container_width=True,
+    )
     if calc_clicked:
         if loss_input is None:
             st.error("Approximate loss estimate requires section geometry, gross properties, active strand rows, and Pjack values.")
         else:
             result = calculate_approximate_prestress_loss(loss_input)
-            st.session_state["girder_prestress_code_loss_result_table"] = result.result_dataframe()
+            result_df_to_apply = result.result_dataframe()
+            st.session_state["girder_prestress_code_loss_result_table"] = result_df_to_apply
             st.session_state["girder_prestress_code_loss_summary_table"] = result.summary_dataframe()
             st.session_state["girder_prestress_code_loss_messages"] = list(result.messages)
-            st.session_state["girder_prestress_code_loss_apply_status"] = "Pending apply"
-            st.success("Approximate code-based loss estimate updated. Review the breakdown, then press Apply calculated losses below this result table.")
+            mapped = loss_result_dataframe_to_force_state_table(result_df_to_apply, force_table)
+            normalized = _normalize_girder_loss_force_state_table(mapped, strand_table, mode="Manual stage Pe")
+            st.session_state["girder_prestress_loss_force_state_table"] = normalized
+            updated_strands = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
+            st.session_state["girder_strand_layout_table"] = updated_strands
+            st.session_state["girder_prestress_code_loss_apply_status"] = "Applied"
+            st.session_state["girder_prestress_loss_force_state_apply_status"] = "Applied"
+            st.session_state["girder_prestress_active_pe_source"] = "Approximate code-based loss"
+            st.session_state.pop("girder_strand_layout_editor", None)
+            st.session_state.pop("girder_prestress_loss_force_state_editor", None)
+            st.success("Approximate losses calculated and set as the active Pe source for Force States, strand table, and Effective Prestress Preview.")
+            rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+            if callable(rerun):
+                rerun()
 
     result_table = st.session_state.get("girder_prestress_code_loss_result_table")
     if result_table is None or pd.DataFrame(result_table).empty:
-        st.info("Calculate an approximate loss estimate to populate Pe_transfer and Pe_final from code-based loss components.")
+        st.info("Calculate and use an approximate loss estimate to populate the active Pe_transfer, Pe_construction, and Pe_final values.")
         return
     result_df = pd.DataFrame(result_table)
     display_df = result_df.copy()
@@ -1780,31 +1795,7 @@ def _render_girder_code_based_loss_estimate(
     summary_table = st.session_state.get("girder_prestress_code_loss_summary_table")
     if summary_table is not None and not pd.DataFrame(summary_table).empty:
         st.dataframe(pd.DataFrame(summary_table), use_container_width=True, hide_index=True)
-    code_apply_status = st.session_state.get("girder_prestress_code_loss_apply_status", "Pending apply")
-    if code_apply_status == "Applied":
-        st.success("Calculated losses have been applied to Force States and the strand table. Effective Prestress Preview should now use these Pe values.")
-    else:
-        st.warning("Calculated losses are pending apply. Press the red Apply button below this result table; do not also press the manual/percentage Apply button above.")
-    apply_calc = st.button(
-        "Apply calculated losses to force states and strand table",
-        key="apply_code_loss_to_force_states_and_strands",
-        type="primary",
-        use_container_width=True,
-    )
-    if apply_calc:
-        mapped = loss_result_dataframe_to_force_state_table(result_df, force_table)
-        normalized = _normalize_girder_loss_force_state_table(mapped, strand_table, mode="Manual stage Pe")
-        st.session_state["girder_prestress_loss_force_state_table"] = normalized
-        updated_strands = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
-        st.session_state["girder_strand_layout_table"] = updated_strands
-        st.session_state["girder_prestress_code_loss_apply_status"] = "Applied"
-        st.session_state["girder_prestress_loss_force_state_apply_status"] = "Applied"
-        st.session_state.pop("girder_strand_layout_editor", None)
-        st.session_state.pop("girder_prestress_loss_force_state_editor", None)
-        st.success("Calculated losses applied to Force States and strand-layout Pe columns. No second Apply step is required.")
-        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-        if callable(rerun):
-            rerun()
+    st.success("Active Pe source: Approximate code-based loss. The values shown above are already synchronized to Force States and the strand table.")
     with st.expander("Approximate loss assumptions / formula audit", expanded=False):
         st.markdown(
             "- Pretensioned girder approximation only: ES + long-term loss.\n"
@@ -1870,7 +1861,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         _render_stage_pe_mapping_audit(synced_force_table, expanded=False)
         st.warning(
             "LOSS2A approximate code-based loss results are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
-            "Use only the Apply calculated losses button in this mode."
+            "The Calculate-and-use action is the single source of truth for this mode."
         )
         return
 

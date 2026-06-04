@@ -56,11 +56,11 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Apply manual / percentage force states to strand table" in PRESTRESS_SOURCE
     assert "Approximate code-based loss" in PRESTRESS_SOURCE
     assert "Only this manual/percentage workspace is active in the current mode" in PRESTRESS_SOURCE
-    assert "Use only the Apply calculated losses button in this mode" in PRESTRESS_SOURCE
-    assert "No second Apply step is required" in PRESTRESS_SOURCE
+    assert "The Calculate-and-use action is the single source of truth for this mode" in PRESTRESS_SOURCE
+    assert "No separate Apply button is required in this mode" in PRESTRESS_SOURCE
     assert "Code-Based Loss Estimate" in PRESTRESS_SOURCE
-    assert "Calculate approximate loss estimate" in PRESTRESS_SOURCE
-    assert "Apply calculated losses to force states and strand table" in PRESTRESS_SOURCE
+    assert "Calculate and use approximate losses" in PRESTRESS_SOURCE
+    assert "Apply calculated losses to force states and strand table" not in PRESTRESS_SOURCE
     assert "girder_prestress_code_loss_settings" in PRESTRESS_SOURCE
     assert "calculate_approximate_prestress_loss" in PRESTRESS_SOURCE
 
@@ -502,6 +502,9 @@ def test_generic_girder_defaults_expose_editable_x_coordinate_list(monkeypatch) 
 
     table = _normalize_girder_strand_layout_table(None, span_length_m=30.0)
     assert GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS.index("Strand x positions mm") < GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS.index("y_mm_from_bottom")
+    assert "Pe_transfer/strand_kN" not in GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS
+    assert "Pe_construction/strand_kN" not in GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS
+    assert "Pe_eff_final/strand_kN" not in GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS
     first_count = int(table.loc[0, "No. Strands"])
     coords = _parse_explicit_x_positions(table.loc[0, "Strand x positions mm"], first_count)
     assert len(coords) == first_count

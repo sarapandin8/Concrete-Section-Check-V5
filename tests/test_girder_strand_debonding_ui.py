@@ -1593,3 +1593,31 @@ def test_girder_loss1b_force_state_mapping_and_sls_feed_matching(monkeypatch) ->
 
     force_table.loc[0, "Pe_eff_final/strand_kN"] = 100.0
     assert not prestress_page._girder_force_states_match_strand_layout(strand_table, force_table)
+
+
+def test_loss_display_dataframe_preserves_text_placeholders_without_to_numeric_error(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import _loss_display_dataframe  # noqa: PLC0415
+
+    raw = pd.DataFrame(
+        [
+            {"Component": "Shrinkage", "Loss MPa": 12.34567, "Formula loss term": "εbdf × Ep × Kdf"},
+            {"Component": "Review", "Loss MPa": "—", "Formula loss term": "manual coefficient missing"},
+        ]
+    )
+    display = _loss_display_dataframe(raw)
+    assert display.loc[0, "Loss MPa"] == 12.346
+    assert display.loc[1, "Loss MPa"] == "—"
+    assert display.loc[0, "Formula loss term"] == "εbdf × Ep × Kdf"

@@ -1737,14 +1737,34 @@ def _build_girder_refined_aashto_loss_input(
 
 
 def _loss_display_dataframe(table: pd.DataFrame) -> pd.DataFrame:
-    """Return a rounded display copy for loss result/audit tables."""
+    """Return a rounded display copy for loss result/audit tables.
+
+    Pandas 3 removes/strictly validates ``errors="ignore"`` in
+    ``to_numeric``.  LOSS3A refined audit tables may legitimately mix numeric
+    losses with text placeholders/status/formula cells, so display formatting
+    must be value-safe instead of coercing whole columns blindly.
+    """
+
+    def _format_loss_value(value: Any) -> Any:
+        if value is None or pd.isna(value):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped in {"", "-", "—", "N/A", "n/a"}:
+                return value
+            try:
+                return round(float(stripped.replace(",", "")), 3)
+            except ValueError:
+                return value
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return value
 
     display_df = pd.DataFrame(table).copy()
     for column in display_df.columns:
         if any(token in str(column) for token in ["kN", "MPa", "%", "loss"]):
-            display_df[column] = pd.to_numeric(display_df[column], errors="ignore")
-            if pd.api.types.is_numeric_dtype(display_df[column]):
-                display_df[column] = display_df[column].round(3)
+            display_df[column] = display_df[column].map(_format_loss_value)
     return display_df
 
 

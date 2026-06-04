@@ -26,6 +26,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Rebuild default strand layout from current section" in PRESTRESS_SOURCE
     assert "Box/Plank presets use practical BP1 layouts" in PRESTRESS_SOURCE
     assert "Strand x positions mm" in PRESTRESS_SOURCE
+    assert '"Strand x positions mm",\n    "y_mm_from_bottom"' in PRESTRESS_SOURCE
+    assert "🟨 x coordinates (mm)" in PRESTRESS_SOURCE
+    assert "_auto_strand_x_positions_text" in PRESTRESS_SOURCE
     assert "Option 2 spaced symmetric pairs" in PRESTRESS_SOURCE
     assert 'line={"color": section_line_color, "width": 2.0, "dash": "solid"}' in PRESTRESS_SOURCE
     assert 'name="Bonded"' in PRESTRESS_SOURCE
@@ -332,6 +335,53 @@ def test_data_editor_patch_payload_persists_first_edit_without_dataframe_value_e
 
 
 
+def test_data_editor_patch_payload_persists_first_x_coordinate_edit(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    import concrete_pmm_pro.ui.prestress_page as prestress_page  # noqa: PLC0415
+
+    base = prestress_page._normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "Strand x positions mm": "-75,-25,25,75",
+                    "y_mm_from_bottom": 50.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    prestress_page.st.session_state.clear()
+    prestress_page.st.session_state["girder_strand_layout_table"] = base
+    prestress_page.st.session_state["girder_strand_layout_editor"] = {
+        "edited_rows": {0: {"Strand x positions mm": "-90,-30,30,90"}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+
+    prestress_page._sync_girder_strand_layout_editor_to_table(30.0, "Left/right independent", None)
+    saved = prestress_page.st.session_state["girder_strand_layout_table"]
+    assert saved.loc[0, "Strand x positions mm"] == "-90,-30,30,90"
+    points = prestress_page._girder_strand_point_layout_dataframe(saved, None)
+    assert points["x_mm"].tolist() == [-90.0, -30.0, 30.0, 90.0]
+
+
+
 def test_longitudinal_plot_orders_row_1_at_bottom_and_hides_termination_text(monkeypatch) -> None:
     import sys
     import types
@@ -410,6 +460,35 @@ def test_girder_strand_default_size_is_12_7_mm_with_auto_area(monkeypatch) -> No
     assert table.loc[0, "Total Aps_mm2"] == 8 * 98.7
     assert table.loc[0, "Edge CL_mm"] == 45.0
     assert table.loc[0, "Min spacing_mm"] == 50.0
+
+
+
+def test_generic_girder_defaults_expose_editable_x_coordinate_list(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS,
+        _normalize_girder_strand_layout_table,
+        _parse_explicit_x_positions,
+    )
+
+    table = _normalize_girder_strand_layout_table(None, span_length_m=30.0)
+    assert GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS.index("Strand x positions mm") < GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS.index("y_mm_from_bottom")
+    first_count = int(table.loc[0, "No. Strands"])
+    coords = _parse_explicit_x_positions(table.loc[0, "Strand x positions mm"], first_count)
+    assert len(coords) == first_count
+    assert coords == sorted(coords)
 
 
 
@@ -793,6 +872,47 @@ def test_cross_section_legend_uses_open_markers_matching_section_symbols(monkeyp
     assert debonded.marker.color == "rgba(255,255,255,0.0)"
     assert bonded.marker.line.color == "#1f77b4"
     assert debonded.marker.line.color == "#dc2626"
+
+
+
+def test_x_coordinate_list_mismatch_warns_without_crashing(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _normalize_girder_strand_layout_table,
+        _validate_girder_strand_layout,
+    )
+
+    table = _normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "Strand x positions mm": "-100,100",
+                    "y_mm_from_bottom": 50.0,
+                }
+            ]
+        ),
+        span_length_m=10.0,
+    )
+    errors, warnings = _validate_girder_strand_layout(table, span_length_m=10.0, geometry=None)
+    assert errors == []
+    assert any("x coordinates must contain exactly 4 numeric value" in warning for warning in warnings)
+
 
 def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(monkeypatch) -> None:
     import sys

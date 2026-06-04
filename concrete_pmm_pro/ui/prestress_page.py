@@ -173,6 +173,7 @@ GIRDER_STRAND_LAYOUT_EDITOR_COLUMNS = [
     "Group ID",
     "Strand Size",
     "No. Strands",
+    "Strand x positions mm",
     "y_mm_from_bottom",
     "Left debond m",
     "Right debond m",
@@ -1335,6 +1336,21 @@ def _parse_explicit_x_positions(value: Any, expected_count: int) -> list[float]:
     return parsed
 
 
+def _auto_strand_x_positions_text(count: int, *, center_x_mm: float = 0.0, spacing_mm: float = DEFAULT_GIRDER_STRAND_X_SPACING_MM) -> str:
+    """Return editable comma-separated x coordinates for the strand row.
+
+    The values are intentionally stored as text because a row may contain many
+    individual strand x coordinates.  Users can edit the list directly, and the
+    first edit is persisted by the data-editor sync callback.
+    """
+
+    strand_count = max(0, int(count))
+    if strand_count <= 0:
+        return ""
+    positions = [float(center_x_mm) + value for value in _symmetric_no_center_positions(strand_count, float(spacing_mm))]
+    return _format_explicit_x_positions(positions)
+
+
 def _box_plank_practical_debonded_numbers(count: int) -> str:
     """Return Option 2 spaced symmetric pairs for four practical debonded strands."""
 
@@ -1541,7 +1557,7 @@ def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None)
                 "Area/Strand_mm2": props["area_mm2"],
                 "Total Aps_mm2": count * props["area_mm2"],
                 "Row center x_mm": 0.0,
-                "Strand x positions mm": "",
+                "Strand x positions mm": _auto_strand_x_positions_text(count, center_x_mm=0.0, spacing_mm=props["recommended_min_spacing_mm"]),
                 "y_mm_from_bottom": y_from_bottom,
                 "Edge CL_mm": props["recommended_edge_cl_mm"],
                 "Min spacing_mm": props["recommended_min_spacing_mm"],
@@ -1646,6 +1662,8 @@ def _normalize_girder_strand_layout_table(
         # satisfy the 3db minimum spacing check for the two supported sizes.
         edge_cl = float(strand_props["recommended_edge_cl_mm"])
         min_spacing = float(strand_props["recommended_min_spacing_mm"])
+        if not strand_x_positions and no_strands > 0:
+            strand_x_positions = _auto_strand_x_positions_text(int(no_strands), center_x_mm=0.0 if x_mm is None else float(x_mm), spacing_mm=min_spacing)
         pe_transfer = _to_float(current.get("Pe_transfer/strand_kN"))
         pe_construction = _to_float(current.get("Pe_construction/strand_kN"))
         pe_final = _to_float(current.get("Pe_eff_final/strand_kN"))
@@ -2087,6 +2105,12 @@ def _validate_girder_strand_layout(table: pd.DataFrame, *, span_length_m: float,
             errors.append(f"{group}: y from bottom must not be negative.")
         if section_depth is not None and y > section_depth:
             warnings.append(f"{group}: y from bottom is outside the current section depth ({section_depth:.1f} mm).")
+        raw_x_positions = str(row.get("Strand x positions mm") or "").strip()
+        if raw_x_positions and count > 0 and not _parse_explicit_x_positions(raw_x_positions, count):
+            warnings.append(
+                f"{group}: x coordinates must contain exactly {count} numeric value(s); "
+                "layout preview falls back to the row center and practical spacing until corrected."
+            )
         _, _, row_layout_messages = _strand_row_point_layout(row, geometry)
         warnings.extend(row_layout_messages)
         pe_transfer = float(_to_float(row.get("Pe_transfer/strand_kN")) or 0.0)
@@ -2659,7 +2683,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         geometry=geometry,
     )
     st.caption(
-        "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, optional debonded strand numbers, and stage Pe per strand. "
+        "🟨 Primary input columns: strand size, number of strands, editable strand x coordinates, y-position, left/right debond lengths, optional debonded strand numbers, and stage Pe per strand. "
         "Defaults use 12.7 mm low-relaxation strand. Box/Plank presets use practical BP1 layouts; other girders use 2 rows at y=50/100 mm, 45 mm edge CL, and 50 mm x/y spacing. "
         "Area, minimum spacing, and total Aps are auto-calculated."
     )
@@ -2678,6 +2702,10 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             "Area/Strand_mm2": st.column_config.NumberColumn("Area/strand (mm²)", disabled=True, format="%.3f"),
             "Total Aps_mm2": st.column_config.NumberColumn("Total Aps (mm²)", disabled=True, format="%.3f"),
             "Row center x_mm": st.column_config.NumberColumn("Row center x (mm)", step=10.0, format="%.3f"),
+            "Strand x positions mm": st.column_config.TextColumn(
+                "🟨 x coordinates (mm)",
+                help="Comma-separated individual strand x coordinates for this row, measured from the section centerline. Leave blank to regenerate an auto centered row.",
+            ),
             "y_mm_from_bottom": st.column_config.NumberColumn("🟨 y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
             "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", disabled=True, format="%.3f"),
             "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", disabled=True, format="%.3f"),

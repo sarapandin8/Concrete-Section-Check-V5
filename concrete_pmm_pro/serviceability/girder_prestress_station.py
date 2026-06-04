@@ -745,7 +745,13 @@ def girder_debonding_preview_status(
 
 
 def _symmetric_outer_pair_numbers(no_strands: int, requested_count: int) -> tuple[int, ...]:
-    """Return symmetric outer strand numbers, limited to an even count."""
+    """Return practical symmetric spaced-pair strand numbers.
+
+    BP1/PS6B uses the user's preferred practical pattern: symmetric pairs are
+    selected from the outside while skipping one strand between selected pairs
+    where possible.  For example, 18 strands and four requested debonded
+    strands returns 1, 3, 16, 18 rather than adjacent 1, 2, 17, 18.
+    """
 
     count = max(0, int(no_strands))
     requested = max(0, int(requested_count))
@@ -754,10 +760,26 @@ def _symmetric_outer_pair_numbers(no_strands: int, requested_count: int) -> tupl
     even_requested = requested if requested % 2 == 0 else requested - 1
     max_even = (count // 2) * 2
     selected_count = min(even_requested, max_even)
-    selected: list[int] = []
     pair_count = selected_count // 2
-    for offset in range(pair_count):
-        selected.extend([1 + offset, count - offset])
+    selected: list[int] = []
+    for pair_index in range(pair_count):
+        offset = pair_index * 2
+        left = 1 + offset
+        right = count - offset
+        if left >= right:
+            break
+        selected.extend([left, right])
+    if len(selected) < selected_count:
+        # Fallback for small rows where spaced pairs run out of room.
+        for offset in range(count // 2):
+            candidate = [1 + offset, count - offset]
+            for value in candidate:
+                if value not in selected:
+                    selected.append(value)
+                if len(selected) >= selected_count:
+                    break
+            if len(selected) >= selected_count:
+                break
     return tuple(sorted(set(selected)))
 
 
@@ -772,7 +794,7 @@ def girder_advisory_debonding_recommendations(
     """Return a conservative code-aware advisory debonding layout.
 
     The recommendation is intentionally a starter layout, not final design. It
-    selects symmetric outer strand pairs from lower rows first because those
+    selects symmetric spaced strand pairs from lower rows first because those
     strands usually have the largest eccentricity in straight pretensioned
     girders.  Selection is limited by common code guardrails: total debonded
     strands <= 25%, per-row debonded strands <= 40%, symmetric pair selection,
@@ -815,7 +837,7 @@ def girder_advisory_debonding_recommendations(
                     right_debond_m=length,
                     guardrail_status="ADVISORY OK",
                     engineering_reason=(
-                        "Symmetric outer pair selected from lower rows first. Guardrails applied: "
+                        "Symmetric spaced pair selected from lower rows first. Guardrails applied: "
                         "total <=25%, row <=40%, symmetric pair, debond length <=L/5. "
                         "Final transfer stress, development, shear, and end-zone checks are still required."
                     ),

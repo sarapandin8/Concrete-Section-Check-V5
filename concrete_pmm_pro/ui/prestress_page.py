@@ -136,6 +136,7 @@ GIRDER_STRAND_LAYOUT_COLUMNS = [
     "Area/Strand_mm2",
     "Total Aps_mm2",
     "Row center x_mm",
+    "Strand x positions mm",
     "y_mm_from_bottom",
     "Edge CL_mm",
     "Min spacing_mm",
@@ -189,6 +190,7 @@ GIRDER_STRAND_LAYOUT_AUDIT_COLUMNS = [
     "Area/Strand_mm2",
     "Total Aps_mm2",
     "Row center x_mm",
+    "Strand x positions mm",
     "y_mm_from_bottom",
     "Edge CL_mm",
     "Min spacing_mm",
@@ -245,6 +247,11 @@ DEFAULT_GIRDER_STRAND_ROW_VERTICAL_SPACING_MM = 50.0
 DEFAULT_GIRDER_STRAND_X_SPACING_MM = 50.0
 DEFAULT_GIRDER_STRAND_EDGE_CL_MM = 45.0
 DEFAULT_GIRDER_STRAND_FALLBACK_COUNTS = [8, 6]
+
+BOX_PLANK_PRACTICAL_DEBOND_PATTERN = "Symmetric spaced pairs"
+PRECAST_BOX_BEAM_PRESET_KEYS = frozenset({"box_section_fillet", "precast_box_beam_exterior"})
+PRECAST_PLANK_GIRDER_PRESET_KEYS = frozenset({"parametric_plank_girder_interior", "parametric_plank_girder_exterior"})
+BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M = 1.0
 
 GIRDER_PRESTRESS_UI_PRESET_KEYS = frozenset(
     {
@@ -1235,6 +1242,270 @@ def _default_strand_count_for_row(geometry: SectionGeometry | None, y_from_botto
     return max(1, int(available_width // DEFAULT_GIRDER_STRAND_X_SPACING_MM) + 1)
 
 
+def _geometry_preset_key(geometry: SectionGeometry | None) -> str:
+    if geometry is None:
+        return ""
+    metadata = getattr(geometry, "metadata", {}) or {}
+    return str(metadata.get("preset") or metadata.get("section_preset_key") or "").strip()
+
+
+def _current_or_geometry_section_preset_key(geometry: SectionGeometry | None = None) -> str:
+    # Geometry metadata is the safest source for default rebuilding because
+    # tests and imported UI helpers can leave a stale section_preset_key in
+    # session state.  Fall back to session only when geometry has no preset.
+    return _geometry_preset_key(geometry) or _current_section_preset_key()
+
+
+def _section_bounds_from_geometry(geometry: SectionGeometry | None) -> tuple[float, float, float, float] | None:
+    if geometry is None:
+        return None
+    try:
+        polygon = to_shapely_polygon(geometry)
+        minx, miny, maxx, maxy = polygon.bounds
+        return float(minx), float(miny), float(maxx), float(maxy)
+    except Exception:
+        return None
+
+
+def _section_depth_from_geometry(geometry: SectionGeometry | None, *, fallback_mm: float) -> float:
+    bounds = _section_bounds_from_geometry(geometry)
+    if bounds is None:
+        return float(fallback_mm)
+    _, miny, _, maxy = bounds
+    return float(maxy - miny)
+
+
+def _section_width_from_geometry(geometry: SectionGeometry | None, *, fallback_mm: float) -> float:
+    bounds = _section_bounds_from_geometry(geometry)
+    if bounds is None:
+        return float(fallback_mm)
+    minx, _, maxx, _ = bounds
+    return float(maxx - minx)
+
+
+def _symmetric_no_center_positions(count: int, spacing_mm: float) -> list[float]:
+    """Return symmetric x positions with no strand on the centerline for even counts."""
+
+    strand_count = max(0, int(count))
+    if strand_count <= 0:
+        return []
+    if strand_count == 1:
+        return [0.0]
+    spacing = max(float(spacing_mm), 0.0)
+    return [(float(i) - (float(strand_count) - 1.0) / 2.0) * spacing for i in range(strand_count)]
+
+
+def _symmetric_spread_no_center_positions(count: int, outer_offset_mm: float) -> list[float]:
+    """Return evenly spread symmetric positions between +/-outer_offset, avoiding CL."""
+
+    strand_count = max(0, int(count))
+    if strand_count <= 0:
+        return []
+    if strand_count == 1:
+        return [0.0]
+    half_count = strand_count // 2
+    if strand_count % 2:
+        half_count = strand_count // 2
+        side = [float(outer_offset_mm) * (i + 1) / max(half_count, 1) for i in range(half_count)]
+        return [-value for value in reversed(side)] + [0.0] + side
+    step = float(outer_offset_mm) / max(half_count - 0.5, 0.5)
+    positive = [(i + 0.5) * step for i in range(half_count)]
+    return [-value for value in reversed(positive)] + positive
+
+
+def _format_explicit_x_positions(values: list[float]) -> str:
+    return ",".join(f"{value:.3f}" for value in values)
+
+
+def _parse_explicit_x_positions(value: Any, expected_count: int) -> list[float]:
+    if value is None:
+        return []
+    text_value = str(value).strip()
+    if not text_value:
+        return []
+    tokens = [part.strip() for part in text_value.replace(";", ",").replace("|", ",").split(",") if part.strip()]
+    parsed: list[float] = []
+    for token in tokens:
+        try:
+            parsed.append(float(token))
+        except (TypeError, ValueError):
+            return []
+    if len(parsed) != int(expected_count):
+        return []
+    return parsed
+
+
+def _box_plank_practical_debonded_numbers(count: int) -> str:
+    """Return Option 2 spaced symmetric pairs for four practical debonded strands."""
+
+    strand_count = int(count)
+    if strand_count >= 18:
+        return "1,3,16,18"
+    if strand_count >= 16:
+        return "1,3,14,16"
+    if strand_count >= 4:
+        return f"1,3,{strand_count - 2},{strand_count}"
+    return ""
+
+
+def _practical_box_beam_strand_layout_table(geometry: SectionGeometry | None) -> pd.DataFrame:
+    strand_size = DEFAULT_GIRDER_STRAND_SIZE
+    props = _strand_size_properties(strand_size)
+    pe_transfer = _default_pe_transfer_per_strand_kn(strand_size)
+    pe_final = _default_pe_final_per_strand_kn(strand_size)
+    width = _section_width_from_geometry(geometry, fallback_mm=990.0)
+    depth = _section_depth_from_geometry(geometry, fallback_mm=700.0)
+    top_pair_x = max(0.0, width / 2.0 - 100.0)
+    row2_outer = max(150.0, width / 2.0 - 145.0)
+    rows = [
+        {
+            "Active": True,
+            "Group ID": "Row 1",
+            "Layer": "Bottom row practical box preset",
+            "Strand Size": strand_size,
+            "No. Strands": 18,
+            "Area/Strand_mm2": props["area_mm2"],
+            "Total Aps_mm2": 18 * props["area_mm2"],
+            "Row center x_mm": 0.0,
+            "Strand x positions mm": _format_explicit_x_positions(_symmetric_no_center_positions(18, 50.0)),
+            "y_mm_from_bottom": 50.0,
+            "Edge CL_mm": props["recommended_edge_cl_mm"],
+            "Min spacing_mm": props["recommended_min_spacing_mm"],
+            "Computed spacing_mm": 0.0,
+            "Pe_transfer/strand_kN": pe_transfer,
+            "Pe_construction/strand_kN": pe_transfer,
+            "Pe_eff_final/strand_kN": pe_final,
+            "Left debond m": BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M,
+            "Right debond m": BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M,
+            "Debonded strand nos": _box_plank_practical_debonded_numbers(18),
+            "Note": "BP1 practical box preset: Row 1 only debonded, Option 2 spaced symmetric pairs.",
+        },
+        {
+            "Active": True,
+            "Group ID": "Row 2",
+            "Layer": "Middle row practical box preset",
+            "Strand Size": strand_size,
+            "No. Strands": 6,
+            "Area/Strand_mm2": props["area_mm2"],
+            "Total Aps_mm2": 6 * props["area_mm2"],
+            "Row center x_mm": 0.0,
+            "Strand x positions mm": _format_explicit_x_positions(_symmetric_spread_no_center_positions(6, row2_outer)),
+            "y_mm_from_bottom": 100.0,
+            "Edge CL_mm": props["recommended_edge_cl_mm"],
+            "Min spacing_mm": props["recommended_min_spacing_mm"],
+            "Computed spacing_mm": 0.0,
+            "Pe_transfer/strand_kN": pe_transfer,
+            "Pe_construction/strand_kN": pe_transfer,
+            "Pe_eff_final/strand_kN": pe_final,
+            "Left debond m": 0.0,
+            "Right debond m": 0.0,
+            "Debonded strand nos": "",
+            "Note": "BP1 practical box preset: distributed middle row, no strand on CL.",
+        },
+        {
+            "Active": True,
+            "Group ID": "Row 3",
+            "Layer": "Top row practical box preset",
+            "Strand Size": strand_size,
+            "No. Strands": 2,
+            "Area/Strand_mm2": props["area_mm2"],
+            "Total Aps_mm2": 2 * props["area_mm2"],
+            "Row center x_mm": 0.0,
+            "Strand x positions mm": _format_explicit_x_positions([-top_pair_x, top_pair_x]),
+            "y_mm_from_bottom": max(0.0, depth - 50.0),
+            "Edge CL_mm": props["recommended_edge_cl_mm"],
+            "Min spacing_mm": props["recommended_min_spacing_mm"],
+            "Computed spacing_mm": 0.0,
+            "Pe_transfer/strand_kN": pe_transfer,
+            "Pe_construction/strand_kN": pe_transfer,
+            "Pe_eff_final/strand_kN": pe_final,
+            "Left debond m": 0.0,
+            "Right debond m": 0.0,
+            "Debonded strand nos": "",
+            "Note": "BP1 practical box preset: top pair 100 mm from top corners.",
+        },
+    ]
+    return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+
+
+def _practical_plank_girder_strand_layout_table(geometry: SectionGeometry | None) -> pd.DataFrame:
+    strand_size = DEFAULT_GIRDER_STRAND_SIZE
+    props = _strand_size_properties(strand_size)
+    pe_transfer = _default_pe_transfer_per_strand_kn(strand_size)
+    pe_final = _default_pe_final_per_strand_kn(strand_size)
+    width = _section_width_from_geometry(geometry, fallback_mm=990.0)
+    depth = _section_depth_from_geometry(geometry, fallback_mm=450.0)
+    edge_bottom = 70.0
+    nearest_cl = 75.0
+    half_count = 8
+    left_positions = [-(nearest_cl + 50.0 * i) for i in reversed(range(half_count))]
+    right_positions = [(nearest_cl + 50.0 * i) for i in range(half_count)]
+    bottom_positions = left_positions + right_positions
+    # If the current section width differs from the 990 mm practical plank detail,
+    # shift only the outer pair to preserve the user's 70 mm edge convention.
+    target_outer = max(0.0, width / 2.0 - edge_bottom)
+    scale = target_outer / 425.0 if abs(target_outer - 425.0) > 1e-9 and target_outer > 0.0 else 1.0
+    if scale != 1.0:
+        bottom_positions = [round(value * scale, 3) for value in bottom_positions]
+    top_pair_x = max(0.0, width / 2.0 - 75.0)
+    rows = [
+        {
+            "Active": True,
+            "Group ID": "Row 1",
+            "Layer": "Bottom row practical plank preset",
+            "Strand Size": strand_size,
+            "No. Strands": 16,
+            "Area/Strand_mm2": props["area_mm2"],
+            "Total Aps_mm2": 16 * props["area_mm2"],
+            "Row center x_mm": 0.0,
+            "Strand x positions mm": _format_explicit_x_positions(bottom_positions),
+            "y_mm_from_bottom": 50.0,
+            "Edge CL_mm": props["recommended_edge_cl_mm"],
+            "Min spacing_mm": props["recommended_min_spacing_mm"],
+            "Computed spacing_mm": 0.0,
+            "Pe_transfer/strand_kN": pe_transfer,
+            "Pe_construction/strand_kN": pe_transfer,
+            "Pe_eff_final/strand_kN": pe_final,
+            "Left debond m": BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M,
+            "Right debond m": BOX_PLANK_PRACTICAL_DEBOND_LENGTH_M,
+            "Debonded strand nos": _box_plank_practical_debonded_numbers(16),
+            "Note": "BP1 practical plank preset: Row 1 only debonded, Option 2 spaced symmetric pairs.",
+        },
+        {
+            "Active": True,
+            "Group ID": "Row 2",
+            "Layer": "Top row practical plank preset",
+            "Strand Size": strand_size,
+            "No. Strands": 2,
+            "Area/Strand_mm2": props["area_mm2"],
+            "Total Aps_mm2": 2 * props["area_mm2"],
+            "Row center x_mm": 0.0,
+            "Strand x positions mm": _format_explicit_x_positions([-top_pair_x, top_pair_x]),
+            "y_mm_from_bottom": max(0.0, depth - 50.0),
+            "Edge CL_mm": props["recommended_edge_cl_mm"],
+            "Min spacing_mm": props["recommended_min_spacing_mm"],
+            "Computed spacing_mm": 0.0,
+            "Pe_transfer/strand_kN": pe_transfer,
+            "Pe_construction/strand_kN": pe_transfer,
+            "Pe_eff_final/strand_kN": pe_final,
+            "Left debond m": 0.0,
+            "Right debond m": 0.0,
+            "Debonded strand nos": "",
+            "Note": "BP1 practical plank preset: top pair 75 mm from top corners.",
+        },
+    ]
+    return pd.DataFrame(rows, columns=GIRDER_STRAND_LAYOUT_COLUMNS)
+
+
+def _practical_box_plank_default_girder_strand_layout_table(geometry: SectionGeometry | None = None) -> pd.DataFrame | None:
+    preset_key = _current_or_geometry_section_preset_key(geometry)
+    if preset_key in PRECAST_BOX_BEAM_PRESET_KEYS:
+        return _practical_box_beam_strand_layout_table(geometry)
+    if preset_key in PRECAST_PLANK_GIRDER_PRESET_KEYS:
+        return _practical_plank_girder_strand_layout_table(geometry)
+    return None
+
+
 def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None) -> pd.DataFrame:
     """Return a section-based starter strand-row layout for simple-supported girders.
 
@@ -1244,6 +1515,10 @@ def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None)
     50 mm horizontal strand spacing.  Row counts are seeded from the current
     section width at each row elevation, then remain editable by the engineer.
     """
+
+    practical = _practical_box_plank_default_girder_strand_layout_table(geometry)
+    if practical is not None:
+        return practical
 
     strand_size = DEFAULT_GIRDER_STRAND_SIZE
     props = _strand_size_properties(strand_size)
@@ -1264,6 +1539,7 @@ def _default_girder_strand_layout_table(geometry: SectionGeometry | None = None)
                 "Area/Strand_mm2": props["area_mm2"],
                 "Total Aps_mm2": count * props["area_mm2"],
                 "Row center x_mm": 0.0,
+                "Strand x positions mm": "",
                 "y_mm_from_bottom": y_from_bottom,
                 "Edge CL_mm": props["recommended_edge_cl_mm"],
                 "Min spacing_mm": props["recommended_min_spacing_mm"],
@@ -1360,6 +1636,7 @@ def _normalize_girder_strand_layout_table(
         x_mm = _to_float(current.get("Row center x_mm"))
         if x_mm is None:
             x_mm = _to_float(current.get("x_mm"))
+        strand_x_positions = str(current.get("Strand x positions mm") or "").strip()
         # Detailing aids are controlled by the selected standard strand size.
         # Current default convention: edge CL = 45 mm for both sizes; practical
         # minimum strand spacing = 50 mm for 12.7 mm strand and 55 mm for
@@ -1380,6 +1657,7 @@ def _normalize_girder_strand_layout_table(
                 "Area/Strand_mm2": area_per,
                 "Total Aps_mm2": total_aps,
                 "Row center x_mm": 0.0 if x_mm is None else x_mm,
+                "Strand x positions mm": strand_x_positions,
                 "y_mm_from_bottom": 0.0 if y_from_bottom is None else y_from_bottom,
                 "Edge CL_mm": edge_cl,
                 "Min spacing_mm": min_spacing,
@@ -1533,10 +1811,18 @@ def _strand_row_point_layout(row: pd.Series, geometry: SectionGeometry | None) -
     props = _strand_size_properties(row.get("Strand Size"))
     edge_cl = float(props["recommended_edge_cl_mm"])
     min_spacing = float(props["recommended_min_spacing_mm"])
-    spacing = min_spacing if count > 1 else 0.0
-
-    offsets = [(float(i) - (float(count) - 1.0) / 2.0) * spacing for i in range(count)]
-    points_x = [center_x + offset for offset in offsets]
+    explicit_positions = _parse_explicit_x_positions(row.get("Strand x positions mm"), count)
+    if explicit_positions:
+        points_x = explicit_positions
+        if count > 1:
+            sorted_x = sorted(points_x)
+            spacing = min(abs(sorted_x[i + 1] - sorted_x[i]) for i in range(len(sorted_x) - 1))
+        else:
+            spacing = 0.0
+    else:
+        spacing = min_spacing if count > 1 else 0.0
+        offsets = [(float(i) - (float(count) - 1.0) / 2.0) * spacing for i in range(count)]
+        points_x = [center_x + offset for offset in offsets]
 
     segment = _section_horizontal_segment_at_y(geometry, y_abs)
     if segment is not None:
@@ -2353,7 +2639,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
 
     if st.button(
         "Rebuild default strand layout from current section",
-        help="Replace the current strand table with a section-based 12.7 mm, two-row default using 50 mm row spacing, 45 mm edge CL, and 50 mm horizontal spacing.",
+        help="Replace the current strand table with the current section's practical strand preset. Box/Plank use BP1 practical layouts; other girders use the section-based starter layout.",
         key="rebuild_girder_strand_layout_defaults",
     ):
         seeded = _apply_computed_girder_strand_spacing(_default_girder_strand_layout_table(geometry), geometry)
@@ -2372,7 +2658,7 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
     )
     st.caption(
         "🟨 Primary input columns: strand size, number of strands, y-position, left/right debond lengths, optional debonded strand numbers, and stage Pe per strand. "
-        "Defaults use 12.7 mm low-relaxation strand, 2 rows at y=50/100 mm, 45 mm edge CL, and 50 mm x/y spacing. "
+        "Defaults use 12.7 mm low-relaxation strand. Box/Plank presets use practical BP1 layouts; other girders use 2 rows at y=50/100 mm, 45 mm edge CL, and 50 mm x/y spacing. "
         "Area, minimum spacing, and total Aps are auto-calculated."
     )
     edited = st.data_editor(

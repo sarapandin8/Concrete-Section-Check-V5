@@ -288,6 +288,23 @@ def test_advisory_debonding_recommendation_selects_symmetric_outer_pairs_with_co
     assert proposed <= int((19 + 17) * 0.25)
 
 
+
+def test_advisory_debonding_recommendation_uses_spaced_pairs_when_more_than_one_pair_is_requested() -> None:
+    layout = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "No. Strands": 18,
+                "Area/Strand_mm2": 98.7,
+                "y_mm_from_bottom": 50.0,
+            },
+        ]
+    )
+    recommendations = girder_advisory_debonding_recommendations(layout, span_length_m=30.0, max_pairs_per_row=2)
+    assert recommendations[0].recommended_numbers == (1, 3, 16, 18)
+
+
 def test_advisory_debonding_recommendation_dataframe_reports_no_action_when_limits_are_exhausted() -> None:
     layout = pd.DataFrame(
         [

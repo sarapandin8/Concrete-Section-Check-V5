@@ -24,7 +24,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Transfer/development length transition is not modeled" in PRESTRESS_SOURCE
     assert "does not change current Analysis results" in PRESTRESS_SOURCE
     assert "Rebuild default strand layout from current section" in PRESTRESS_SOURCE
-    assert "2 rows at y=50/100 mm" in PRESTRESS_SOURCE
+    assert "Box/Plank presets use practical BP1 layouts" in PRESTRESS_SOURCE
+    assert "Strand x positions mm" in PRESTRESS_SOURCE
+    assert "Option 2 spaced symmetric pairs" in PRESTRESS_SOURCE
     assert 'line={"color": section_line_color, "width": 2.0, "dash": "solid"}' in PRESTRESS_SOURCE
     assert 'name="Bonded"' in PRESTRESS_SOURCE
     assert 'name="Debonded"' in PRESTRESS_SOURCE
@@ -641,8 +643,64 @@ def test_box_beam_default_strand_layout_passes_void_aware_validation(monkeypatch
         errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
         assert errors == []
         assert warnings == []
-        assert table["y_mm_from_bottom"].tolist() == [50.0, 100.0]
-        assert table["No. Strands"].tolist() == [19, 19]
+        assert table["y_mm_from_bottom"].tolist() == [50.0, 100.0, 650.0]
+        assert table["No. Strands"].tolist() == [18, 6, 2]
+        assert table.loc[0, "Debonded strand nos"] == "1,3,16,18"
+        assert table.loc[0, "Left debond m"] == 1.0
+        assert table.loc[0, "Right debond m"] == 1.0
+        assert table.loc[1, "Debonded strand nos"] == ""
+        assert table.loc[2, "Debonded strand nos"] == ""
+
+
+
+def test_bp1_plank_practical_preset_uses_user_confirmed_layout(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.geometry.generators import parametric_plank_girder_interior  # noqa: PLC0415
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _girder_strand_point_layout_dataframe,
+        _normalize_girder_strand_layout_table,
+    )
+
+    geometry = parametric_plank_girder_interior(
+        B_mm=990,
+        b1_mm=45,
+        b2_mm=70,
+        b3_mm=850,
+        H_mm=450,
+        h1_mm=80,
+        h2_mm=140,
+        Tslab_mm=100,
+        Be_mm=1000,
+        Ebeam_MPa=35000,
+        Edeck_MPa=28560,
+        girder_length_mm=12000,
+    )
+    table = _normalize_girder_strand_layout_table(None, span_length_m=30.0, geometry=geometry)
+    assert table["Group ID"].tolist() == ["Row 1", "Row 2"]
+    assert table["No. Strands"].tolist() == [16, 2]
+    assert table["y_mm_from_bottom"].tolist() == [50.0, 400.0]
+    assert table.loc[0, "Debonded strand nos"] == "1,3,14,16"
+    assert table.loc[0, "Left debond m"] == 1.0
+    assert table.loc[0, "Right debond m"] == 1.0
+
+    points = _girder_strand_point_layout_dataframe(table, geometry)
+    row1_x = points.loc[points["Group ID"] == "Row 1", "x_mm"].round(6).tolist()
+    row2_x = points.loc[points["Group ID"] == "Row 2", "x_mm"].round(6).tolist()
+    assert row1_x == [-425.0, -375.0, -325.0, -275.0, -225.0, -175.0, -125.0, -75.0, 75.0, 125.0, 175.0, 225.0, 275.0, 325.0, 375.0, 425.0]
+    assert row2_x == [-420.0, 420.0]
+    assert 0.0 not in row1_x
 
 
 def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(monkeypatch) -> None:
@@ -715,7 +773,7 @@ def test_box_beam_strand_layout_warns_when_strands_enter_void_or_cover_is_low(mo
     table = _normalize_girder_strand_layout_table(low_cover_row, span_length_m=20.0, geometry=geometry)
     errors, warnings = _validate_girder_strand_layout(table, span_length_m=20.0, geometry=geometry)
     assert errors == []
-    assert any("minimum strand centerline clearance" in warning for warning in warnings)
+    assert any("minimum strand centerline clearance" in warning or "outside concrete or inside a void/chamfer" in warning for warning in warnings)
 
 
 def test_girder_strand_editor_first_edit_callback_persists_table(monkeypatch) -> None:

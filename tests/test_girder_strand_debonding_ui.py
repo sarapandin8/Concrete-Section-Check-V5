@@ -53,6 +53,11 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "girder_stage_pe_mapping_dataframe" in PRESTRESS_SOURCE
     assert 'type="primary"' in PRESTRESS_SOURCE
     assert "Use the Apply button directly below the force-state table" in PRESTRESS_SOURCE
+    assert "Code-Based Loss Estimate" in PRESTRESS_SOURCE
+    assert "Calculate approximate loss estimate" in PRESTRESS_SOURCE
+    assert "Apply calculated losses to force states and strand table" in PRESTRESS_SOURCE
+    assert "girder_prestress_code_loss_settings" in PRESTRESS_SOURCE
+    assert "calculate_approximate_prestress_loss" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:

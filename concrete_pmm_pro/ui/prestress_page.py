@@ -35,6 +35,14 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     tendon_product_options,
 )
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
+from concrete_pmm_pro.serviceability.section_properties import compute_gross_section_properties
+from concrete_pmm_pro.serviceability.girder_prestress_losses import (
+    GirderApproximateLossInput,
+    GirderLossStrandGroupInput,
+    LOSS_INPUT_AUDIT_COLUMNS,
+    calculate_approximate_prestress_loss,
+    loss_result_dataframe_to_force_state_table,
+)
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
     debonded_strand_count_for_row,
     debonded_strand_numbers_for_row,
@@ -1468,12 +1476,293 @@ def _render_stage_pe_mapping_audit(table: pd.DataFrame, *, expanded: bool = Fals
             "LOSS1B only audits Pe source availability by stage. It does not perform AASHTO/ACI loss calculation, transfer-length ramping, or stress checks."
         )
 
+
+
+
+def _girder_code_loss_settings_from_session() -> dict[str, Any]:
+    settings = dict(st.session_state.get("girder_prestress_code_loss_settings", {}) or {})
+    settings.setdefault("method", "Approximate code-based loss")
+    concrete = st.session_state.get("concrete_material")
+    fc_default = float(getattr(concrete, "fc_MPa", 45.0) or 45.0)
+    settings.setdefault("fci_MPa", 0.8 * fc_default)
+    settings.setdefault("humidity_percent", 70.0)
+    settings.setdefault("relaxation_class", "Low relaxation")
+    return settings
+
+
+def _active_force_state_rows_by_group(force_table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    return _loss_force_state_existing_rows_by_group(force_table)
+
+
+def _girder_approximate_loss_groups_from_tables(strand_table: pd.DataFrame, force_table: pd.DataFrame) -> list[GirderLossStrandGroupInput]:
+    force_by_group = _active_force_state_rows_by_group(force_table)
+    groups: list[GirderLossStrandGroupInput] = []
+    for _, row in _active_girder_strand_layout_rows(strand_table).iterrows():
+        group = str(row.get("Group ID") or "strand group")
+        force = force_by_group.get(group, {})
+        area = float(_to_float(row.get("Area/Strand_mm2")) or _strand_size_properties(row.get("Strand Size"))["area_mm2"])
+        count = int(_to_float(row.get("No. Strands")) or 0)
+        y_from_bottom = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
+        pjack = float(_to_float(force.get("Pjack/strand_kN")) or _default_pjack_per_strand_kn(row.get("Strand Size")))
+        props = _strand_size_properties(row.get("Strand Size"))
+        groups.append(
+            GirderLossStrandGroupInput(
+                group_id=group,
+                no_strands=count,
+                area_per_strand_mm2=area,
+                y_mm_from_bottom=y_from_bottom,
+                pjack_per_strand_kN=pjack,
+                Ep_MPa=float(props.get("ep_mpa", DEFAULT_STRAND_EP_MPA) or DEFAULT_STRAND_EP_MPA),
+                fpu_MPa=float(props.get("fpu_mpa", DEFAULT_STRAND_FPU_MPA) or DEFAULT_STRAND_FPU_MPA),
+            )
+        )
+    return groups
+
+
+def _girder_code_loss_input_audit_dataframe(
+    *,
+    geometry: SectionGeometry | None,
+    strand_table: pd.DataFrame,
+    force_table: pd.DataFrame,
+    fci_MPa: float,
+    humidity_percent: float,
+    relaxation_class: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    concrete = st.session_state.get("concrete_material")
+    fc = float(getattr(concrete, "fc_MPa", 0.0) or 0.0)
+    try:
+        props = compute_gross_section_properties(geometry) if geometry is not None else None
+    except Exception:
+        props = None
+    groups = _girder_approximate_loss_groups_from_tables(strand_table, force_table)
+    total_aps = sum(group.total_aps_mm2 for group in groups)
+    rows.extend(
+        [
+            {
+                "Item": "Concrete f'c",
+                "Value": f"{fc:.1f} MPa" if fc > 0 else "—",
+                "Source": "Materials page" if fc > 0 else "Missing",
+                "Status": "READY" if fc > 0 else "MISSING",
+                "Engineering note": "Final concrete strength for strength-factor context.",
+            },
+            {
+                "Item": "Concrete f'ci",
+                "Value": f"{float(fci_MPa):.1f} MPa",
+                "Source": "Loss workspace input",
+                "Status": "READY" if float(fci_MPa) > 0 else "MISSING",
+                "Engineering note": "Release strength used by elastic shortening and approximate long-term loss factors.",
+            },
+            {
+                "Item": "Relative humidity",
+                "Value": f"{float(humidity_percent):.0f}%",
+                "Source": "Loss workspace input",
+                "Status": "READY" if 40.0 <= float(humidity_percent) <= 100.0 else "REVIEW",
+                "Engineering note": "Advisory range is 40%–100% for this approximate estimate.",
+            },
+            {
+                "Item": "Gross section Ag / Ix",
+                "Value": f"Ag={props.area_mm2:,.0f} mm², Ix={props.Ix_mm4:,.0f} mm⁴" if props is not None else "—",
+                "Source": "Section geometry",
+                "Status": "READY" if props is not None else "MISSING",
+                "Engineering note": "Net gross section including voids/holes.",
+            },
+            {
+                "Item": "Prestressing steel",
+                "Value": f"{len(groups)} row(s), Aps={total_aps:,.1f} mm²",
+                "Source": "Strand layout + Force States",
+                "Status": "READY" if groups and total_aps > 0 else "MISSING",
+                "Engineering note": "Uses Pjack from Force States and strand product properties from the layout.",
+            },
+            {
+                "Item": "Relaxation class",
+                "Value": str(relaxation_class),
+                "Source": "Loss workspace input",
+                "Status": "READY",
+                "Engineering note": "Low relaxation uses 2.4 ksi relaxation loss in LOSS2A; stress-relieved uses 10 ksi.",
+            },
+        ]
+    )
+    return pd.DataFrame(rows, columns=LOSS_INPUT_AUDIT_COLUMNS)
+
+
+def _build_girder_approximate_loss_input(
+    *,
+    geometry: SectionGeometry | None,
+    strand_table: pd.DataFrame,
+    force_table: pd.DataFrame,
+    fci_MPa: float,
+    humidity_percent: float,
+    relaxation_class: str,
+) -> GirderApproximateLossInput | None:
+    if geometry is None:
+        return None
+    try:
+        props = compute_gross_section_properties(geometry)
+    except Exception:
+        return None
+    concrete = st.session_state.get("concrete_material")
+    fc = float(getattr(concrete, "fc_MPa", 0.0) or max(float(fci_MPa), 1.0))
+    Eci = 4700.0 * max(float(fci_MPa), 1.0) ** 0.5
+    bottom_y = _section_bottom_y_from_geometry(geometry)
+    cy_from_bottom = float(props.centroid_y_mm) - bottom_y
+    groups = tuple(_girder_approximate_loss_groups_from_tables(strand_table, force_table))
+    if not groups:
+        return None
+    return GirderApproximateLossInput(
+        groups=groups,
+        section_area_mm2=float(props.area_mm2),
+        section_Ix_mm4=float(props.Ix_mm4),
+        centroid_y_from_bottom_mm=cy_from_bottom,
+        fci_MPa=float(fci_MPa),
+        fc_MPa=fc,
+        Eci_MPa=Eci,
+        humidity_percent=float(humidity_percent),
+        relaxation_class=str(relaxation_class),
+    )
+
+
+def _render_girder_code_based_loss_estimate(
+    strand_table: pd.DataFrame,
+    force_table: pd.DataFrame,
+    geometry: SectionGeometry | None,
+) -> None:
+    st.markdown("##### Code-Based Loss Estimate")
+    st.caption(
+        "LOSS2A adds an approximate code-based estimate for pretensioned girders only. "
+        "Refined AASHTO time-dependent loss remains a future method and this estimate is not a final code-certified design."
+    )
+    settings = _girder_code_loss_settings_from_session()
+    concrete = st.session_state.get("concrete_material")
+    fc_detected = float(getattr(concrete, "fc_MPa", 45.0) or 45.0)
+    method = st.selectbox(
+        "Code loss method",
+        ["Approximate code-based loss", "Refined AASHTO time-dependent loss (future)"],
+        index=0 if settings.get("method") != "Refined AASHTO time-dependent loss (future)" else 1,
+        key="girder_code_loss_method_selector",
+    )
+    settings["method"] = str(method)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        fci = st.number_input(
+            "🟨 f'ci at transfer (MPa)",
+            min_value=1.0,
+            step=1.0,
+            value=float(settings.get("fci_MPa", 0.8 * fc_detected)),
+            format="%.1f",
+            key="girder_code_loss_fci_mpa",
+        )
+    with col2:
+        humidity = st.number_input(
+            "🟨 Relative humidity H (%)",
+            min_value=20.0,
+            max_value=100.0,
+            step=5.0,
+            value=float(settings.get("humidity_percent", 70.0)),
+            format="%.0f",
+            key="girder_code_loss_humidity_percent",
+        )
+    with col3:
+        relaxation = st.selectbox(
+            "🟨 Strand relaxation class",
+            ["Low relaxation", "Stress-relieved"],
+            index=0 if str(settings.get("relaxation_class", "Low relaxation")) != "Stress-relieved" else 1,
+            key="girder_code_loss_relaxation_class",
+        )
+    settings.update({"fci_MPa": float(fci), "humidity_percent": float(humidity), "relaxation_class": str(relaxation)})
+    st.session_state["girder_prestress_code_loss_settings"] = settings
+
+    if method.startswith("Refined"):
+        st.warning("Refined AASHTO time-dependent loss is intentionally disabled until the LOSS3A refined method is specified and validated.")
+        return
+
+    audit = _girder_code_loss_input_audit_dataframe(
+        geometry=geometry,
+        strand_table=strand_table,
+        force_table=force_table,
+        fci_MPa=float(fci),
+        humidity_percent=float(humidity),
+        relaxation_class=str(relaxation),
+    )
+    with st.expander("Auto-detected loss inputs", expanded=False):
+        st.dataframe(audit, use_container_width=True, hide_index=True)
+
+    loss_input = _build_girder_approximate_loss_input(
+        geometry=geometry,
+        strand_table=strand_table,
+        force_table=force_table,
+        fci_MPa=float(fci),
+        humidity_percent=float(humidity),
+        relaxation_class=str(relaxation),
+    )
+    calc_clicked = st.button("Calculate approximate loss estimate", key="calculate_girder_code_loss_estimate", type="primary")
+    if calc_clicked:
+        if loss_input is None:
+            st.error("Approximate loss estimate requires section geometry, gross properties, active strand rows, and Pjack values.")
+        else:
+            result = calculate_approximate_prestress_loss(loss_input)
+            st.session_state["girder_prestress_code_loss_result_table"] = result.result_dataframe()
+            st.session_state["girder_prestress_code_loss_summary_table"] = result.summary_dataframe()
+            st.session_state["girder_prestress_code_loss_messages"] = list(result.messages)
+            st.success("Approximate code-based loss estimate updated. Review the breakdown before applying it to force states.")
+
+    result_table = st.session_state.get("girder_prestress_code_loss_result_table")
+    if result_table is None or pd.DataFrame(result_table).empty:
+        st.info("Calculate an approximate loss estimate to populate Pe_transfer and Pe_final from code-based loss components.")
+        return
+    result_df = pd.DataFrame(result_table)
+    display_df = result_df.copy()
+    for column in [
+        "Pjack/strand_kN",
+        "fpj_MPa",
+        "fcgp_MPa",
+        "ES loss MPa",
+        "LT loss MPa",
+        "Total loss MPa",
+        "Pe_transfer/strand_kN",
+        "Pe_construction/strand_kN",
+        "Pe_eff_final/strand_kN",
+        "Total loss %",
+    ]:
+        if column in display_df.columns:
+            display_df[column] = pd.to_numeric(display_df[column], errors="coerce").round(3)
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    summary_table = st.session_state.get("girder_prestress_code_loss_summary_table")
+    if summary_table is not None and not pd.DataFrame(summary_table).empty:
+        st.dataframe(pd.DataFrame(summary_table), use_container_width=True, hide_index=True)
+    apply_calc = st.button(
+        "Apply calculated losses to force states and strand table",
+        key="apply_code_loss_to_force_states_and_strands",
+        type="primary",
+        use_container_width=True,
+    )
+    if apply_calc:
+        mapped = loss_result_dataframe_to_force_state_table(result_df, force_table)
+        normalized = _normalize_girder_loss_force_state_table(mapped, strand_table, mode="Manual stage Pe")
+        st.session_state["girder_prestress_loss_force_state_table"] = normalized
+        updated_strands = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
+        st.session_state["girder_strand_layout_table"] = updated_strands
+        st.session_state.pop("girder_strand_layout_editor", None)
+        st.session_state.pop("girder_prestress_loss_force_state_editor", None)
+        st.success("Calculated losses applied to Force States and strand-layout Pe columns.")
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
+    with st.expander("Approximate loss assumptions / formula audit", expanded=False):
+        st.markdown(
+            "- Pretensioned girder approximation only: ES + long-term loss.\n"
+            "- Elastic shortening is iterated using post-ES prestress and gross-section properties.\n"
+            "- Approximate long-term loss is evaluated with AASHTO-style humidity, strength, Aps/Ag, and relaxation terms.\n"
+            "- Construction Pe is set equal to transfer Pe in LOSS2A; interval splitting is reserved for refined AASHTO LOSS3A.\n"
+            "- This is an engineering estimate requiring review, not final code-certified loss design."
+        )
+
 def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geometry: SectionGeometry | None = None) -> None:
     st.markdown("#### Prestress Force States / Losses")
     st.markdown(
         '<div class="cpmm-prestress-table-note">'
-        "Define stage prestress per strand for girder SLS. LOSS1A is a manual/percentage force-state workflow only; "
-        "AASHTO/ACI loss formulas, transfer-length ramp, development, shear, and end-zone reinforcement are future milestones."
+        "Define stage prestress per strand for girder SLS. LOSS2A adds an approximate code-based estimate while preserving manual/percentage workflows; "
+        "refined AASHTO loss, transfer-length ramp, development, shear, and end-zone reinforcement are future milestones."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1485,7 +1774,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         "Loss input mode",
         GIRDER_LOSS_INPUT_MODE_OPTIONS,
         index=GIRDER_LOSS_INPUT_MODE_OPTIONS.index(mode_default),
-        help="Manual stage Pe edits Pe directly. Percentage loss derives Pe from Pjack and staged loss percentages. Code-estimate formulas are not active in LOSS1A.",
+        help="Manual stage Pe edits Pe directly. Percentage loss derives Pe from Pjack and staged loss percentages. Approximate code-based estimates are calculated in the section below and applied explicitly.",
         key="girder_prestress_loss_input_mode",
     )
     settings["mode"] = str(mode)
@@ -1571,9 +1860,11 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
             for message in mapping_messages:
                 st.warning(message)
     _render_stage_pe_mapping_audit(normalized, expanded=False)
+    st.divider()
+    _render_girder_code_based_loss_estimate(strand_table, normalized, geometry)
     st.warning(
-        "LOSS1A/LOSS1B values are stage force states and Pe mapping checks, not final code-certified AASHTO/ACI loss calculations. "
-        "Use the Apply button directly below the force-state table to sync reviewed values to the strand table used by Effective Prestress Preview and downstream SLS checks."
+        "LOSS2A approximate loss estimates and LOSS1 force states are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
+        "Use the Apply button directly below the force-state table, or the Apply calculated losses button directly below the loss result table, to sync reviewed values to the strand table used by Effective Prestress Preview and downstream SLS checks."
     )
 
 

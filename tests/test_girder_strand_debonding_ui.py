@@ -60,9 +60,13 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "No separate Apply button is required in this mode" in PRESTRESS_SOURCE
     assert "Code-Based Loss Estimate" in PRESTRESS_SOURCE
     assert "Calculate and use approximate losses" in PRESTRESS_SOURCE
+    assert "Refined AASHTO time-dependent loss" in PRESTRESS_SOURCE
+    assert "Calculate and use refined AASHTO losses" in PRESTRESS_SOURCE
+    assert "manual-coefficient preview" in PRESTRESS_SOURCE
     assert "Apply calculated losses to force states and strand table" not in PRESTRESS_SOURCE
     assert "girder_prestress_code_loss_settings" in PRESTRESS_SOURCE
     assert "calculate_approximate_prestress_loss" in PRESTRESS_SOURCE
+    assert "calculate_refined_aashto_time_dependent_loss" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:

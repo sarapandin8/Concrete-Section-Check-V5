@@ -103,3 +103,54 @@ def test_loss_result_dataframe_maps_to_existing_force_state_schema() -> None:
     }.issubset(force.columns)
     assert force.loc[0, "Pe_construction/strand_kN"] == force.loc[0, "Pe_transfer/strand_kN"]
     assert force.loc[0, "Pe_eff_final/strand_kN"] < force.loc[0, "Pe_transfer/strand_kN"]
+
+from concrete_pmm_pro.serviceability.girder_prestress_losses import (
+    RefinedAashtoManualCoefficientInput,
+    calculate_refined_aashto_time_dependent_loss,
+)
+
+
+def _refined_input() -> RefinedAashtoManualCoefficientInput:
+    base = _loss_input()
+    return RefinedAashtoManualCoefficientInput(
+        groups=base.groups,
+        section_area_mm2=base.section_area_mm2,
+        section_Ix_mm4=base.section_Ix_mm4,
+        centroid_y_from_bottom_mm=base.centroid_y_from_bottom_mm,
+        fci_MPa=base.fci_MPa,
+        fc_MPa=base.fc_MPa,
+        Eci_MPa=base.Eci_MPa,
+        Ec_MPa=4700.0 * math.sqrt(base.fc_MPa),
+        fpy_MPa=1670.0,
+        relaxation_class="Low relaxation",
+        age_transfer_days=1.0,
+        age_deck_days=30.0,
+        final_age_days=10000.0,
+        Kid=0.95,
+        Kdf=0.85,
+        eps_bid=120.0e-6,
+        eps_bdf=90.0e-6,
+        psi_td_ti=0.60,
+        psi_tf_ti=1.60,
+        psi_tf_td=0.80,
+        delta_fcd_MPa=0.20,
+        delta_fcdf_MPa=0.10,
+    )
+
+
+def test_refined_aashto_manual_coefficients_produce_ordered_stage_pe() -> None:
+    result = calculate_refined_aashto_time_dependent_loss(_refined_input())
+    df = result.result_dataframe().set_index("Group ID")
+    assert result.status in {"OK", "REVIEW"}
+    assert df.loc["Row 1", "Pe_transfer/strand_kN"] < df.loc["Row 1", "Pjack/strand_kN"]
+    assert df.loc["Row 1", "Pe_construction/strand_kN"] < df.loc["Row 1", "Pe_transfer/strand_kN"]
+    assert df.loc["Row 1", "Pe_eff_final/strand_kN"] < df.loc["Row 1", "Pe_construction/strand_kN"]
+    assert df.loc["Row 1", "Total loss %"] > 5.0
+
+
+def test_refined_aashto_interval_dataframe_separates_two_time_intervals() -> None:
+    result = calculate_refined_aashto_time_dependent_loss(_refined_input())
+    intervals = result.interval_dataframe()
+    assert set(intervals["Interval"]) == {"Transfer → deck placement", "Deck placement → final"}
+    assert {"Shrinkage loss MPa", "Creep loss MPa", "Relaxation loss MPa", "Deck shrinkage loss MPa"}.issubset(intervals.columns)
+    assert (intervals["Subtotal loss MPa"] >= 0.0).all()

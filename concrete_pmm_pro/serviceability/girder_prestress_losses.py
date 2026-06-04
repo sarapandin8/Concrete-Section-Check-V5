@@ -362,3 +362,284 @@ def loss_result_dataframe_to_force_state_table(result_table: pd.DataFrame, curre
             }
         )
     return pd.DataFrame(rows)
+
+REFINED_INTERVAL_RESULT_COLUMNS = [
+    "Group ID",
+    "Interval",
+    "Shrinkage loss MPa",
+    "Creep loss MPa",
+    "Relaxation loss MPa",
+    "Deck shrinkage loss MPa",
+    "Subtotal loss MPa",
+    "Pe at end/strand_kN",
+    "Status",
+    "Engineering note",
+]
+
+
+@dataclass(frozen=True)
+class RefinedAashtoManualCoefficientInput:
+    """Manual-coefficient refined AASHTO time-dependent loss input.
+
+    LOSS3A intentionally uses user-supplied refined coefficients/stresses
+    instead of predicting AASHTO creep/shrinkage coefficients internally.  This
+    keeps the first refined workflow auditable and avoids silently embedding
+    project-specific assumptions in the app.
+    """
+
+    groups: tuple[GirderLossStrandGroupInput, ...]
+    section_area_mm2: float
+    section_Ix_mm4: float
+    centroid_y_from_bottom_mm: float
+    fci_MPa: float
+    fc_MPa: float
+    Eci_MPa: float
+    Ec_MPa: float
+    fpy_MPa: float = 1670.0
+    relaxation_class: str = "Low relaxation"
+    age_transfer_days: float = 1.0
+    age_deck_days: float = 30.0
+    final_age_days: float = 10000.0
+    Kid: float = 1.0
+    Kdf: float = 1.0
+    eps_bid: float = 150.0e-6
+    eps_bdf: float = 100.0e-6
+    psi_td_ti: float = 1.0
+    psi_tf_ti: float = 2.0
+    psi_tf_td: float = 1.0
+    delta_fcd_MPa: float = 0.0
+    delta_fcdf_MPa: float = 0.0
+    es_tolerance_MPa: float = 0.05
+    max_iterations: int = 25
+
+
+@dataclass(frozen=True)
+class RefinedAashtoGroupResult:
+    group_id: str
+    no_strands: int
+    pjack_per_strand_kN: float
+    fpj_MPa: float
+    fcgp_MPa: float
+    es_loss_MPa: float
+    sr_loss_MPa: float
+    cr_loss_MPa: float
+    r1_loss_MPa: float
+    sd_loss_MPa: float
+    cd_loss_MPa: float
+    r2_loss_MPa: float
+    ss_loss_MPa: float
+    total_loss_MPa: float
+    pe_transfer_per_strand_kN: float
+    pe_construction_per_strand_kN: float
+    pe_final_per_strand_kN: float
+    total_loss_percent: float
+    status: str
+    note: str
+
+    def as_loss_dict(self) -> dict[str, Any]:
+        lt_loss = self.sr_loss_MPa + self.cr_loss_MPa + self.r1_loss_MPa + self.sd_loss_MPa + self.cd_loss_MPa + self.r2_loss_MPa + self.ss_loss_MPa
+        return {
+            "Group ID": self.group_id,
+            "No. strands": self.no_strands,
+            "Pjack/strand_kN": self.pjack_per_strand_kN,
+            "fpj_MPa": self.fpj_MPa,
+            "fcgp_MPa": self.fcgp_MPa,
+            "ES loss MPa": self.es_loss_MPa,
+            "LT loss MPa": lt_loss,
+            "Total loss MPa": self.total_loss_MPa,
+            "Pe_transfer/strand_kN": self.pe_transfer_per_strand_kN,
+            "Pe_construction/strand_kN": self.pe_construction_per_strand_kN,
+            "Pe_eff_final/strand_kN": self.pe_final_per_strand_kN,
+            "Total loss %": self.total_loss_percent,
+            "Status": self.status,
+            "Engineering note": self.note,
+        }
+
+    def interval_dicts(self) -> list[dict[str, Any]]:
+        interval_1 = self.sr_loss_MPa + self.cr_loss_MPa + self.r1_loss_MPa
+        interval_2 = self.sd_loss_MPa + self.cd_loss_MPa + self.r2_loss_MPa + self.ss_loss_MPa
+        return [
+            {
+                "Group ID": self.group_id,
+                "Interval": "Transfer → deck placement",
+                "Shrinkage loss MPa": self.sr_loss_MPa,
+                "Creep loss MPa": self.cr_loss_MPa,
+                "Relaxation loss MPa": self.r1_loss_MPa,
+                "Deck shrinkage loss MPa": 0.0,
+                "Subtotal loss MPa": interval_1,
+                "Pe at end/strand_kN": self.pe_construction_per_strand_kN,
+                "Status": self.status,
+                "Engineering note": "Pe_construction at deck placement / construction stage.",
+            },
+            {
+                "Group ID": self.group_id,
+                "Interval": "Deck placement → final",
+                "Shrinkage loss MPa": self.sd_loss_MPa,
+                "Creep loss MPa": self.cd_loss_MPa,
+                "Relaxation loss MPa": self.r2_loss_MPa,
+                "Deck shrinkage loss MPa": self.ss_loss_MPa,
+                "Subtotal loss MPa": interval_2,
+                "Pe at end/strand_kN": self.pe_final_per_strand_kN,
+                "Status": self.status,
+                "Engineering note": "Pe_final at final service stage.",
+            },
+        ]
+
+
+@dataclass(frozen=True)
+class RefinedAashtoLossResult:
+    group_results: tuple[RefinedAashtoGroupResult, ...]
+    es_iterations: int
+    status: str
+    messages: tuple[str, ...]
+
+    def result_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame([row.as_loss_dict() for row in self.group_results], columns=LOSS_RESULT_COLUMNS)
+
+    def interval_dataframe(self) -> pd.DataFrame:
+        records: list[dict[str, Any]] = []
+        for row in self.group_results:
+            records.extend(row.interval_dicts())
+        return pd.DataFrame(records, columns=REFINED_INTERVAL_RESULT_COLUMNS)
+
+    def summary_dataframe(self) -> pd.DataFrame:
+        if not self.group_results:
+            return pd.DataFrame(columns=["Metric", "Value", "Status"])
+        total_pjack = sum(row.pjack_per_strand_kN * row.no_strands for row in self.group_results)
+        total_transfer = sum(row.pe_transfer_per_strand_kN * row.no_strands for row in self.group_results)
+        total_construction = sum(row.pe_construction_per_strand_kN * row.no_strands for row in self.group_results)
+        total_final = sum(row.pe_final_per_strand_kN * row.no_strands for row in self.group_results)
+        total_loss_percent = 0.0 if total_pjack <= 1e-9 else (1.0 - total_final / total_pjack) * 100.0
+        return pd.DataFrame(
+            [
+                {"Metric": "Total Pjack", "Value": f"{total_pjack:,.1f} kN", "Status": "INFO"},
+                {"Metric": "Total Pe_transfer", "Value": f"{total_transfer:,.1f} kN", "Status": "INFO"},
+                {"Metric": "Total Pe_construction", "Value": f"{total_construction:,.1f} kN", "Status": "INFO"},
+                {"Metric": "Total Pe_final", "Value": f"{total_final:,.1f} kN", "Status": "INFO"},
+                {"Metric": "Total loss", "Value": f"{total_loss_percent:.1f}%", "Status": self.status},
+                {"Metric": "ES iterations", "Value": str(self.es_iterations), "Status": "INFO"},
+            ]
+        )
+
+
+def _relaxation_kl(relaxation_class: str) -> float:
+    label = str(relaxation_class or "").strip().lower()
+    return 7.0 if "stress" in label and "relieved" in label else 30.0
+
+
+def _refined_relaxation_loss_MPa(fpt_MPa: float, fpy_MPa: float, relaxation_class: str) -> tuple[float, str | None]:
+    if fpy_MPa <= 0.0:
+        return 0.0, "fpy is non-positive; relaxation term set to zero."
+    kl = _relaxation_kl(relaxation_class)
+    ratio_term = fpt_MPa / fpy_MPa - 0.55
+    if ratio_term <= 0.0:
+        return 0.0, "Relaxation term fpt/fpy - 0.55 is non-positive; review fpt/fpy input."
+    return max(fpt_MPa / kl * ratio_term, 0.0), None
+
+
+def calculate_refined_aashto_time_dependent_loss(input_data: RefinedAashtoManualCoefficientInput) -> RefinedAashtoLossResult:
+    """Calculate LOSS3A refined AASHTO-style losses using manual coefficients.
+
+    This function intentionally requires Kid/Kdf, creep coefficients, shrinkage
+    strain, and deck stress-effect inputs from the caller.  It does not predict
+    AASHTO creep/shrinkage coefficients or load-derived deck stress effects.
+    """
+
+    messages: list[str] = []
+    if not input_data.groups:
+        return RefinedAashtoLossResult((), 0, "MISSING", ("No active strand groups are available.",))
+    if input_data.age_deck_days <= input_data.age_transfer_days:
+        messages.append("Deck-placement age td must be greater than transfer age ti.")
+    if input_data.final_age_days <= input_data.age_deck_days:
+        messages.append("Final age tf must be greater than deck-placement age td.")
+    if input_data.Kid <= 0.0:
+        messages.append("Kid must be positive.")
+    if input_data.Kdf <= 0.0:
+        messages.append("Kdf must be positive.")
+    if min(input_data.eps_bid, input_data.eps_bdf, input_data.psi_td_ti, input_data.psi_tf_ti, input_data.psi_tf_td) < 0.0:
+        messages.append("Shrinkage strain and creep coefficients must be non-negative.")
+    if input_data.psi_tf_ti < input_data.psi_td_ti:
+        messages.append("Ψb(tf,ti) is smaller than Ψb(td,ti); interval-2 creep may be inconsistent.")
+    if input_data.Eci_MPa <= 0.0 or input_data.Ec_MPa <= 0.0:
+        messages.append("Concrete modulus values must be positive.")
+
+    approx_input = GirderApproximateLossInput(
+        groups=input_data.groups,
+        section_area_mm2=input_data.section_area_mm2,
+        section_Ix_mm4=input_data.section_Ix_mm4,
+        centroid_y_from_bottom_mm=input_data.centroid_y_from_bottom_mm,
+        fci_MPa=input_data.fci_MPa,
+        fc_MPa=input_data.fc_MPa,
+        Eci_MPa=input_data.Eci_MPa,
+        humidity_percent=70.0,
+        relaxation_class=input_data.relaxation_class,
+        es_tolerance_MPa=input_data.es_tolerance_MPa,
+        max_iterations=input_data.max_iterations,
+    )
+    es_losses, fcgp_by_group, iterations = calculate_elastic_shortening_iterative(approx_input)
+    group_results: list[RefinedAashtoGroupResult] = []
+    for group in input_data.groups:
+        fpj = group.fpj_MPa
+        es = es_losses.get(group.group_id, 0.0)
+        fpt = max(fpj - es, 0.0)
+        fcgp = fcgp_by_group.get(group.group_id, 0.0)
+        r1, relax_note = _refined_relaxation_loss_MPa(fpt, input_data.fpy_MPa, input_data.relaxation_class)
+        r2 = r1
+        sr = max(input_data.eps_bid * group.Ep_MPa * input_data.Kid, 0.0)
+        cr = max(group.Ep_MPa / input_data.Eci_MPa * input_data.psi_td_ti * input_data.Kid * fcgp, 0.0)
+        sd = max(input_data.eps_bdf * group.Ep_MPa * input_data.Kdf, 0.0)
+        interval2_creep_coeff = max(input_data.psi_tf_ti - input_data.psi_td_ti, 0.0)
+        cd = max(
+            group.Ep_MPa / input_data.Eci_MPa * interval2_creep_coeff * input_data.Kdf * fcgp
+            + group.Ep_MPa / input_data.Ec_MPa * input_data.psi_tf_td * input_data.Kdf * input_data.delta_fcd_MPa,
+            0.0,
+        )
+        ss = max(group.Ep_MPa / input_data.Ec_MPa * input_data.delta_fcdf_MPa * input_data.Kdf * (1.0 + 0.7 * input_data.psi_tf_td), 0.0)
+        interval1 = sr + cr + r1
+        interval2 = sd + cd + r2 + ss
+        final_stress = max(fpt - interval1 - interval2, 0.0)
+        construction_stress = max(fpt - interval1, 0.0)
+        pe_transfer = group.area_per_strand_mm2 * fpt / 1000.0
+        pe_construction = group.area_per_strand_mm2 * construction_stress / 1000.0
+        pe_final = group.area_per_strand_mm2 * final_stress / 1000.0
+        total_loss = fpj - final_stress
+        total_loss_percent = 0.0 if fpj <= 1.0e-9 else total_loss / fpj * 100.0
+        row_messages: list[str] = []
+        if relax_note:
+            row_messages.append(relax_note)
+        if pe_construction > pe_transfer + 1e-9:
+            row_messages.append("Pe_construction exceeds Pe_transfer.")
+        if pe_final > pe_construction + 1e-9:
+            row_messages.append("Pe_final exceeds Pe_construction.")
+        if total_loss_percent < 5.0:
+            row_messages.append("total loss below 5%")
+        if total_loss_percent > 40.0:
+            row_messages.append("total loss above 40%")
+        status = "OK" if not row_messages and not messages else "REVIEW"
+        group_results.append(
+            RefinedAashtoGroupResult(
+                group_id=group.group_id,
+                no_strands=group.no_strands,
+                pjack_per_strand_kN=group.pjack_per_strand_kN,
+                fpj_MPa=fpj,
+                fcgp_MPa=fcgp,
+                es_loss_MPa=es,
+                sr_loss_MPa=sr,
+                cr_loss_MPa=cr,
+                r1_loss_MPa=r1,
+                sd_loss_MPa=sd,
+                cd_loss_MPa=cd,
+                r2_loss_MPa=r2,
+                ss_loss_MPa=ss,
+                total_loss_MPa=total_loss,
+                pe_transfer_per_strand_kN=pe_transfer,
+                pe_construction_per_strand_kN=pe_construction,
+                pe_final_per_strand_kN=pe_final,
+                total_loss_percent=total_loss_percent,
+                status=status,
+                note="Refined AASHTO manual-coefficient preview; engineering review required." if not row_messages else "; ".join(row_messages),
+            )
+        )
+    statuses = {row.status for row in group_results}
+    overall = "OK" if statuses == {"OK"} and not messages else "REVIEW"
+    return RefinedAashtoLossResult(tuple(group_results), iterations, overall, tuple(messages))

@@ -19,6 +19,7 @@ from concrete_pmm_pro.core.reinforcement_system import (
     prestressing_steel_enabled,
     section_level_prestress_ignored_for_girder,
 )
+from concrete_pmm_pro.serviceability.girder_prestress_station import girder_stage_pe_mapping_status
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,16 @@ def check_analysis_readiness(session_state: Any) -> AnalysisReadinessResult:
         info.append(
             "Section-level tendon/prestress rows are ignored for this girder workflow; use the dedicated girder strand layout/force-state inputs instead."
         )
+    if prestress_system_enabled and section_level_prestress_ignored_for_girder(session_state):
+        mapping_status, mapping_messages = girder_stage_pe_mapping_status(_get_session_value(session_state, "girder_strand_layout_table", None))
+        if mapping_status == "READY":
+            info.append("Girder SLS stage Pe mapping is ready: Transfer, Construction, and Final service Pe sources are defined in the strand table.")
+        else:
+            warnings.append(
+                "REVIEW: Girder SLS stage Pe mapping is incomplete; define/apply Force States / Losses before relying on staged service stress results."
+            )
+            for message in mapping_messages[:3]:
+                warnings.append(f"Girder SLS stage Pe mapping: {message}")
     if not included_rebars and included_prestress:
         info.append("No active ordinary rebar is included; PMM analysis will rely on active prestress elements. Check minimum ordinary reinforcement and detailing requirements separately.")
     elif included_rebars and not included_prestress:

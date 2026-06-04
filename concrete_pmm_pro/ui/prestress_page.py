@@ -45,6 +45,8 @@ from concrete_pmm_pro.serviceability.girder_prestress_station import (
     girder_debonding_rule_audit_dataframe,
     girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
+    girder_stage_pe_mapping_dataframe,
+    girder_stage_pe_mapping_status,
     station_candidates_from_debonding,
     strand_group_effective_at_station,
 )
@@ -1392,6 +1394,80 @@ def _girder_loss_force_state_qa_summary(table: pd.DataFrame) -> tuple[str, list[
     return ("OK" if statuses == {"OK"} else "REVIEW"), messages
 
 
+
+
+def _girder_force_states_match_strand_layout(strand_table: pd.DataFrame, force_table: pd.DataFrame) -> bool:
+    """Return True when strand-layout Pe columns match current force-state rows."""
+
+    strand = pd.DataFrame(strand_table)
+    forces = pd.DataFrame(force_table)
+    if strand.empty or forces.empty:
+        return False
+    force_by_group = _loss_force_state_existing_rows_by_group(forces)
+    pe_columns = [
+        "Pe_transfer/strand_kN",
+        "Pe_construction/strand_kN",
+        "Pe_eff_final/strand_kN",
+    ]
+    active = _active_girder_strand_layout_rows(strand)
+    if active.empty:
+        return False
+    for _, row in active.iterrows():
+        group = "" if _is_blank(row.get("Group ID")) else str(row.get("Group ID")).strip()
+        state = force_by_group.get(group)
+        if not state:
+            return False
+        for column in pe_columns:
+            left = _to_float(row.get(column))
+            right = _to_float(state.get(column))
+            if left is None or right is None:
+                return False
+            if abs(float(left) - float(right)) > 1e-6:
+                return False
+    return True
+
+
+def _stage_pe_mapping_metrics_from_table(table: pd.DataFrame, *, sls_feed_ready: bool | None = None) -> list[PrestressMetric]:
+    """Return compact metrics for LOSS1B stage Pe mapping readiness."""
+
+    mapping = girder_stage_pe_mapping_dataframe(table)
+    metrics: list[PrestressMetric] = []
+    status_by_stage = {str(row.get("Stage")): str(row.get("Status")) for _, row in mapping.iterrows()}
+    total_by_stage = {str(row.get("Stage")): float(_to_float(row.get("Pe total kN")) or 0.0) for _, row in mapping.iterrows()}
+    for stage, label in [
+        ("Transfer", "Transfer Pe"),
+        ("Construction", "Construction Pe"),
+        ("Final service", "Service Pe"),
+    ]:
+        status = status_by_stage.get(stage, "MISSING")
+        metric_status = "ready" if status == "READY" else ("review" if status == "REVIEW" else "danger")
+        metrics.append(PrestressMetric(label, status, f"{total_by_stage.get(stage, 0.0):,.1f} kN", metric_status, strong=status == "READY"))
+    if sls_feed_ready is not None:
+        metrics.append(
+            PrestressMetric(
+                "SLS feed",
+                "Ready" if sls_feed_ready else "Apply needed",
+                "strand table Pe columns",
+                "ready" if sls_feed_ready else "review",
+                strong=sls_feed_ready,
+            )
+        )
+    return metrics
+
+
+def _render_stage_pe_mapping_audit(table: pd.DataFrame, *, expanded: bool = False) -> None:
+    """Render LOSS1B stage Pe mapping audit table."""
+
+    mapping = girder_stage_pe_mapping_dataframe(table)
+    if mapping.empty:
+        st.warning("No active girder strand groups are available for stage Pe mapping.")
+        return
+    with st.expander("Stage Pe mapping audit", expanded=expanded):
+        st.dataframe(mapping, use_container_width=True, hide_index=True)
+        st.caption(
+            "LOSS1B only audits Pe source availability by stage. It does not perform AASHTO/ACI loss calculation, transfer-length ramping, or stress checks."
+        )
+
 def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geometry: SectionGeometry | None = None) -> None:
     st.markdown("#### Prestress Force States / Losses")
     st.markdown(
@@ -1457,6 +1533,8 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
     pe_final_total = float((pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0) * pd.to_numeric(normalized.get("Pe_eff_final/strand_kN", pd.Series(dtype=float)), errors="coerce").fillna(0)).sum()) if not normalized.empty else 0.0
     total_losses = pd.to_numeric(normalized.get("Total loss %", pd.Series(dtype=float)), errors="coerce").dropna() if not normalized.empty else pd.Series(dtype=float)
     loss_range = "—" if total_losses.empty else f"{float(total_losses.min()):.1f}%–{float(total_losses.max()):.1f}%"
+    mapping_status, mapping_messages = girder_stage_pe_mapping_status(normalized)
+    sls_feed_ready = status == "OK" and mapping_status == "READY" and _girder_force_states_match_strand_layout(strand_table, normalized)
     metrics = [
         PrestressMetric("Force states", status, "manual / percentage workflow", "ready" if status == "OK" else "review", strong=True),
         PrestressMetric("Active strands", f"{total_strands:,}", "force-state rows"),
@@ -1464,14 +1542,18 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         PrestressMetric("Pe_final total", f"{pe_final_total:,.1f} kN", "sum by group"),
         PrestressMetric("Loss range", loss_range, "per strand group"),
     ]
+    metrics.extend(_stage_pe_mapping_metrics_from_table(normalized, sls_feed_ready=sls_feed_ready))
     st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
-    if messages:
-        with st.expander("Force-state QA / review messages", expanded=False):
+    if messages or mapping_messages:
+        with st.expander("Force-state QA / stage Pe mapping review messages", expanded=False):
             for message in messages:
                 st.warning(message)
+            for message in mapping_messages:
+                st.warning(message)
+    _render_stage_pe_mapping_audit(normalized, expanded=False)
     st.warning(
-        "LOSS1A values are stage force states, not final code-certified AASHTO/ACI loss calculations. "
-        "Apply only after engineering review."
+        "LOSS1A/LOSS1B values are stage force states and Pe mapping checks, not final code-certified AASHTO/ACI loss calculations. "
+        "Press Apply to sync reviewed force-state values to the strand table used by Effective Prestress Preview and downstream SLS checks."
     )
     if st.button("Apply force states to strand table", key="apply_girder_force_states_to_strand_table"):
         updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
@@ -3105,6 +3187,8 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
         st.caption(
             "Simplified preview: a strand group is effective only outside its debonded lengths. Transfer/development length transition is not modeled yet. Stage Pe values come from the Force States / Losses workflow."
         )
+        st.markdown(_metric_strip_html(_stage_pe_mapping_metrics_from_table(normalized)), unsafe_allow_html=True)
+        _render_stage_pe_mapping_audit(normalized, expanded=False)
         preview = _girder_effective_prestress_preview_dataframe(normalized, float(span))
         st.dataframe(preview, use_container_width=True, hide_index=True)
 

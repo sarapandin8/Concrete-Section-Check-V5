@@ -16,6 +16,8 @@ from concrete_pmm_pro.serviceability.girder_prestress_station import (
     girder_debonding_rule_checks,
     girder_debonding_zones_for_row,
     girder_prestress_station_dataframe,
+    girder_stage_pe_mapping_dataframe,
+    girder_stage_pe_mapping_status,
     station_candidates_from_debonding,
     strand_group_effective_at_station,
 )
@@ -315,3 +317,24 @@ def test_advisory_debonding_recommendation_dataframe_reports_no_action_when_limi
     assert df.loc[0, "Guardrail status"] == "NO ACTION"
     assert df.loc[0, "Recommended debonded strand nos"] == "—"
     assert "25%" in df.loc[0, "Engineering reason"] or "40%" in df.loc[0, "Engineering reason"]
+
+
+def test_stage_pe_mapping_reports_ready_sources_for_all_sls_stages() -> None:
+    mapping = girder_stage_pe_mapping_dataframe(_layout())
+    assert mapping["Stage"].tolist() == ["Transfer", "Construction", "Final service"]
+    assert mapping["Status"].tolist() == ["READY", "READY", "READY"]
+    assert mapping.loc[mapping["Stage"] == "Transfer", "Pe total kN"].iloc[0] == 1100.0
+    status, messages = girder_stage_pe_mapping_status(_layout())
+    assert status == "READY"
+    assert messages == []
+
+
+def test_stage_pe_mapping_flags_missing_service_pe_before_sls_use() -> None:
+    layout = _layout().copy()
+    layout.loc[layout["Group ID"] == "Independent debond", "Pe_eff_final/strand_kN"] = 0.0
+    mapping = girder_stage_pe_mapping_dataframe(layout).set_index("Stage")
+    assert mapping.loc["Final service", "Status"] == "REVIEW"
+    assert "Independent debond" in mapping.loc["Final service", "Engineering note"]
+    status, messages = girder_stage_pe_mapping_status(layout)
+    assert status == "REVIEW"
+    assert any("Final service" in message for message in messages)

@@ -48,6 +48,9 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "_render_girder_debonding_rule_dashboard" in PRESTRESS_SOURCE
     assert "Debonding rule audit — individual preview" in PRESTRESS_SOURCE
     assert "Critical transfer station audit" in PRESTRESS_SOURCE
+    assert "Stage Pe mapping audit" in PRESTRESS_SOURCE
+    assert "SLS feed" in PRESTRESS_SOURCE
+    assert "girder_stage_pe_mapping_dataframe" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:
@@ -1442,3 +1445,47 @@ def test_girder_loss1a_data_editor_patch_persists_percentage_loss_first_edit(mon
     assert round(float(saved.loc[0, "Pe_construction/strand_kN"]), 3) == 128.25
     assert round(float(saved.loc[0, "Pe_eff_final/strand_kN"]), 3) == 115.425
     assert saved.loc[0, "QA status"] == "OK"
+
+
+def test_girder_loss1b_force_state_mapping_and_sls_feed_matching(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui import prestress_page  # noqa: PLC0415
+    prestress_page.st = st
+
+    strand_table = prestress_page._normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "y_mm_from_bottom": 50.0,
+                    "Pe_transfer/strand_kN": 120.0,
+                    "Pe_construction/strand_kN": 115.0,
+                    "Pe_eff_final/strand_kN": 105.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    force_table = prestress_page._normalize_girder_loss_force_state_table(None, strand_table, mode="Manual stage Pe")
+    assert prestress_page._girder_force_states_match_strand_layout(strand_table, force_table)
+    metrics = prestress_page._stage_pe_mapping_metrics_from_table(force_table, sls_feed_ready=True)
+    assert [metric.title for metric in metrics][-1] == "SLS feed"
+    assert metrics[-1].value == "Ready"
+
+    force_table.loc[0, "Pe_eff_final/strand_kN"] = 100.0
+    assert not prestress_page._girder_force_states_match_strand_layout(strand_table, force_table)

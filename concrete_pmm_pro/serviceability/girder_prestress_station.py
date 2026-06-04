@@ -39,6 +39,39 @@ STATION_PREVIEW_COLUMNS = [
 ]
 
 
+GIRDER_STAGE_PE_MAPPING_COLUMNS = [
+    "Stage",
+    "Pe source",
+    "Source column",
+    "Active groups",
+    "Ready groups",
+    "Pe total kN",
+    "Status",
+    "Engineering note",
+]
+
+GIRDER_STAGE_PE_SPECS = [
+    (
+        "Transfer",
+        "Pe_transfer / strand",
+        _PE_TRANSFER_PER_STRAND_COLUMN,
+        "Use for transfer/release SLS checks with the precast section basis.",
+    ),
+    (
+        "Construction",
+        "Pe_construction / strand",
+        _PE_CONSTRUCTION_PER_STRAND_COLUMN,
+        "Use for construction-stage SLS checks before final service losses.",
+    ),
+    (
+        "Final service",
+        "Pe_final / strand",
+        _PE_FINAL_PER_STRAND_COLUMN,
+        "Use for final service SLS checks after long-term losses.",
+    ),
+]
+
+
 DEBONDING_RULE_AUDIT_COLUMNS = [
     "Rule",
     "Status",
@@ -483,6 +516,94 @@ def girder_debonding_layout_zones(
         zones.extend(girder_debonding_zones_for_row(row, span_length_m))
     return tuple(zones)
 
+
+
+def _active_layout_rows(table: pd.DataFrame | None) -> pd.DataFrame:
+    if table is None:
+        return pd.DataFrame()
+    df = pd.DataFrame(table).copy()
+    if df.empty:
+        return df
+    if _ACTIVE_COLUMN in df.columns:
+        active = df[_ACTIVE_COLUMN].fillna(True).astype(bool)
+        df = df.loc[active].copy()
+    return df.reset_index(drop=True)
+
+
+def girder_stage_pe_mapping_dataframe(table: pd.DataFrame | None) -> pd.DataFrame:
+    """Return stage-to-Pe source readiness for girder SLS data flow.
+
+    LOSS1B audits only whether the active strand layout has positive Pe values
+    available for each SLS stage. It does not perform stress analysis or
+    code-certified prestress-loss calculations.
+    """
+
+    active = _active_layout_rows(table)
+    active_count = len(active.index)
+    rows: list[dict[str, Any]] = []
+    for stage, source_label, column, base_note in GIRDER_STAGE_PE_SPECS:
+        if active.empty:
+            rows.append(
+                {
+                    "Stage": stage,
+                    "Pe source": source_label,
+                    "Source column": column,
+                    "Active groups": 0,
+                    "Ready groups": 0,
+                    "Pe total kN": 0.0,
+                    "Status": "MISSING",
+                    "Engineering note": "No active girder strand groups are available for SLS stage Pe mapping.",
+                }
+            )
+            continue
+        counts = pd.to_numeric(active.get(_COUNT_COLUMN, pd.Series([0] * active_count)), errors="coerce").fillna(0.0)
+        pe_values = pd.to_numeric(active.get(column, pd.Series([0.0] * active_count)), errors="coerce").fillna(0.0)
+        ready_mask = pe_values.gt(0.0) & counts.gt(0.0)
+        ready_count = int(ready_mask.sum())
+        pe_total = float((counts * pe_values).sum())
+        if ready_count == active_count and active_count > 0:
+            status = "READY"
+            note = base_note
+        elif ready_count > 0:
+            status = "REVIEW"
+            missing_groups = active.loc[~ready_mask, _GROUP_ID_COLUMN].astype(str).tolist() if _GROUP_ID_COLUMN in active.columns else []
+            suffix = f" Missing/zero Pe for: {', '.join(missing_groups)}." if missing_groups else " Some groups have missing/zero Pe."
+            note = base_note + suffix
+        else:
+            status = "MISSING"
+            note = base_note + " No positive Pe is defined for this stage."
+        rows.append(
+            {
+                "Stage": stage,
+                "Pe source": source_label,
+                "Source column": column,
+                "Active groups": active_count,
+                "Ready groups": ready_count,
+                "Pe total kN": pe_total,
+                "Status": status,
+                "Engineering note": note,
+            }
+        )
+    return pd.DataFrame(rows, columns=GIRDER_STAGE_PE_MAPPING_COLUMNS)
+
+
+def girder_stage_pe_mapping_status(table: pd.DataFrame | None) -> tuple[str, list[str]]:
+    """Return overall stage Pe mapping readiness and review messages."""
+
+    mapping = girder_stage_pe_mapping_dataframe(table)
+    if mapping.empty:
+        return "MISSING", ["No stage Pe mapping rows are available."]
+    statuses = [str(value) for value in mapping.get("Status", pd.Series(dtype=str)).tolist()]
+    messages = [
+        f"{row['Stage']}: {row['Engineering note']}"
+        for _, row in mapping.iterrows()
+        if str(row.get("Status")) != "READY"
+    ]
+    if all(status == "READY" for status in statuses):
+        return "READY", []
+    if any(status == "REVIEW" for status in statuses):
+        return "REVIEW", messages
+    return "MISSING", messages
 
 def station_candidates_from_debonding(table: pd.DataFrame | Iterable[Mapping[str, Any]] | None, span_length_m: float) -> list[float]:
     """Return compact station candidates for preview and QA tables."""

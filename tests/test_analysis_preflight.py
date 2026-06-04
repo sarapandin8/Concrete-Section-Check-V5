@@ -279,3 +279,49 @@ def test_column_workflow_still_uses_section_level_prestress_rows_when_enabled() 
 
     assert analysis_input is not None
     assert len(analysis_input.prestress_elements) == 1
+
+
+def test_preflight_reports_girder_sls_stage_pe_mapping_ready_when_force_states_applied() -> None:
+    session = _valid_session()
+    session["analysis_mode_settings"] = {"member_type": "beam_girder"}
+    session["girder_section_family"] = "precast_composite_girder"
+    session["section_preset_key"] = "precast_plank_girder_interior"
+    session["section_has_prestressing_steel"] = True
+    session["girder_strand_layout_table"] = [
+        {
+            "Active": True,
+            "Group ID": "Row 1",
+            "No. Strands": 4,
+            "Pe_transfer/strand_kN": 120.0,
+            "Pe_construction/strand_kN": 115.0,
+            "Pe_eff_final/strand_kN": 105.0,
+        }
+    ]
+
+    result = check_analysis_readiness(session)
+
+    assert any("Girder SLS stage Pe mapping is ready" in item for item in result.info)
+    assert not any("stage Pe mapping is incomplete" in warning for warning in result.warnings)
+
+
+def test_preflight_warns_when_girder_sls_stage_pe_mapping_is_missing() -> None:
+    session = _valid_session()
+    session["analysis_mode_settings"] = {"member_type": "beam_girder"}
+    session["girder_section_family"] = "precast_composite_girder"
+    session["section_preset_key"] = "precast_plank_girder_interior"
+    session["section_has_prestressing_steel"] = True
+    session["girder_strand_layout_table"] = [
+        {
+            "Active": True,
+            "Group ID": "Row 1",
+            "No. Strands": 4,
+            "Pe_transfer/strand_kN": 120.0,
+            "Pe_construction/strand_kN": 115.0,
+            "Pe_eff_final/strand_kN": 0.0,
+        }
+    ]
+
+    result = check_analysis_readiness(session)
+
+    assert any("stage Pe mapping is incomplete" in warning for warning in result.warnings)
+    assert any("Final service" in warning for warning in result.warnings)

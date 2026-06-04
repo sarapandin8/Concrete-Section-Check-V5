@@ -51,6 +51,8 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Stage Pe mapping audit" in PRESTRESS_SOURCE
     assert "SLS feed" in PRESTRESS_SOURCE
     assert "girder_stage_pe_mapping_dataframe" in PRESTRESS_SOURCE
+    assert 'type="primary"' in PRESTRESS_SOURCE
+    assert "Use the Apply button directly below the force-state table" in PRESTRESS_SOURCE
 
 
 def test_project_io_preserves_girder_strand_layout_metadata_source() -> None:
@@ -1287,6 +1289,41 @@ def test_girder_loss1a_manual_force_state_table_and_apply(monkeypatch) -> None:
     assert float(updated.loc[0, "Pe_eff_final/strand_kN"]) == 100.0
 
 
+def test_girder_stage_pe_mapping_accepts_force_state_count_alias(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.serviceability.girder_prestress_station import girder_stage_pe_mapping_dataframe  # noqa: PLC0415
+
+    force_state_like_table = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "No. strands": 4,
+                "Pe_transfer/strand_kN": 120.0,
+                "Pe_construction/strand_kN": 115.0,
+                "Pe_eff_final/strand_kN": 105.0,
+            }
+        ]
+    )
+    mapping = girder_stage_pe_mapping_dataframe(force_state_like_table).set_index("Stage")
+    assert mapping.loc["Transfer", "Status"] == "READY"
+    assert mapping.loc["Construction", "Status"] == "READY"
+    assert mapping.loc["Final service", "Status"] == "READY"
+    assert float(mapping.loc["Transfer", "Pe total kN"]) == 480.0
+
+
 def test_girder_loss1a_percentage_mode_derives_stage_pe(monkeypatch) -> None:
     import sys
     import types
@@ -1484,6 +1521,10 @@ def test_girder_loss1b_force_state_mapping_and_sls_feed_matching(monkeypatch) ->
     force_table = prestress_page._normalize_girder_loss_force_state_table(None, strand_table, mode="Manual stage Pe")
     assert prestress_page._girder_force_states_match_strand_layout(strand_table, force_table)
     metrics = prestress_page._stage_pe_mapping_metrics_from_table(force_table, sls_feed_ready=True)
+    values_by_title = {metric.title: metric.value for metric in metrics}
+    assert values_by_title["Transfer Pe"] == "READY"
+    assert values_by_title["Construction Pe"] == "READY"
+    assert values_by_title["Service Pe"] == "READY"
     assert [metric.title for metric in metrics][-1] == "SLS feed"
     assert metrics[-1].value == "Ready"
 

@@ -524,6 +524,12 @@ def _active_layout_rows(table: pd.DataFrame | None) -> pd.DataFrame:
     df = pd.DataFrame(table).copy()
     if df.empty:
         return df
+    # Strand layout tables use ``No. Strands`` while the LOSS1A force-state
+    # editor intentionally displays the compact label ``No. strands``.  Stage
+    # Pe mapping is a data-flow audit and must accept both shapes; otherwise
+    # valid force-state rows are incorrectly reported as MISSING.
+    if _COUNT_COLUMN not in df.columns and "No. strands" in df.columns:
+        df[_COUNT_COLUMN] = df["No. strands"]
     if _ACTIVE_COLUMN in df.columns:
         active = df[_ACTIVE_COLUMN].fillna(True).astype(bool)
         df = df.loc[active].copy()

@@ -1527,6 +1527,26 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
     edited_df = _data_editor_payload_to_dataframe(edited, force_table)
     normalized = _normalize_girder_loss_force_state_table(edited_df, strand_table, mode=str(mode))
     _persist_girder_loss_force_state_table(normalized)
+
+    apply_col, note_col = st.columns([1.2, 4.0])
+    with apply_col:
+        apply_clicked = st.button(
+            "Apply force states to strand table",
+            key="apply_girder_force_states_to_strand_table",
+            type="primary",
+            use_container_width=True,
+        )
+    with note_col:
+        st.caption("Sync reviewed Pe_transfer / Pe_construction / Pe_final values to the strand table used by Effective Prestress Preview and downstream SLS checks.")
+    if apply_clicked:
+        updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
+        st.session_state["girder_strand_layout_table"] = updated
+        st.session_state.pop("girder_strand_layout_editor", None)
+        st.success("Force states applied to strand layout Pe columns.")
+        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+        if callable(rerun):
+            rerun()
+
     status, messages = _girder_loss_force_state_qa_summary(normalized)
     total_strands = int(pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not normalized.empty else 0
     pe_transfer_total = float((pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0) * pd.to_numeric(normalized.get("Pe_transfer/strand_kN", pd.Series(dtype=float)), errors="coerce").fillna(0)).sum()) if not normalized.empty else 0.0
@@ -1553,16 +1573,8 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
     _render_stage_pe_mapping_audit(normalized, expanded=False)
     st.warning(
         "LOSS1A/LOSS1B values are stage force states and Pe mapping checks, not final code-certified AASHTO/ACI loss calculations. "
-        "Press Apply to sync reviewed force-state values to the strand table used by Effective Prestress Preview and downstream SLS checks."
+        "Use the Apply button directly below the force-state table to sync reviewed values to the strand table used by Effective Prestress Preview and downstream SLS checks."
     )
-    if st.button("Apply force states to strand table", key="apply_girder_force_states_to_strand_table"):
-        updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
-        st.session_state["girder_strand_layout_table"] = updated
-        st.session_state.pop("girder_strand_layout_editor", None)
-        st.success("Force states applied to strand layout Pe columns.")
-        rerun = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-        if callable(rerun):
-            rerun()
 
 
 

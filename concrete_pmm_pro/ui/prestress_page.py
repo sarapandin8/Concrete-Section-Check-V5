@@ -1330,6 +1330,34 @@ def _normalize_girder_loss_force_state_table(
     return pd.DataFrame(rows, columns=GIRDER_LOSS_FORCE_STATE_COLUMNS)
 
 
+
+def _persist_girder_loss_force_state_table(normalized_table: pd.DataFrame) -> None:
+    """Persist the normalized girder loss/force-state table without forcing a rerun."""
+
+    st.session_state["girder_prestress_loss_force_state_table"] = pd.DataFrame(normalized_table).reset_index(drop=True)
+
+
+def _sync_girder_loss_force_state_editor_to_table(strand_table: pd.DataFrame, mode: str) -> None:
+    """Persist first data-editor edits for LOSS1A force states.
+
+    Streamlit stores an ``edited_rows`` patch dict in session state during
+    ``on_change``.  Reconstruct the force-state table from the canonical table
+    and the patch so manual Pe edits and percentage-loss edits persist on the
+    first edit, rather than requiring a second input.
+    """
+
+    edited = st.session_state.get("girder_prestress_loss_force_state_editor")
+    current = st.session_state.get("girder_prestress_loss_force_state_table")
+    fallback = (
+        pd.DataFrame(current).reset_index(drop=True)
+        if current is not None
+        else _normalize_girder_loss_force_state_table(None, strand_table, mode=str(mode))
+    )
+    edited_df = _data_editor_payload_to_dataframe(edited, fallback)
+    normalized = _normalize_girder_loss_force_state_table(edited_df, strand_table, mode=str(mode))
+    _persist_girder_loss_force_state_table(normalized)
+
+
 def _apply_girder_loss_force_states_to_strand_layout(strand_table: pd.DataFrame, force_table: pd.DataFrame) -> pd.DataFrame:
     updated = pd.DataFrame(strand_table).copy()
     if updated.empty or force_table is None or pd.DataFrame(force_table).empty:
@@ -1406,20 +1434,23 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
             "Group ID": st.column_config.TextColumn("Group ID", disabled=True),
             "No. strands": st.column_config.NumberColumn("No. strands", disabled=True, format="%d"),
             "Pjack/strand_kN": st.column_config.NumberColumn("🟨 Pjack / strand (kN)", min_value=0.0, step=5.0, format="%.3f"),
-            "Transfer loss %": st.column_config.NumberColumn("Transfer loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
-            "Pe_transfer/strand_kN": st.column_config.NumberColumn("Pe_transfer / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
-            "Construction loss %": st.column_config.NumberColumn("Construction loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
-            "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
-            "Long-term loss %": st.column_config.NumberColumn("Long-term loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
-            "Pe_eff_final/strand_kN": st.column_config.NumberColumn("Pe_final / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Transfer loss %": st.column_config.NumberColumn(("🟨 " if not loss_disabled else "") + "Transfer loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_transfer/strand_kN": st.column_config.NumberColumn(("🟨 " if not pe_disabled else "") + "Pe_transfer / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Construction loss %": st.column_config.NumberColumn(("🟨 " if not loss_disabled else "") + "Construction loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_construction/strand_kN": st.column_config.NumberColumn(("🟨 " if not pe_disabled else "") + "Pe_construction / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
+            "Long-term loss %": st.column_config.NumberColumn(("🟨 " if not loss_disabled else "") + "Long-term loss %", min_value=0.0, max_value=60.0, step=1.0, format="%.2f", disabled=loss_disabled),
+            "Pe_eff_final/strand_kN": st.column_config.NumberColumn(("🟨 " if not pe_disabled else "") + "Pe_final / strand (kN)", min_value=0.0, step=5.0, format="%.3f", disabled=pe_disabled),
             "Total loss %": st.column_config.NumberColumn("Total loss %", disabled=True, format="%.2f"),
             "QA status": st.column_config.TextColumn("QA status", disabled=True),
             "Note": st.column_config.TextColumn("Note", disabled=True),
         },
         key="girder_prestress_loss_force_state_editor",
+        on_change=_sync_girder_loss_force_state_editor_to_table,
+        args=(pd.DataFrame(strand_table).reset_index(drop=True), str(mode)),
     )
-    normalized = _normalize_girder_loss_force_state_table(edited, strand_table, mode=str(mode))
-    st.session_state["girder_prestress_loss_force_state_table"] = normalized
+    edited_df = _data_editor_payload_to_dataframe(edited, force_table)
+    normalized = _normalize_girder_loss_force_state_table(edited_df, strand_table, mode=str(mode))
+    _persist_girder_loss_force_state_table(normalized)
     status, messages = _girder_loss_force_state_qa_summary(normalized)
     total_strands = int(pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not normalized.empty else 0
     pe_transfer_total = float((pd.to_numeric(normalized.get("No. strands", pd.Series(dtype=float)), errors="coerce").fillna(0) * pd.to_numeric(normalized.get("Pe_transfer/strand_kN", pd.Series(dtype=float)), errors="coerce").fillna(0)).sum()) if not normalized.empty else 0.0

@@ -1336,3 +1336,109 @@ def test_girder_loss1a_percentage_mode_derives_stage_pe(monkeypatch) -> None:
     assert round(float(force_table.loc[0, "Pe_construction/strand_kN"]), 3) == 128.25
     assert round(float(force_table.loc[0, "Pe_eff_final/strand_kN"]), 3) == 115.425
     assert force_table.loc[0, "QA status"] == "OK"
+
+
+def test_girder_loss1a_data_editor_patch_persists_manual_pe_first_edit(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui import prestress_page  # noqa: PLC0415
+    prestress_page.st = st
+
+    strand_table = prestress_page._normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "y_mm_from_bottom": 50.0,
+                    "Pe_transfer/strand_kN": 128.0,
+                    "Pe_construction/strand_kN": 120.0,
+                    "Pe_eff_final/strand_kN": 110.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    base = prestress_page._normalize_girder_loss_force_state_table(None, strand_table, mode="Manual stage Pe")
+    st.session_state["girder_prestress_loss_force_state_table"] = base
+    st.session_state["girder_prestress_loss_force_state_editor"] = {
+        "edited_rows": {
+            0: {
+                "Pe_transfer/strand_kN": 124.0,
+                "Pe_construction/strand_kN": 118.0,
+                "Pe_eff_final/strand_kN": 104.0,
+            }
+        },
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+
+    prestress_page._sync_girder_loss_force_state_editor_to_table(strand_table, "Manual stage Pe")
+    saved = st.session_state["girder_prestress_loss_force_state_table"]
+    assert float(saved.loc[0, "Pe_transfer/strand_kN"]) == 124.0
+    assert float(saved.loc[0, "Pe_construction/strand_kN"]) == 118.0
+    assert float(saved.loc[0, "Pe_eff_final/strand_kN"]) == 104.0
+    assert saved.loc[0, "QA status"] == "OK"
+
+
+def test_girder_loss1a_data_editor_patch_persists_percentage_loss_first_edit(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui import prestress_page  # noqa: PLC0415
+    prestress_page.st = st
+
+    strand_table = prestress_page._normalize_girder_strand_layout_table(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Group ID": "Row 1",
+                    "Strand Size": "12.7 mm low-relaxation strand",
+                    "No. Strands": 4,
+                    "y_mm_from_bottom": 50.0,
+                    "Pe_transfer/strand_kN": 120.0,
+                    "Pe_construction/strand_kN": 115.0,
+                    "Pe_eff_final/strand_kN": 105.0,
+                }
+            ]
+        ),
+        span_length_m=30.0,
+    )
+    base = prestress_page._normalize_girder_loss_force_state_table(None, strand_table, mode="Percentage loss")
+    st.session_state["girder_prestress_loss_force_state_table"] = base
+    st.session_state["girder_prestress_loss_force_state_editor"] = {
+        "edited_rows": {0: {"Pjack/strand_kN": 150.0, "Transfer loss %": 10.0, "Construction loss %": 5.0, "Long-term loss %": 10.0}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+
+    prestress_page._sync_girder_loss_force_state_editor_to_table(strand_table, "Percentage loss")
+    saved = st.session_state["girder_prestress_loss_force_state_table"]
+    assert round(float(saved.loc[0, "Pe_transfer/strand_kN"]), 3) == 135.0
+    assert round(float(saved.loc[0, "Pe_construction/strand_kN"]), 3) == 128.25
+    assert round(float(saved.loc[0, "Pe_eff_final/strand_kN"]), 3) == 115.425
+    assert saved.loc[0, "QA status"] == "OK"

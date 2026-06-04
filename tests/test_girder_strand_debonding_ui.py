@@ -28,6 +28,8 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "Strand x positions mm" in PRESTRESS_SOURCE
     assert '"Strand x positions mm",\n    "y_mm_from_bottom"' in PRESTRESS_SOURCE
     assert "🟨 x coordinates (mm)" in PRESTRESS_SOURCE
+    assert "_format_mm_compact" in PRESTRESS_SOURCE
+    assert 'format="%.0f"' in PRESTRESS_SOURCE
     assert "_auto_strand_x_positions_text" in PRESTRESS_SOURCE
     assert "Option 2 spaced symmetric pairs" in PRESTRESS_SOURCE
     assert 'line={"color": section_line_color, "width": 2.0, "dash": "solid"}' in PRESTRESS_SOURCE
@@ -489,6 +491,44 @@ def test_generic_girder_defaults_expose_editable_x_coordinate_list(monkeypatch) 
     coords = _parse_explicit_x_positions(table.loc[0, "Strand x positions mm"], first_count)
     assert len(coords) == first_count
     assert coords == sorted(coords)
+
+
+
+def test_strand_x_coordinates_are_shown_as_compact_integer_mm(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        _format_explicit_x_positions,
+        _normalize_girder_strand_layout_table,
+    )
+
+    assert _format_explicit_x_positions([-75.0, -25.0, 25.0, 75.0]) == "-75,-25,25,75"
+
+    raw = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "Strand Size": "12.7 mm low-relaxation strand",
+                "No. Strands": 4,
+                "Strand x positions mm": "-75.000,-25.000,25.000,75.000",
+                "y_mm_from_bottom": 50.0,
+            }
+        ]
+    )
+    table = _normalize_girder_strand_layout_table(raw, span_length_m=30.0)
+    assert table.loc[0, "Strand x positions mm"] == "-75,-25,25,75"
 
 
 

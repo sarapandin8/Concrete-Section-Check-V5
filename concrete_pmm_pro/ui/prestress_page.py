@@ -1314,8 +1314,20 @@ def _symmetric_spread_no_center_positions(count: int, outer_offset_mm: float) ->
     return [-value for value in reversed(positive)] + positive
 
 
+def _format_mm_compact(value: float) -> str:
+    """Return compact mm text for table display.
+
+    Strand detailing coordinates are shown as whole millimetres in the main
+    editor to keep the girder strand table readable.  Computation still parses
+    the text as float values, but preset/generated values should not clutter
+    the UI with trailing .000 decimals.
+    """
+
+    return f"{int(round(float(value)))}"
+
+
 def _format_explicit_x_positions(values: list[float]) -> str:
-    return ",".join(f"{value:.3f}" for value in values)
+    return ",".join(_format_mm_compact(value) for value in values)
 
 
 def _parse_explicit_x_positions(value: Any, expected_count: int) -> list[float]:
@@ -1655,6 +1667,9 @@ def _normalize_girder_strand_layout_table(
         if x_mm is None:
             x_mm = _to_float(current.get("x_mm"))
         strand_x_positions = str(current.get("Strand x positions mm") or "").strip()
+        parsed_x_positions = _parse_explicit_x_positions(strand_x_positions, int(no_strands)) if strand_x_positions and no_strands > 0 else []
+        if parsed_x_positions:
+            strand_x_positions = _format_explicit_x_positions(parsed_x_positions)
         # Detailing aids are controlled by the selected standard strand size.
         # Current default convention: edge CL = 45 mm for both sizes; practical
         # minimum strand spacing = 50 mm for 12.7 mm strand and 55 mm for
@@ -2701,15 +2716,15 @@ def _render_girder_strand_layout_and_debonding_ui(geometry: SectionGeometry | No
             "No. Strands": st.column_config.NumberColumn("🟨 No. strands", min_value=0, step=1),
             "Area/Strand_mm2": st.column_config.NumberColumn("Area/strand (mm²)", disabled=True, format="%.3f"),
             "Total Aps_mm2": st.column_config.NumberColumn("Total Aps (mm²)", disabled=True, format="%.3f"),
-            "Row center x_mm": st.column_config.NumberColumn("Row center x (mm)", step=10.0, format="%.3f"),
+            "Row center x_mm": st.column_config.NumberColumn("Row center x (mm)", step=10.0, format="%.0f"),
             "Strand x positions mm": st.column_config.TextColumn(
                 "🟨 x coordinates (mm)",
                 help="Comma-separated individual strand x coordinates for this row, measured from the section centerline. Leave blank to regenerate an auto centered row.",
             ),
-            "y_mm_from_bottom": st.column_config.NumberColumn("🟨 y from bottom (mm)", min_value=0.0, step=10.0, format="%.3f"),
-            "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", disabled=True, format="%.3f"),
-            "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", disabled=True, format="%.3f"),
-            "Computed spacing_mm": st.column_config.NumberColumn("Layout spacing (mm)", disabled=True, format="%.3f"),
+            "y_mm_from_bottom": st.column_config.NumberColumn("🟨 y from bottom (mm)", min_value=0.0, step=10.0, format="%.0f"),
+            "Edge CL_mm": st.column_config.NumberColumn("Edge CL (mm)", disabled=True, format="%.0f"),
+            "Min spacing_mm": st.column_config.NumberColumn("Min spacing (mm)", disabled=True, format="%.0f"),
+            "Computed spacing_mm": st.column_config.NumberColumn("Layout spacing (mm)", disabled=True, format="%.0f"),
             "Pe_transfer/strand_kN": st.column_config.NumberColumn("🟨 Pe_transfer / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
             "Pe_construction/strand_kN": st.column_config.NumberColumn("Pe_construction / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),
             "Pe_eff_final/strand_kN": st.column_config.NumberColumn("🟨 Pe_eff_final / strand (kN)", min_value=0.0, step=10.0, format="%.3f"),

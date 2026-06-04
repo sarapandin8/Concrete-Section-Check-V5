@@ -137,7 +137,7 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
     ),
 ]
 
-GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss"]
+GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss", "Approximate code-based loss"]
 GIRDER_LOSS_FORCE_STATE_COLUMNS = [
     "Active",
     "Group ID",
@@ -1629,24 +1629,44 @@ def _render_girder_loss_apply_workflow_guidance(
     force_table: pd.DataFrame,
     strand_table: pd.DataFrame,
 ) -> None:
-    """Render the LOSS2A.1 apply-sequence guidance near the editable table."""
+    """Render mode-specific LOSS2A.2 apply-sequence guidance."""
 
     synced = _girder_force_states_match_strand_layout(strand_table, force_table)
     status = "Applied / SLS feed ready" if synced else "Pending apply"
-    status_detail = (
-        "The strand table Pe columns match the reviewed force-state table."
-        if synced
-        else "The force-state table has reviewed values that still need to be applied to the strand table."
-    )
-    st.info(
-        "Workflow: 1) Edit manual/percentage force states or calculate a code-based estimate → "
-        "2) review the table/results → 3) press the Apply button directly below the table you used → "
-        "4) confirm SLS feed is Ready. Code-based loss results do not require pressing the manual/percentage Apply button."
-    )
+    if mode == "Approximate code-based loss":
+        step_1 = "Confirm code-loss inputs"
+        step_2 = "Calculate and review loss estimate"
+        step_3 = "Apply calculated losses"
+        status_detail = (
+            "Code-based Pe values are applied to the force-state table and strand table."
+            if synced
+            else "Calculate an estimate, then use the Apply button below the loss result table. No manual/percentage Apply button is needed in this mode."
+        )
+        st.info(
+            "Code-based loss workflow: 1) confirm detected inputs and required assumptions → "
+            "2) calculate and review the approximate loss estimate → "
+            "3) press Apply calculated losses directly below the result table → "
+            "4) confirm SLS feed is Ready."
+        )
+    else:
+        step_1 = "Edit force-state table"
+        step_2 = "Review force states"
+        step_3 = "Apply table values"
+        status_detail = (
+            "The strand table Pe columns match the reviewed force-state table."
+            if synced
+            else "The force-state table has reviewed values that still need to be applied to the strand table."
+        )
+        st.info(
+            "Manual / percentage workflow: 1) edit the force-state table → "
+            "2) review the calculated stage Pe values → "
+            "3) press the Apply manual / percentage button directly below the table → "
+            "4) confirm SLS feed is Ready."
+        )
     cols = st.columns(4)
-    cols[0].markdown("**Step 1**  \nEdit / calculate Pe")
-    cols[1].markdown("**Step 2**  \nReview force states")
-    cols[2].markdown("**Step 3**  \nApply once")
+    cols[0].markdown(f"**Step 1**  \n{step_1}")
+    cols[1].markdown(f"**Step 2**  \n{step_2}")
+    cols[2].markdown(f"**Step 3**  \n{step_3}")
     cols[3].markdown(f"**Current status**  \n{status}")
     st.caption(status_detail)
 
@@ -1798,8 +1818,8 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
     st.markdown("#### Prestress Force States / Losses")
     st.markdown(
         '<div class="cpmm-prestress-table-note">'
-        "Define stage prestress per strand for girder SLS. LOSS2A adds an approximate code-based estimate while preserving manual/percentage workflows; "
-        "refined AASHTO loss, transfer-length ramp, development, shear, and end-zone reinforcement are future milestones."
+        "Define stage prestress per strand for girder SLS. Select one loss input mode at a time so the page shows only the workflow you are using. "
+        "Refined AASHTO loss, transfer-length ramp, development, shear, and end-zone reinforcement are future milestones."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1811,7 +1831,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         "Loss input mode",
         GIRDER_LOSS_INPUT_MODE_OPTIONS,
         index=GIRDER_LOSS_INPUT_MODE_OPTIONS.index(mode_default),
-        help="Manual stage Pe edits Pe directly. Percentage loss derives Pe from Pjack and staged loss percentages. Approximate code-based estimates are calculated in the section below and applied explicitly.",
+        help="Choose one workflow. Manual and percentage modes edit the force-state table; approximate code-based loss calculates a reviewed estimate and applies it directly.",
         key="girder_prestress_loss_input_mode",
     )
     settings["mode"] = str(mode)
@@ -1821,9 +1841,39 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
     force_table = _normalize_girder_loss_force_state_table(
         pd.DataFrame(current) if current is not None else None,
         strand_table,
-        mode=str(mode),
+        mode="Percentage loss" if mode == "Percentage loss" else "Manual stage Pe",
     )
     _render_girder_loss_apply_workflow_guidance(mode=str(mode), force_table=force_table, strand_table=strand_table)
+
+    if mode == "Approximate code-based loss":
+        _render_girder_code_based_loss_estimate(strand_table, force_table, geometry)
+        synced_force_table = _normalize_girder_loss_force_state_table(
+            pd.DataFrame(st.session_state.get("girder_prestress_loss_force_state_table", force_table)),
+            strand_table,
+            mode="Manual stage Pe",
+        )
+        status, messages = _girder_loss_force_state_qa_summary(synced_force_table)
+        mapping_status, mapping_messages = girder_stage_pe_mapping_status(synced_force_table)
+        sls_feed_ready = status == "OK" and mapping_status == "READY" and _girder_force_states_match_strand_layout(strand_table, synced_force_table)
+        metrics = [
+            PrestressMetric("Loss mode", "Code estimate", "approximate LOSS2A workflow", "info", strong=True),
+            PrestressMetric("Apply status", st.session_state.get("girder_prestress_code_loss_apply_status", "Pending apply"), "calculated loss result"),
+        ]
+        metrics.extend(_stage_pe_mapping_metrics_from_table(synced_force_table, sls_feed_ready=sls_feed_ready))
+        st.markdown(_metric_strip_html(metrics), unsafe_allow_html=True)
+        if messages or mapping_messages:
+            with st.expander("Force-state QA / stage Pe mapping review messages", expanded=False):
+                for message in messages:
+                    st.warning(message)
+                for message in mapping_messages:
+                    st.warning(message)
+        _render_stage_pe_mapping_audit(synced_force_table, expanded=False)
+        st.warning(
+            "LOSS2A approximate code-based loss results are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
+            "Use only the Apply calculated losses button in this mode."
+        )
+        return
+
     pe_disabled = mode == "Percentage loss"
     loss_disabled = mode == "Manual stage Pe"
     edited = st.data_editor(
@@ -1864,7 +1914,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
             use_container_width=True,
         )
     with note_col:
-        st.caption("Use this button only after editing the manual/percentage force-state table. Code-based loss results use the Apply button below the loss estimate table and do not need this button.")
+        st.caption("Use this button only after editing the manual/percentage force-state table. Switch to Approximate code-based loss to calculate and apply code-based estimates instead.")
     if apply_clicked:
         updated = _apply_girder_loss_force_states_to_strand_layout(strand_table, normalized)
         st.session_state["girder_strand_layout_table"] = updated
@@ -1899,11 +1949,9 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
             for message in mapping_messages:
                 st.warning(message)
     _render_stage_pe_mapping_audit(normalized, expanded=False)
-    st.divider()
-    _render_girder_code_based_loss_estimate(strand_table, normalized, geometry)
     st.warning(
-        "LOSS2A approximate loss estimates and LOSS1 force states are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
-        "Apply exactly once from the workflow you used: manual/percentage table → top Apply button; code-based estimate → Apply calculated losses below the loss result table."
+        "LOSS1/LOSS2 force states are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
+        "Only this manual/percentage workspace is active in the current mode."
     )
 
 

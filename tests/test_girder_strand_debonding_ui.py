@@ -52,8 +52,11 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "SLS feed" in PRESTRESS_SOURCE
     assert "girder_stage_pe_mapping_dataframe" in PRESTRESS_SOURCE
     assert 'type="primary"' in PRESTRESS_SOURCE
-    assert "Workflow: 1) Edit manual/percentage force states or calculate a code-based estimate" in PRESTRESS_SOURCE
+    assert "Select one loss input mode at a time" in PRESTRESS_SOURCE
     assert "Apply manual / percentage force states to strand table" in PRESTRESS_SOURCE
+    assert "Approximate code-based loss" in PRESTRESS_SOURCE
+    assert "Only this manual/percentage workspace is active in the current mode" in PRESTRESS_SOURCE
+    assert "Use only the Apply calculated losses button in this mode" in PRESTRESS_SOURCE
     assert "No second Apply step is required" in PRESTRESS_SOURCE
     assert "Code-Based Loss Estimate" in PRESTRESS_SOURCE
     assert "Calculate approximate loss estimate" in PRESTRESS_SOURCE

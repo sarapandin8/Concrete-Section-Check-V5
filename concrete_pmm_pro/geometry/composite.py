@@ -109,7 +109,7 @@ def composite_deck_is_active(
     """
 
     params = dict(section_parameters or {})
-    if member_type != "beam_girder":
+    if member_type not in {"beam_girder", "building_beam_girder"}:
         return False
     explicit_enabled = bool(params.get("composite_enabled", False))
     if require_explicit_flag and not explicit_enabled:

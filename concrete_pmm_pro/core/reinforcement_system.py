@@ -119,16 +119,20 @@ def section_level_prestress_ignored_for_girder(source: Any) -> bool:
     reintroduce stale PS1/PS2 reference rows.
     """
 
-    if _member_type_from_source(source) != "beam_girder":
-        return False
+    member_type = _member_type_from_source(source)
     family = str(_get_value(source, "girder_section_family", "") or "").strip().casefold()
     category = str(_get_value(source, "section_category", "") or "").strip().casefold()
     preset = str(_get_value(source, "section_preset_key", "") or "").strip().casefold()
-    return (
-        family == "precast_composite_girder"
-        or category == "precast composite girder"
-        or preset in GIRDER_SECTION_LEVEL_PRESTRESS_IGNORED_PRESET_KEYS
+    bridge_dedicated_girder = (
+        member_type == "beam_girder"
+        and (
+            family == "precast_composite_girder"
+            or category == "precast composite girder"
+            or preset in GIRDER_SECTION_LEVEL_PRESTRESS_IGNORED_PRESET_KEYS
+        )
     )
+    building_shared_prestressed_girder = member_type == "building_beam_girder" and preset == "parametric_i_girder"
+    return bridge_dedicated_girder or building_shared_prestressed_girder
 
 
 def ordinary_rebar_enabled(source: Any, *, default: bool = True) -> bool:

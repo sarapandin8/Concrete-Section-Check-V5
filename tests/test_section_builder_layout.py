@@ -203,13 +203,19 @@ def test_building_beam_girder_allows_basic_beams_and_shared_precast_i_girder_onl
     assert "u_girder" not in keys
 
 
-def test_building_beam_girder_keeps_bridge_composite_metadata_hidden_for_shared_i_girder() -> None:
+def test_building_beam_girder_enables_shared_i_girder_composite_metadata_but_not_aashto_helper() -> None:
     i_girder = preset_by_key("parametric_i_girder")
 
-    assert section_builder._bridge_composite_metadata_enabled(
+    assert section_builder._composite_metadata_enabled_for_workflow(
         i_girder, AnalysisModeSettings(member_type="beam_girder")
     )
-    assert not section_builder._bridge_composite_metadata_enabled(
+    assert section_builder._composite_metadata_enabled_for_workflow(
+        i_girder, AnalysisModeSettings(member_type="building_beam_girder")
+    )
+    assert section_builder._aashto_effective_width_helper_enabled(
+        i_girder, AnalysisModeSettings(member_type="beam_girder")
+    )
+    assert not section_builder._aashto_effective_width_helper_enabled(
         i_girder, AnalysisModeSettings(member_type="building_beam_girder")
     )
 

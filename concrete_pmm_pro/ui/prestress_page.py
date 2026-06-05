@@ -412,13 +412,21 @@ def _current_section_preset_key() -> str:
 def _is_girder_prestress_layout_workflow_active() -> bool:
     """Return whether the dedicated girder strand/debonding UI should be shown.
 
-    GIRDER.PS3A is a Beam/Girder-only workflow.  It must not appear on
-    Column/Pier/Wall/Pylon sections where the generic prestress table is still
-    available for special cases but the simple-supported girder strand layout is
-    not applicable.
+    The strand/debonding editor is a prestressed-girder detailing workflow, not
+    a bridge-load workflow.  It is available for Bridge Beam/Girder presets and
+    for explicitly shared prestressed girder geometry under Building
+    Beam/Girder, while remaining hidden for Column/Pier/Wall/Pylon members.
     """
 
-    return _session_member_type() == "beam_girder" and _current_section_preset_key() in GIRDER_PRESTRESS_UI_PRESET_KEYS
+    member_type = _session_member_type()
+    preset_key = _current_section_preset_key()
+    if preset_key not in GIRDER_PRESTRESS_UI_PRESET_KEYS:
+        return False
+    if member_type == "beam_girder":
+        return True
+    if member_type == "building_beam_girder" and preset_key == "parametric_i_girder":
+        return True
+    return False
 
 
 def _has_active_prestress_force(elements: list[PrestressElement]) -> bool:
@@ -5350,10 +5358,10 @@ def render_prestress_page() -> None:
     with main_col:
         if girder_prestress_layout_active:
             _render_girder_strand_layout_and_debonding_ui(geometry)
-        elif _session_member_type() == "beam_girder":
+        elif _session_member_type() in {"beam_girder", "building_beam_girder"}:
             st.info(
-                "Simple-supported strand layout and debonding tools are hidden for the current section preset. "
-                "Use a girder preset or the generic prestress table if this member intentionally has prestressing."
+                "Dedicated strand layout and debonding tools are hidden for the current section preset. "
+                "Use a supported prestressed girder preset such as Precast I-Girder, or use the generic prestress table if this member intentionally has prestressing."
             )
 
     active_rebar_count = len(st.session_state.get("rebars", []) or []) if ordinary_rebar_enabled(st.session_state, default=True) else 0

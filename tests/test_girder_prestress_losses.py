@@ -7,9 +7,14 @@ import pandas as pd
 from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     GirderApproximateLossInput,
     GirderLossStrandGroupInput,
+    RefinedAashtoCoefficientInput,
     calculate_aashto_approximate_long_term_loss_MPa,
     calculate_approximate_prestress_loss,
     calculate_elastic_shortening_iterative,
+    estimate_kdf,
+    estimate_kid,
+    estimate_refined_aashto_coefficients,
+    estimate_volume_surface_ratio_mm,
     loss_result_dataframe_to_force_state_table,
     relaxation_loss_MPa,
 )
@@ -154,3 +159,59 @@ def test_refined_aashto_interval_dataframe_separates_two_time_intervals() -> Non
     assert set(intervals["Interval"]) == {"Transfer → deck placement", "Deck placement → final"}
     assert {"Shrinkage loss MPa", "Creep loss MPa", "Relaxation loss MPa", "Deck shrinkage loss MPa"}.issubset(intervals.columns)
     assert (intervals["Subtotal loss MPa"] >= 0.0).all()
+
+
+
+def test_refined_auto_coefficient_estimate_returns_auditable_values() -> None:
+    result = estimate_refined_aashto_coefficients(
+        RefinedAashtoCoefficientInput(
+            section_area_mm2=350000.0,
+            exposed_perimeter_mm=2600.0,
+            section_Ix_mm4=7.0e9,
+            centroid_y_from_bottom_mm=220.0,
+            total_aps_mm2=1776.6,
+            yps_mm_from_bottom=85.0,
+            Ep_MPa=195000.0,
+            Eci_MPa=4700.0 * math.sqrt(36.0),
+            Ec_MPa=4700.0 * math.sqrt(45.0),
+            fci_MPa=36.0,
+            fc_MPa=45.0,
+            humidity_percent=75.0,
+            age_transfer_days=1.0,
+            age_deck_days=30.0,
+            final_age_days=10000.0,
+        )
+    )
+    assert result.volume_surface_mm > 0.0
+    assert 0.0 < result.Kid <= 1.0
+    assert 0.0 < result.Kdf <= 1.0
+    assert result.psi_td_ti > 0.0
+    assert result.psi_tf_ti >= result.psi_td_ti
+    assert result.eps_bid_microstrain > 0.0
+    assert result.eps_bdf_microstrain >= 0.0
+    audit = result.audit_dataframe()
+    assert {"Ψb(td,ti)", "εbid", "Kid", "Kdf"}.issubset(set(audit["Coefficient"]))
+
+
+def test_refined_kid_kdf_reduce_with_prestress_interaction() -> None:
+    kid = estimate_kid(
+        Ep_MPa=195000.0,
+        Eci_MPa=28000.0,
+        Aps_mm2=1800.0,
+        Ag_mm2=350000.0,
+        epg_mm=-140.0,
+        Ig_mm4=7.0e9,
+        psi_td_ti=0.6,
+    )
+    kdf = estimate_kdf(
+        Ep_MPa=195000.0,
+        Ec_MPa=31500.0,
+        Aps_mm2=1800.0,
+        Ac_mm2=350000.0,
+        epc_mm=-140.0,
+        Ic_mm4=7.0e9,
+        psi_tf_td=1.0,
+    )
+    assert 0.0 < kid < 1.0
+    assert 0.0 < kdf < 1.0
+    assert estimate_volume_surface_ratio_mm(350000.0, 2600.0) > 0.0

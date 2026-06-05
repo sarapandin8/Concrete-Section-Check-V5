@@ -66,17 +66,21 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "DEFAULT_CODE_LOSS_FPJ_RATIO = 0.75" in PRESTRESS_SOURCE
     assert "Jacking stress assumption: fpj" in PRESTRESS_SOURCE
     assert "derive Pjack per strand from fpj ratio" in PRESTRESS_SOURCE
-    assert "manual-coefficient preview" in PRESTRESS_SOURCE
+    assert "auto-estimated refined AASHTO coefficients" in PRESTRESS_SOURCE or "auto-estimates creep/shrinkage/Kid/Kdf" in PRESTRESS_SOURCE
     assert "Thailand high humidity typical (RH ≈ 75%)" in PRESTRESS_SOURCE
     assert "Moderate humidity (RH ≈ 60%)" in PRESTRESS_SOURCE
     assert "Dry climate conservative (RH ≈ 45%)" in PRESTRESS_SOURCE
     assert "Preset coefficient guide" in PRESTRESS_SOURCE
     assert "Refined coefficient REVIEW" in PRESTRESS_SOURCE
-    assert "These are practical starter values for the LOSS3A manual-coefficient workflow" in PRESTRESS_SOURCE
+    assert "Auto-estimated from RH/time/section" in PRESTRESS_SOURCE
+    assert "LOSS3B auto-estimates creep/shrinkage/Kid/Kdf" in PRESTRESS_SOURCE
+    assert "These are practical starter values for the LOSS3B refined workflow" in PRESTRESS_SOURCE
     assert "Apply calculated losses to force states and strand table" not in PRESTRESS_SOURCE
     assert "girder_prestress_code_loss_settings" in PRESTRESS_SOURCE
     assert "calculate_approximate_prestress_loss" in PRESTRESS_SOURCE
     assert "calculate_refined_aashto_time_dependent_loss" in PRESTRESS_SOURCE
+    assert "estimate_refined_aashto_coefficients" in PRESTRESS_SOURCE
+    assert "V/S override" in PRESTRESS_SOURCE
 
 
 

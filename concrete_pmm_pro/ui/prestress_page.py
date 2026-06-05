@@ -40,9 +40,12 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     GirderApproximateLossInput,
     GirderLossStrandGroupInput,
     LOSS_INPUT_AUDIT_COLUMNS,
+    RefinedAashtoCoefficientInput,
     RefinedAashtoManualCoefficientInput,
     calculate_approximate_prestress_loss,
     calculate_refined_aashto_time_dependent_loss,
+    estimate_refined_aashto_coefficients,
+    estimate_volume_surface_ratio_mm,
     loss_result_dataframe_to_force_state_table,
 )
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
@@ -183,6 +186,14 @@ REFINED_COEFFICIENT_PRESETS: dict[str, dict[str, float]] = {
 }
 REFINED_COEFFICIENT_PRESET_OPTIONS = [*REFINED_COEFFICIENT_PRESETS.keys(), REFINED_COEFFICIENT_USER_DEFINED]
 DEFAULT_REFINED_COEFFICIENT_PRESET = "Thailand high humidity typical (RH ≈ 75%)"
+REFINED_COEFFICIENT_SOURCE_AUTO = "Auto-estimated from RH/time/section"
+REFINED_COEFFICIENT_SOURCE_PRESET = "Preset coefficient set"
+REFINED_COEFFICIENT_SOURCE_MANUAL = "Manual override"
+REFINED_COEFFICIENT_SOURCE_OPTIONS = [
+    REFINED_COEFFICIENT_SOURCE_AUTO,
+    REFINED_COEFFICIENT_SOURCE_PRESET,
+    REFINED_COEFFICIENT_SOURCE_MANUAL,
+]
 REFINED_PRESET_WIDGET_KEYS = {
     "Kid": "girder_refined_kid",
     "Kdf": "girder_refined_kdf",
@@ -1544,7 +1555,9 @@ def _girder_code_loss_settings_from_session() -> dict[str, Any]:
     settings.setdefault("age_transfer_days", 1.0)
     settings.setdefault("age_deck_days", 30.0)
     settings.setdefault("final_age_days", 10000.0)
+    settings.setdefault("refined_coefficient_source", REFINED_COEFFICIENT_SOURCE_AUTO)
     settings.setdefault("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET)
+    settings.setdefault("vs_override_mm", 0.0)
     refined_defaults = REFINED_COEFFICIENT_PRESETS[DEFAULT_REFINED_COEFFICIENT_PRESET]
     settings.setdefault("Kid", refined_defaults["Kid"])
     settings.setdefault("Kdf", refined_defaults["Kdf"])
@@ -1620,6 +1633,106 @@ def _refined_coefficient_preset_dataframe() -> pd.DataFrame:
                 "Use case": "Typical Thailand/high RH" if "Thailand" in name else ("Moderate RH" if "Moderate" in name else "Dry/conservative check"),
             }
         )
+    return pd.DataFrame(rows)
+
+
+
+
+def _section_exposed_outer_perimeter_mm(geometry: SectionGeometry | None) -> float:
+    """Return the outer exposed perimeter estimate for LOSS3B V/S.
+
+    Voids are intentionally excluded in LOSS3B because whether the void
+    perimeter is exposed depends on production/curing details and requires a
+    project-specific surface model.
+    """
+
+    if geometry is None:
+        return 0.0
+    try:
+        return float(to_shapely_polygon(geometry).exterior.length)
+    except Exception:
+        return 0.0
+
+
+def _girder_strand_total_aps_yps_ep(strand_table: pd.DataFrame) -> tuple[float, float, float]:
+    active = _active_girder_strand_layout_rows(strand_table)
+    total_aps = 0.0
+    weighted_y = 0.0
+    weighted_ep = 0.0
+    for _, row in active.iterrows():
+        count = int(_to_float(row.get("No. Strands")) or 0)
+        area = float(_to_float(row.get("Area/Strand_mm2")) or _strand_size_properties(row.get("Strand Size"))["area_mm2"])
+        y = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
+        ep = float(_strand_size_properties(row.get("Strand Size"))["Ep_MPa"])
+        aps = max(count, 0) * max(area, 0.0)
+        total_aps += aps
+        weighted_y += aps * y
+        weighted_ep += aps * ep
+    if total_aps <= 1.0e-9:
+        return 0.0, 0.0, DEFAULT_STRAND_EP_MPA
+    return total_aps, weighted_y / total_aps, weighted_ep / total_aps
+
+
+def _auto_estimated_refined_coefficients_from_context(
+    *,
+    geometry: SectionGeometry | None,
+    strand_table: pd.DataFrame,
+    settings: dict[str, Any],
+) -> Any | None:
+    if geometry is None:
+        return None
+    try:
+        props = compute_gross_section_properties(geometry)
+    except Exception:
+        return None
+    total_aps, yps, Ep = _girder_strand_total_aps_yps_ep(strand_table)
+    if total_aps <= 0.0:
+        return None
+    bottom_y = _section_bottom_y_from_geometry(geometry)
+    cy_from_bottom = float(props.centroid_y_mm) - bottom_y
+    fci = float(settings.get("fci_MPa", 0.0) or 0.0)
+    concrete = st.session_state.get("concrete_material")
+    fc = float(getattr(concrete, "fc_MPa", 0.0) or max(fci, 1.0))
+    Eci = 4700.0 * max(fci, 1.0) ** 0.5
+    Ec = 4700.0 * max(fc, 1.0) ** 0.5
+    perimeter = _section_exposed_outer_perimeter_mm(geometry)
+    auto_vs = estimate_volume_surface_ratio_mm(float(props.area_mm2), perimeter)
+    vs_override = float(settings.get("vs_override_mm", 0.0) or 0.0)
+    if vs_override > 0.0:
+        perimeter = float(props.area_mm2) / vs_override if vs_override > 1.0e-9 else perimeter
+    return estimate_refined_aashto_coefficients(
+        RefinedAashtoCoefficientInput(
+            section_area_mm2=float(props.area_mm2),
+            exposed_perimeter_mm=float(perimeter),
+            section_Ix_mm4=float(props.Ix_mm4),
+            centroid_y_from_bottom_mm=cy_from_bottom,
+            total_aps_mm2=total_aps,
+            yps_mm_from_bottom=yps,
+            Ep_MPa=Ep,
+            Eci_MPa=Eci,
+            Ec_MPa=Ec,
+            fci_MPa=fci,
+            fc_MPa=fc,
+            humidity_percent=float(settings.get("humidity_percent", 75.0) or 75.0),
+            age_transfer_days=float(settings.get("age_transfer_days", 1.0) or 1.0),
+            age_deck_days=float(settings.get("age_deck_days", 30.0) or 30.0),
+            final_age_days=float(settings.get("final_age_days", 10000.0) or 10000.0),
+        )
+    )
+
+
+
+
+def _refined_current_coefficient_dataframe(settings: dict[str, Any], *, source: str) -> pd.DataFrame:
+    rows = [
+        {"Coefficient": "Kid", "Value": float(settings.get("Kid", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Transfer-to-deck interaction coefficient."},
+        {"Coefficient": "Kdf", "Value": float(settings.get("Kdf", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Deck-to-final interaction coefficient."},
+        {"Coefficient": "εbid", "Value": f"{float(settings.get('eps_bid_microstrain', 0.0) or 0.0):.1f} microstrain", "Source": source, "Status": "READY", "Engineering note": "Transfer-to-deck shrinkage strain."},
+        {"Coefficient": "εbdf", "Value": f"{float(settings.get('eps_bdf_microstrain', 0.0) or 0.0):.1f} microstrain", "Source": source, "Status": "READY", "Engineering note": "Deck-to-final shrinkage strain."},
+        {"Coefficient": "Ψb(td,ti)", "Value": float(settings.get("psi_td_ti", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Transfer-to-deck creep coefficient."},
+        {"Coefficient": "Ψb(tf,ti)", "Value": float(settings.get("psi_tf_ti", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Total transfer-to-final creep coefficient."},
+        {"Coefficient": "Ψb(tf,td)", "Value": float(settings.get("psi_tf_td", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Deck-to-final creep coefficient."},
+    ]
     return pd.DataFrame(rows)
 
 def _active_force_state_rows_by_group(force_table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
@@ -1923,8 +2036,8 @@ def _render_girder_code_based_loss_estimate(
     st.markdown(f"##### {heading}")
     if refined_mode:
         st.caption(
-            "LOSS3A adds a refined AASHTO manual-coefficient workflow for pretensioned girders. "
-            "Creep/shrinkage coefficient prediction and load-derived deck stress effects are future milestones; coefficients entered here require engineering review."
+            "LOSS3B adds auto-estimated refined AASHTO coefficients from RH/time/section data, while still allowing preset or manual override. "
+            "Load-derived deck stress effects remain manual inputs and refined results require engineering review."
         )
     else:
         st.caption(
@@ -1980,27 +2093,105 @@ def _render_girder_code_based_loss_estimate(
                 key="girder_refined_loss_fpy_mpa",
             )
         settings.update({"fci_MPa": float(fci), "fpj_ratio": float(fpj_ratio), "relaxation_class": str(relaxation), "fpy_MPa": float(fpy)})
-        preset_previous = str(settings.get("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET))
-        if preset_previous not in REFINED_COEFFICIENT_PRESET_OPTIONS:
-            preset_previous = DEFAULT_REFINED_COEFFICIENT_PRESET
-        preset = st.selectbox(
-            "🟨 Refined coefficient preset",
-            REFINED_COEFFICIENT_PRESET_OPTIONS,
-            index=REFINED_COEFFICIENT_PRESET_OPTIONS.index(preset_previous),
-            help=(
-                "Select practical starting values for LOSS3A manual coefficients. "
-                "The RH shown in each preset is a basis for choosing a climate set; it is not automatic AASHTO coefficient prediction."
-            ),
-            key="girder_refined_coefficient_preset",
+
+        source_previous = str(settings.get("refined_coefficient_source", REFINED_COEFFICIENT_SOURCE_AUTO))
+        if source_previous not in REFINED_COEFFICIENT_SOURCE_OPTIONS:
+            source_previous = REFINED_COEFFICIENT_SOURCE_AUTO
+        coefficient_source = st.selectbox(
+            "🟨 Coefficient source",
+            REFINED_COEFFICIENT_SOURCE_OPTIONS,
+            index=REFINED_COEFFICIENT_SOURCE_OPTIONS.index(source_previous),
+            key="girder_refined_coefficient_source",
+            help="Auto-estimate coefficients from RH/time/section where possible, use climate presets, or manually override project-specific refined coefficients.",
         )
-        preset_changed = preset != settings.get("refined_coefficient_preset")
-        if preset != REFINED_COEFFICIENT_USER_DEFINED and (preset_changed or not settings.get("refined_coefficient_preset_applied", False)):
+        settings["refined_coefficient_source"] = str(coefficient_source)
+
+        time_cols = st.columns(3)
+        with time_cols[0]:
+            settings["age_transfer_days"] = st.number_input("🟨 Age at transfer ti (days)", min_value=0.0, step=1.0, value=float(settings.get("age_transfer_days", 1.0)), format="%.1f", key="girder_refined_age_transfer_days")
+        with time_cols[1]:
+            settings["age_deck_days"] = st.number_input("🟨 Age at deck placement td (days)", min_value=0.0, step=1.0, value=float(settings.get("age_deck_days", 30.0)), format="%.1f", key="girder_refined_age_deck_days")
+        with time_cols[2]:
+            settings["final_age_days"] = st.number_input("🟨 Final age tf (days)", min_value=0.0, step=100.0, value=float(settings.get("final_age_days", 10000.0)), format="%.1f", key="girder_refined_final_age_days")
+
+        if coefficient_source == REFINED_COEFFICIENT_SOURCE_AUTO:
+            auto_cols = st.columns(3)
+            with auto_cols[0]:
+                settings["humidity_percent"] = st.number_input(
+                    "🟨 Relative humidity H (%)",
+                    min_value=20.0,
+                    max_value=100.0,
+                    step=5.0,
+                    value=float(settings.get("humidity_percent", 75.0)),
+                    format="%.0f",
+                    key="girder_refined_auto_humidity_percent",
+                    help="Use project/site mean relative humidity. Lower RH generally increases shrinkage-related loss.",
+                )
+            with auto_cols[1]:
+                auto_vs_preview = 0.0
+                try:
+                    props_preview = compute_gross_section_properties(geometry) if geometry is not None else None
+                    if props_preview is not None:
+                        auto_vs_preview = estimate_volume_surface_ratio_mm(float(props_preview.area_mm2), _section_exposed_outer_perimeter_mm(geometry))
+                except Exception:
+                    auto_vs_preview = 0.0
+                settings["vs_override_mm"] = st.number_input(
+                    "V/S override (mm, 0 = auto)",
+                    min_value=0.0,
+                    step=5.0,
+                    value=float(settings.get("vs_override_mm", 0.0) or 0.0),
+                    format="%.1f",
+                    key="girder_refined_vs_override_mm",
+                    help=f"Auto V/S from gross section outer perimeter is approximately {auto_vs_preview:.1f} mm. Voids are not included in the exposed perimeter estimate in LOSS3B.",
+                )
+            with auto_cols[2]:
+                st.metric("Coefficient basis", "Auto-estimated", "RH/time/section")
+            auto_result = _auto_estimated_refined_coefficients_from_context(geometry=geometry, strand_table=strand_table, settings=settings)
+            if auto_result is None:
+                st.warning("Auto-estimated refined coefficients require section geometry and active strand layout. Switch to preset/manual coefficients if data is incomplete.")
+            else:
+                for key, value in auto_result.as_settings_update().items():
+                    settings[key] = float(value)
+                st.dataframe(_loss_display_dataframe(auto_result.audit_dataframe()), use_container_width=True, hide_index=True)
+                if auto_result.messages:
+                    st.warning("Auto coefficient REVIEW: " + " ".join(auto_result.messages))
+                else:
+                    st.success("Auto-estimated refined coefficients are within the LOSS3B advisory range.")
+            stress_cols = st.columns(2)
+            with stress_cols[0]:
+                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_auto_delta_fcd", help="Manual concrete stress change from deck/load effects until load-derived values are implemented.")
+            with stress_cols[1]:
+                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_auto_delta_fcdf", help="Manual deck-shrinkage stress effect. Use 0.0 until project-specific/load-derived values are available.")
+            st.caption("LOSS3B auto-estimates creep/shrinkage/Kid/Kdf from RH, time, and gross section properties. Δfcd/Δfcdf remain manual until staged load-derived stress is implemented.")
+
+        elif coefficient_source == REFINED_COEFFICIENT_SOURCE_PRESET:
+            preset_previous = str(settings.get("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET))
+            if preset_previous not in REFINED_COEFFICIENT_PRESET_OPTIONS:
+                preset_previous = DEFAULT_REFINED_COEFFICIENT_PRESET
+            preset = st.selectbox(
+                "🟨 Refined coefficient preset",
+                [name for name in REFINED_COEFFICIENT_PRESET_OPTIONS if name != REFINED_COEFFICIENT_USER_DEFINED],
+                index=[name for name in REFINED_COEFFICIENT_PRESET_OPTIONS if name != REFINED_COEFFICIENT_USER_DEFINED].index(preset_previous if preset_previous != REFINED_COEFFICIENT_USER_DEFINED else DEFAULT_REFINED_COEFFICIENT_PRESET),
+                help="Preset coefficient sets include an RH basis to help match site/production climate. They are starter values, not automatic AASHTO coefficient prediction.",
+                key="girder_refined_coefficient_preset",
+            )
             settings = _apply_refined_coefficient_preset(settings, preset, sync_widget_state=True)
             settings["refined_coefficient_preset_applied"] = True
+            st.caption(
+                f"Preset RH basis: {float(settings.get('humidity_percent', 75.0)):.0f}%. "
+                "Lower RH generally increases shrinkage-related prestress loss. Use project/site mean RH where available."
+            )
+            with st.expander("Preset coefficient guide", expanded=False):
+                st.dataframe(_loss_display_dataframe(_refined_coefficient_preset_dataframe()), use_container_width=True, hide_index=True)
+                st.caption("These are practical starter values for the LOSS3B refined workflow; choose Auto-estimated when section/RH/time-derived coefficients are preferred.")
+            st.dataframe(_loss_display_dataframe(_refined_current_coefficient_dataframe(settings, source="Preset")), use_container_width=True, hide_index=True)
+            stress_cols = st.columns(2)
+            with stress_cols[0]:
+                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_preset_delta_fcd")
+            with stress_cols[1]:
+                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_preset_delta_fcdf")
+
         else:
-            settings["refined_coefficient_preset"] = preset
-            settings["refined_coefficient_preset_applied"] = True
-        if preset == REFINED_COEFFICIENT_USER_DEFINED:
             settings["humidity_percent"] = st.number_input(
                 "🟨 RH basis H (%)",
                 min_value=20.0,
@@ -2011,51 +2202,34 @@ def _render_girder_code_based_loss_estimate(
                 key="girder_refined_user_humidity_percent",
                 help="Use project/site mean relative humidity when manual refined coefficients are project-specific.",
             )
-            st.caption("User-defined refined coefficients: use project-specific AASHTO coefficient calculations or approved design assumptions.")
-        else:
-            st.caption(
-                f"Preset RH basis: {float(settings.get('humidity_percent', 75.0)):.0f}%. "
-                "Lower RH generally increases shrinkage-related prestress loss. Use project/site mean RH where available."
-            )
-        st.markdown("###### Refined AASHTO manual coefficients")
-        with st.expander("Preset coefficient guide", expanded=False):
-            st.dataframe(_loss_display_dataframe(_refined_coefficient_preset_dataframe()), use_container_width=True, hide_index=True)
-            st.caption(
-                "These are practical starter values for the LOSS3A manual-coefficient workflow, not automatic AASHTO creep/shrinkage coefficient prediction."
-            )
-        time_cols = st.columns(3)
-        with time_cols[0]:
-            settings["age_transfer_days"] = st.number_input("🟨 Age at transfer ti (days)", min_value=0.0, step=1.0, value=float(settings.get("age_transfer_days", 1.0)), format="%.1f", key="girder_refined_age_transfer_days")
-        with time_cols[1]:
-            settings["age_deck_days"] = st.number_input("🟨 Age at deck placement td (days)", min_value=0.0, step=1.0, value=float(settings.get("age_deck_days", 30.0)), format="%.1f", key="girder_refined_age_deck_days")
-        with time_cols[2]:
-            settings["final_age_days"] = st.number_input("🟨 Final age tf (days)", min_value=0.0, step=100.0, value=float(settings.get("final_age_days", 10000.0)), format="%.1f", key="girder_refined_final_age_days")
-        coeff_cols = st.columns(4)
-        with coeff_cols[0]:
-            settings["Kid"] = st.number_input("🟨 Kid", min_value=0.0, step=0.05, value=float(settings.get("Kid", 0.85)), format="%.3f", key="girder_refined_kid", help="Refined transformed-section interaction coefficient for transfer-to-deck interval; preset starter values are typically below 1.0.")
-        with coeff_cols[1]:
-            settings["Kdf"] = st.number_input("🟨 Kdf", min_value=0.0, step=0.05, value=float(settings.get("Kdf", 0.85)), format="%.3f", key="girder_refined_kdf", help="Refined transformed-section interaction coefficient for deck-to-final interval; verify against project-specific AASHTO calculations.")
-        with coeff_cols[2]:
-            settings["eps_bid_microstrain"] = st.number_input("🟨 εbid (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bid_microstrain", 80.0)), format="%.1f", key="girder_refined_eps_bid", help="Shrinkage strain for transfer-to-deck interval. Use project/site RH, V/S, age, and concrete model where available.")
-        with coeff_cols[3]:
-            settings["eps_bdf_microstrain"] = st.number_input("🟨 εbdf (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bdf_microstrain", 60.0)), format="%.1f", key="girder_refined_eps_bdf", help="Shrinkage strain for deck-to-final interval. This is manual coefficient input in LOSS3A.")
-        creep_cols = st.columns(5)
-        with creep_cols[0]:
-            settings["psi_td_ti"] = st.number_input("🟨 Ψb(td,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_td_ti", 0.60)), format="%.3f", key="girder_refined_psi_td_ti", help="Creep coefficient from transfer age ti to deck placement age td.")
-        with creep_cols[1]:
-            settings["psi_tf_ti"] = st.number_input("🟨 Ψb(tf,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_ti", 1.60)), format="%.3f", key="girder_refined_psi_tf_ti", help="Total creep coefficient from transfer age ti to final age tf.")
-        with creep_cols[2]:
-            settings["psi_tf_td"] = st.number_input("🟨 Ψb(tf,td)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_td", 1.00)), format="%.3f", key="girder_refined_psi_tf_td", help="Creep coefficient from deck placement age td to final age tf.")
-        with creep_cols[3]:
-            settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcd")
-        with creep_cols[4]:
-            settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcdf", help="Concrete stress change for deck shrinkage effect. Use 0.0 until load-derived/project-specific values are available.")
-        settings["humidity_percent"] = settings.get("humidity_percent", REFINED_COEFFICIENT_PRESETS[DEFAULT_REFINED_COEFFICIENT_PRESET]["humidity_percent"])
+            st.caption("Manual override: use project-specific AASHTO coefficient calculations or approved design assumptions.")
+            st.markdown("###### Refined AASHTO manual coefficients")
+            coeff_cols = st.columns(4)
+            with coeff_cols[0]:
+                settings["Kid"] = st.number_input("🟨 Kid", min_value=0.0, step=0.05, value=float(settings.get("Kid", 0.85)), format="%.3f", key="girder_refined_kid", help="Refined transformed-section interaction coefficient for transfer-to-deck interval.")
+            with coeff_cols[1]:
+                settings["Kdf"] = st.number_input("🟨 Kdf", min_value=0.0, step=0.05, value=float(settings.get("Kdf", 0.85)), format="%.3f", key="girder_refined_kdf", help="Refined transformed-section interaction coefficient for deck-to-final interval.")
+            with coeff_cols[2]:
+                settings["eps_bid_microstrain"] = st.number_input("🟨 εbid (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bid_microstrain", 80.0)), format="%.1f", key="girder_refined_eps_bid", help="Shrinkage strain for transfer-to-deck interval.")
+            with coeff_cols[3]:
+                settings["eps_bdf_microstrain"] = st.number_input("🟨 εbdf (microstrain)", min_value=0.0, step=10.0, value=float(settings.get("eps_bdf_microstrain", 60.0)), format="%.1f", key="girder_refined_eps_bdf", help="Shrinkage strain for deck-to-final interval.")
+            creep_cols = st.columns(5)
+            with creep_cols[0]:
+                settings["psi_td_ti"] = st.number_input("🟨 Ψb(td,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_td_ti", 0.60)), format="%.3f", key="girder_refined_psi_td_ti")
+            with creep_cols[1]:
+                settings["psi_tf_ti"] = st.number_input("🟨 Ψb(tf,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_ti", 1.60)), format="%.3f", key="girder_refined_psi_tf_ti")
+            with creep_cols[2]:
+                settings["psi_tf_td"] = st.number_input("🟨 Ψb(tf,td)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_td", 1.00)), format="%.3f", key="girder_refined_psi_tf_td")
+            with creep_cols[3]:
+                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcd")
+            with creep_cols[4]:
+                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcdf", help="Concrete stress change for deck shrinkage effect.")
+
         review_messages = _refined_coefficient_review_messages(settings)
         if review_messages:
             st.warning("Refined coefficient REVIEW: " + " ".join(review_messages))
-        else:
-            st.success("Refined coefficient preset/check: practical starter values are within the LOSS3A advisory range.")
+        elif coefficient_source != REFINED_COEFFICIENT_SOURCE_AUTO:
+            st.success("Refined coefficient check: values are within the LOSS3B advisory range.")
         st.session_state["girder_prestress_code_loss_settings"] = settings
     else:
         with common_cols[2]:
@@ -2257,7 +2431,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         _render_stage_pe_mapping_audit(synced_force_table, expanded=False)
         if mode == "Refined AASHTO time-dependent loss":
             st.warning(
-                "LOSS3A refined AASHTO results use manual coefficients/stress inputs and remain engineering-preview values. "
+                "LOSS3B refined AASHTO results may use auto-estimated, preset, or manual coefficients and remain engineering-preview values. "
                 "Automatic coefficient prediction and load-derived deck stress effects are future milestones."
             )
         else:

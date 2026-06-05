@@ -377,6 +377,328 @@ REFINED_INTERVAL_RESULT_COLUMNS = [
 ]
 
 
+
+
+REFINED_COEFFICIENT_AUDIT_COLUMNS = [
+    "Coefficient",
+    "Value",
+    "Source",
+    "Status",
+    "Engineering note",
+]
+
+
+@dataclass(frozen=True)
+class RefinedAashtoCoefficientInput:
+    """Input for auto-estimating refined AASHTO time-dependent coefficients.
+
+    LOSS3B estimates the refined coefficients used by the LOSS3A manual
+    coefficient engine from basic humidity/time/section data.  The estimate is
+    intentionally auditable and still allows project-specific overrides.
+    """
+
+    section_area_mm2: float
+    exposed_perimeter_mm: float
+    section_Ix_mm4: float
+    centroid_y_from_bottom_mm: float
+    total_aps_mm2: float
+    yps_mm_from_bottom: float
+    Ep_MPa: float
+    Eci_MPa: float
+    Ec_MPa: float
+    fci_MPa: float
+    fc_MPa: float
+    humidity_percent: float
+    age_transfer_days: float
+    age_deck_days: float
+    final_age_days: float
+    composite_area_mm2: float | None = None
+    composite_Ix_mm4: float | None = None
+    composite_centroid_y_from_bottom_mm: float | None = None
+
+
+@dataclass(frozen=True)
+class RefinedAashtoCoefficientResult:
+    """Auto-estimated refined AASHTO coefficients and audit metadata."""
+
+    Kid: float
+    Kdf: float
+    eps_bid: float
+    eps_bdf: float
+    psi_td_ti: float
+    psi_tf_ti: float
+    psi_tf_td: float
+    volume_surface_mm: float
+    volume_surface_in: float
+    ks: float
+    khc: float
+    khs: float
+    kf: float
+    ktd_td_ti: float
+    ktd_tf_ti: float
+    ktd_tf_td: float
+    status: str
+    messages: tuple[str, ...]
+    kdf_basis: str = "precast gross fallback"
+
+    @property
+    def eps_bid_microstrain(self) -> float:
+        return self.eps_bid * 1.0e6
+
+    @property
+    def eps_bdf_microstrain(self) -> float:
+        return self.eps_bdf * 1.0e6
+
+    def as_settings_update(self) -> dict[str, float]:
+        return {
+            "Kid": self.Kid,
+            "Kdf": self.Kdf,
+            "eps_bid_microstrain": self.eps_bid_microstrain,
+            "eps_bdf_microstrain": self.eps_bdf_microstrain,
+            "psi_td_ti": self.psi_td_ti,
+            "psi_tf_ti": self.psi_tf_ti,
+            "psi_tf_td": self.psi_tf_td,
+        }
+
+    def audit_dataframe(self) -> pd.DataFrame:
+        rows = [
+            {
+                "Coefficient": "V/S",
+                "Value": f"{self.volume_surface_mm:.1f} mm ({self.volume_surface_in:.2f} in)",
+                "Source": "Section geometry",
+                "Status": "READY" if self.volume_surface_mm > 0.0 else "MISSING",
+                "Engineering note": "Outer exposed perimeter estimate; void perimeter is not included in LOSS3B.",
+            },
+            {"Coefficient": "ks", "Value": self.ks, "Source": "Auto", "Status": "READY", "Engineering note": "V/S size factor."},
+            {"Coefficient": "khc", "Value": self.khc, "Source": "Auto", "Status": "READY", "Engineering note": "Humidity factor for creep."},
+            {"Coefficient": "khs", "Value": self.khs, "Source": "Auto", "Status": "READY", "Engineering note": "Humidity factor for shrinkage."},
+            {"Coefficient": "kf", "Value": self.kf, "Source": "Auto", "Status": "READY", "Engineering note": "Concrete strength factor using f'ci."},
+            {"Coefficient": "ktd(td,ti)", "Value": self.ktd_td_ti, "Source": "Auto", "Status": "READY", "Engineering note": "Time development factor for transfer-to-deck interval."},
+            {"Coefficient": "ktd(tf,ti)", "Value": self.ktd_tf_ti, "Source": "Auto", "Status": "READY", "Engineering note": "Time development factor from transfer to final."},
+            {"Coefficient": "ktd(tf,td)", "Value": self.ktd_tf_td, "Source": "Auto", "Status": "READY", "Engineering note": "Time development factor for deck-to-final interval."},
+            {"Coefficient": "Ψb(td,ti)", "Value": self.psi_td_ti, "Source": "Auto", "Status": "READY", "Engineering note": "Estimated creep coefficient."},
+            {"Coefficient": "Ψb(tf,ti)", "Value": self.psi_tf_ti, "Source": "Auto", "Status": "READY", "Engineering note": "Estimated total creep coefficient."},
+            {"Coefficient": "Ψb(tf,td)", "Value": self.psi_tf_td, "Source": "Auto", "Status": "READY", "Engineering note": "Estimated creep coefficient after deck placement."},
+            {"Coefficient": "εbid", "Value": f"{self.eps_bid_microstrain:.1f} microstrain", "Source": "Auto", "Status": "READY", "Engineering note": "Estimated shrinkage strain before deck placement."},
+            {"Coefficient": "εbdf", "Value": f"{self.eps_bdf_microstrain:.1f} microstrain", "Source": "Auto", "Status": "READY", "Engineering note": "Estimated shrinkage strain after deck placement."},
+            {"Coefficient": "Kid", "Value": self.Kid, "Source": "Auto", "Status": "READY" if 0.0 < self.Kid <= 1.0 else "REVIEW", "Engineering note": "Transfer-to-deck interaction coefficient."},
+            {"Coefficient": "Kdf", "Value": self.Kdf, "Source": "Auto", "Status": "READY" if 0.0 < self.Kdf <= 1.0 else "REVIEW", "Engineering note": f"Deck-to-final interaction coefficient basis: {self.kdf_basis}."},
+        ]
+        return pd.DataFrame(rows, columns=REFINED_COEFFICIENT_AUDIT_COLUMNS)
+
+
+def estimate_volume_surface_ratio_mm(section_area_mm2: float, exposed_perimeter_mm: float) -> float:
+    """Return V/S in mm using gross area and exposed perimeter."""
+
+    if exposed_perimeter_mm <= 0.0:
+        return 0.0
+    return max(float(section_area_mm2), 0.0) / float(exposed_perimeter_mm)
+
+
+def _aashto_time_development_factor(duration_days: float, fci_ksi: float) -> float:
+    duration = max(float(duration_days), 0.0)
+    fci = max(float(fci_ksi), 0.1)
+    denominator = 12.0 * (100.0 - 4.0 * fci) / (fci + 20.0) + duration
+    if denominator <= 0.0:
+        return 0.0
+    return duration / denominator
+
+
+def _aashto_creep_coefficient(
+    *,
+    volume_surface_in: float,
+    humidity_percent: float,
+    fci_ksi: float,
+    duration_days: float,
+    loading_age_days: float,
+) -> tuple[float, dict[str, float]]:
+    vs = max(float(volume_surface_in), 0.0)
+    H = float(humidity_percent)
+    fci = max(float(fci_ksi), 0.1)
+    ti = max(float(loading_age_days), 0.1)
+    ks = max(1.45 - 0.13 * vs, 1.0)
+    khc = 1.56 - 0.008 * H
+    kf = 5.0 / (1.0 + fci)
+    ktd = _aashto_time_development_factor(duration_days, fci)
+    psi = 1.9 * ks * khc * kf * ktd * ti ** (-0.118)
+    return max(psi, 0.0), {"ks": ks, "khc": khc, "kf": kf, "ktd": ktd}
+
+
+def _aashto_shrinkage_strain(
+    *,
+    volume_surface_in: float,
+    humidity_percent: float,
+    fci_ksi: float,
+    duration_days: float,
+) -> tuple[float, dict[str, float]]:
+    vs = max(float(volume_surface_in), 0.0)
+    H = float(humidity_percent)
+    fci = max(float(fci_ksi), 0.1)
+    ks = max(1.45 - 0.13 * vs, 1.0)
+    khs = 2.00 - 0.014 * H
+    kf = 5.0 / (1.0 + fci)
+    ktd = _aashto_time_development_factor(duration_days, fci)
+    strain = ks * khs * kf * ktd * 0.48e-3
+    return max(strain, 0.0), {"ks": ks, "khs": khs, "kf": kf, "ktd": ktd}
+
+
+def estimate_kid(
+    *,
+    Ep_MPa: float,
+    Eci_MPa: float,
+    Aps_mm2: float,
+    Ag_mm2: float,
+    epg_mm: float,
+    Ig_mm4: float,
+    psi_td_ti: float,
+) -> float:
+    if min(Eci_MPa, Ag_mm2, Ig_mm4) <= 0.0:
+        return 0.0
+    term = (Ep_MPa / Eci_MPa) * (Aps_mm2 / Ag_mm2) * (1.0 + Ag_mm2 * epg_mm**2 / Ig_mm4) * (1.0 + 0.7 * psi_td_ti)
+    return 1.0 / (1.0 + max(term, 0.0))
+
+
+def estimate_kdf(
+    *,
+    Ep_MPa: float,
+    Ec_MPa: float,
+    Aps_mm2: float,
+    Ac_mm2: float,
+    epc_mm: float,
+    Ic_mm4: float,
+    psi_tf_td: float,
+) -> float:
+    if min(Ec_MPa, Ac_mm2, Ic_mm4) <= 0.0:
+        return 0.0
+    term = (Ep_MPa / Ec_MPa) * (Aps_mm2 / Ac_mm2) * (1.0 + Ac_mm2 * epc_mm**2 / Ic_mm4) * (1.0 + 0.7 * psi_tf_td)
+    return 1.0 / (1.0 + max(term, 0.0))
+
+
+def estimate_refined_aashto_coefficients(input_data: RefinedAashtoCoefficientInput) -> RefinedAashtoCoefficientResult:
+    """Estimate refined AASHTO coefficients from RH/time/section data.
+
+    This is an auditable coefficient estimate, not a final project-specific
+    clause-certified creep/shrinkage model.  Load-derived Δfcd/Δfcdf remain
+    manual inputs in LOSS3B.
+    """
+
+    messages: list[str] = []
+    if input_data.exposed_perimeter_mm <= 0.0:
+        messages.append("Exposed perimeter is missing; V/S cannot be auto-estimated.")
+    if not (40.0 <= input_data.humidity_percent <= 100.0):
+        messages.append("Relative humidity is outside the advisory 40%–100% range.")
+    if input_data.age_transfer_days <= 0.0:
+        messages.append("Transfer age ti must be positive.")
+    if input_data.age_deck_days <= input_data.age_transfer_days:
+        messages.append("Deck-placement age td must be greater than transfer age ti.")
+    if input_data.final_age_days <= input_data.age_deck_days:
+        messages.append("Final age tf must be greater than deck-placement age td.")
+    vs_mm = estimate_volume_surface_ratio_mm(input_data.section_area_mm2, input_data.exposed_perimeter_mm)
+    vs_in = vs_mm / 25.4 if vs_mm > 0.0 else 0.0
+    fci_ksi = max(mpa_to_ksi(input_data.fci_MPa), 0.1)
+    td_ti = max(input_data.age_deck_days - input_data.age_transfer_days, 0.0)
+    tf_ti = max(input_data.final_age_days - input_data.age_transfer_days, 0.0)
+    tf_td = max(input_data.final_age_days - input_data.age_deck_days, 0.0)
+    psi_td_ti, creep_1 = _aashto_creep_coefficient(
+        volume_surface_in=vs_in,
+        humidity_percent=input_data.humidity_percent,
+        fci_ksi=fci_ksi,
+        duration_days=td_ti,
+        loading_age_days=input_data.age_transfer_days,
+    )
+    psi_tf_ti, creep_total = _aashto_creep_coefficient(
+        volume_surface_in=vs_in,
+        humidity_percent=input_data.humidity_percent,
+        fci_ksi=fci_ksi,
+        duration_days=tf_ti,
+        loading_age_days=input_data.age_transfer_days,
+    )
+    psi_tf_td, creep_2 = _aashto_creep_coefficient(
+        volume_surface_in=vs_in,
+        humidity_percent=input_data.humidity_percent,
+        fci_ksi=fci_ksi,
+        duration_days=tf_td,
+        loading_age_days=input_data.age_deck_days,
+    )
+    eps_total_deck, shrink_1 = _aashto_shrinkage_strain(
+        volume_surface_in=vs_in,
+        humidity_percent=input_data.humidity_percent,
+        fci_ksi=fci_ksi,
+        duration_days=td_ti,
+    )
+    eps_total_final, shrink_final = _aashto_shrinkage_strain(
+        volume_surface_in=vs_in,
+        humidity_percent=input_data.humidity_percent,
+        fci_ksi=fci_ksi,
+        duration_days=tf_ti,
+    )
+    eps_bid = eps_total_deck
+    eps_bdf = max(eps_total_final - eps_total_deck, 0.0)
+    epg = input_data.yps_mm_from_bottom - input_data.centroid_y_from_bottom_mm
+    Kid = estimate_kid(
+        Ep_MPa=input_data.Ep_MPa,
+        Eci_MPa=input_data.Eci_MPa,
+        Aps_mm2=input_data.total_aps_mm2,
+        Ag_mm2=input_data.section_area_mm2,
+        epg_mm=epg,
+        Ig_mm4=input_data.section_Ix_mm4,
+        psi_td_ti=psi_td_ti,
+    )
+    composite_area = input_data.composite_area_mm2 if input_data.composite_area_mm2 and input_data.composite_area_mm2 > 0.0 else input_data.section_area_mm2
+    composite_Ix = input_data.composite_Ix_mm4 if input_data.composite_Ix_mm4 and input_data.composite_Ix_mm4 > 0.0 else input_data.section_Ix_mm4
+    composite_cy = (
+        input_data.composite_centroid_y_from_bottom_mm
+        if input_data.composite_centroid_y_from_bottom_mm is not None
+        else input_data.centroid_y_from_bottom_mm
+    )
+    kdf_basis = "composite transformed section" if input_data.composite_area_mm2 and input_data.composite_Ix_mm4 else "precast gross fallback"
+    if kdf_basis == "precast gross fallback":
+        messages.append("Kdf uses precast gross fallback; composite transformed properties are not auto-derived in LOSS3B.")
+    epc = input_data.yps_mm_from_bottom - composite_cy
+    Kdf = estimate_kdf(
+        Ep_MPa=input_data.Ep_MPa,
+        Ec_MPa=input_data.Ec_MPa,
+        Aps_mm2=input_data.total_aps_mm2,
+        Ac_mm2=float(composite_area),
+        epc_mm=epc,
+        Ic_mm4=float(composite_Ix),
+        psi_tf_td=psi_tf_td,
+    )
+    # Use representative factors from total creep/final shrinkage for display.
+    ks = creep_total.get("ks", shrink_final.get("ks", 0.0))
+    khc = creep_total.get("khc", 0.0)
+    khs = shrink_final.get("khs", 0.0)
+    kf = creep_total.get("kf", shrink_final.get("kf", 0.0))
+    if eps_bid + eps_bdf > 300.0e-6:
+        messages.append("Auto-estimated shrinkage strain exceeds 300 microstrain; review RH/V/S/time assumptions.")
+    if psi_tf_ti > 4.0:
+        messages.append("Auto-estimated Ψb(tf,ti) exceeds 4.0; review creep assumptions.")
+    if Kid <= 0.0 or Kid > 1.0 or Kdf <= 0.0 or Kdf > 1.0:
+        messages.append("Auto-estimated Kid/Kdf outside 0–1; review section and prestress data.")
+    status = "OK" if not messages else "REVIEW"
+    return RefinedAashtoCoefficientResult(
+        Kid=Kid,
+        Kdf=Kdf,
+        eps_bid=eps_bid,
+        eps_bdf=eps_bdf,
+        psi_td_ti=psi_td_ti,
+        psi_tf_ti=psi_tf_ti,
+        psi_tf_td=psi_tf_td,
+        volume_surface_mm=vs_mm,
+        volume_surface_in=vs_in,
+        ks=ks,
+        khc=khc,
+        khs=khs,
+        kf=kf,
+        ktd_td_ti=creep_1.get("ktd", 0.0),
+        ktd_tf_ti=creep_total.get("ktd", 0.0),
+        ktd_tf_td=creep_2.get("ktd", 0.0),
+        status=status,
+        messages=tuple(messages),
+        kdf_basis=kdf_basis,
+    )
+
+
 @dataclass(frozen=True)
 class RefinedAashtoManualCoefficientInput:
     """Manual-coefficient refined AASHTO time-dependent loss input.

@@ -699,7 +699,14 @@ def render_project_page() -> None:
         if st.button("Update Project Info", use_container_width=False):
             st.success("Project information updated.")
 
-    _render_beam_girder_system_settings()
+    analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
+    analysis_mode = _render_analysis_mode_selector(analysis_mode)
+
+    project = project_from_session_state(st.session_state)
+    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
+
+    if analysis_mode.member_type == "beam_girder":
+        _render_beam_girder_system_settings()
 
     project = project_from_session_state(st.session_state)
 
@@ -725,10 +732,6 @@ def render_project_page() -> None:
     prestress_elements = st.session_state.get("prestress_elements", [])
     custom_points = st.session_state.get("custom_stress_check_points", [])
     include_default_stress_points = bool(st.session_state.get("include_default_stress_check_points", True))
-    analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
-    analysis_mode = _render_analysis_mode_selector(analysis_mode)
-    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
-
     rebar_valid = st.session_state.get("rebars_valid_for_analysis")
     prestress_valid = st.session_state.get("prestress_valid_for_analysis")
     _render_summary_strip(

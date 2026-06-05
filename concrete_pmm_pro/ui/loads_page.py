@@ -146,9 +146,14 @@ def _render_load_workflow_notice() -> None:
     )
     if settings.member_type == "beam_girder":
         st.caption(
-            "Beam/Girder SLS rows can be selected in Analysis for quick preview checks. "
+            "Bridge Beam/Girder SLS rows can be selected in Analysis for quick preview checks. "
             "ULS rows and full staged summation are stored for future final design checks. "
-            "Do not duplicate live-load effects here if an SLS case already includes them."
+            "For this bridge workflow, import LL+IM only from CSiBridge unless auto dead-load components are disabled."
+        )
+    elif settings.member_type == "building_beam_girder":
+        st.info(
+            "Building Beam/Girder workflow is guarded. Bridge-specific SLS auto-load components, girder spacing, "
+            "number of girders, barrier/parapet/sidewalk, wearing surface, and CSiBridge workflows are hidden."
         )
 
 

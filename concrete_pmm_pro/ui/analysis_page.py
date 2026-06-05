@@ -634,7 +634,7 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
         mode_cols[2].metric("SLS Workflow", "Available" if settings.allow_sls_workflow else "Unavailable")
         mode_cols[3].metric(
             "Beam/Girder Workflow",
-            "Future / not implemented" if settings.allow_beam_girder_placeholder else "Not selected",
+            "Bridge active" if settings.member_type == "beam_girder" else ("Building guarded" if settings.member_type == "building_beam_girder" else "Not selected"),
         )
 
         if settings.member_type == "column_pier_pmm":
@@ -642,13 +642,15 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
             st.info("SLS stress checks remain available for selected service load cases.")
             st.info("Prestress is treated as internal prestress/reinforcement action, not duplicated as Pu demand.")
         elif settings.member_type == "beam_girder":
-            st.info("Beam/Girder mode is a future workflow placeholder; PMM is not applicable as the primary girder design workflow.")
-            st.info("Future inputs will include Mu, Vu, Tu, service/transfer stages, Pe/e, and tendon profile.")
-            st.info("Existing SLS stress checks can still be used for section stress review.")
+            st.info("Bridge Beam/Girder workflow uses AASHTO LRFD project design basis.")
+            st.info("Bridge-specific staged SLS, prestress/debonding, auto SDL components, and CSiBridge LL+IM workflows are active here.")
+            st.info("Bridge girder ULS flexure/shear/torsion engines are planned; current implemented checks remain preview / engineering review.")
             st.info("Do not enter prestress Pe again as Pu if prestress elements are already defined.")
-            st.info("Beam/Girder flexure, shear, torsion, and transfer-stage checks are not implemented yet.")
+        elif settings.member_type == "building_beam_girder":
+            st.info("Building Beam/Girder workflow uses ACI 318 project design basis.")
+            st.warning("Building beam/girder ULS and SLS engines are planned. Bridge-specific staged girder tools are hidden to avoid applying bridge assumptions to building members.")
         else:
-            st.info("General section mode keeps PMM and SLS tools available.")
+            st.info("Legacy/general workflow has been migrated to explicit project workflow routing.")
             st.warning("Use carefully and verify load interpretation.")
 
         for warning in analysis_mode_warnings(settings):
@@ -1888,7 +1890,7 @@ def _render_input_summary() -> None:
         st.info("PMM prototype status: RC-only or RC + bonded prestress depending on analysis settings.")
         st.info(f"Current solver mode: {prototype_label}.")
         if is_beam_girder_future_workflow(mode_settings):
-            st.warning("PMM interaction is not the primary design method for typical beam/girder flexural design. Beam/Girder design checks are future work.")
+            st.warning("PMM interaction is not the primary design method for typical bridge girder flexural design. Bridge girder ULS design checks are future work.")
         elif not is_pmm_primary_workflow(mode_settings):
             st.info("Non-PMM workflow is active; PMM output should be interpreted as an auxiliary section review only.")
         st.info(f"Prestress stress model: {settings.prestress_stress_model}.")

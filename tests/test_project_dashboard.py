@@ -98,14 +98,14 @@ def test_analysis_configuration_cards_show_workflow_statuses() -> None:
     cards = _analysis_configuration_cards(settings)
     by_title = {card.title: card for card in cards}
 
-    assert by_title["Analysis Workflow"].value == "beam_girder_future"
+    assert by_title["Analysis Workflow"].value == "bridge_beam_girder"
     assert by_title["PMM Workflow"].value == "Not applicable"
     assert by_title["PMM Workflow"].status == "neutral"
     assert by_title["PMM Workflow"].strong is False
     assert "Reserved for Column/Pier/Wall/Pylon" in by_title["PMM Workflow"].detail
     assert by_title["SLS Workflow"].value == "Yes"
     assert by_title["SLS Workflow"].strong is False
-    assert by_title["Beam/Girder Workflow"].value == "Future / not implemented"
+    assert by_title["Beam/Girder Workflow"].value == "Bridge active"
 
 
 def test_sls_stress_point_cards_count_custom_and_active_points() -> None:
@@ -175,7 +175,8 @@ def test_project_page_member_type_selector_source_is_present() -> None:
     source = (repo_root / "concrete_pmm_pro" / "ui" / "project_page.py").read_text(encoding="utf-8")
 
     assert "Analysis Mode / Member Type" in source
-    assert "Beam / Girder - Future Design Workflow" in source
-    assert "MEMBER.TYPE1.3 removes ambiguous General Section mode" in source
+    assert "Bridge Beam / Girder — RC / Prestressed Member" in source
+    assert "Building Beam / Girder — RC / Prestressed Member" in source
+    assert "Workflow controls design-code routing" in source
     assert "project_analysis_mode_member_type_label" in source
     assert '"General Section": "general_section"' not in source

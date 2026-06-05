@@ -23,8 +23,8 @@ PrestressStressModel = Literal["linear_cap", "bilinear"]
 # ``general_section`` is kept as a legacy input value so old project/session
 # data can be normalized without crashing. It is no longer exposed as an active
 # workflow in the UI.
-MemberType = Literal["column_pier_pmm", "beam_girder", "general_section"]
-AnalysisWorkflow = Literal["pmm_section", "beam_girder_future", "general_section"]
+MemberType = Literal["column_pier_pmm", "beam_girder", "building_beam_girder", "general_section"]
+AnalysisWorkflow = Literal["pmm_section", "beam_girder_future", "bridge_beam_girder", "building_beam_girder", "general_section"]
 
 
 class AnalysisModeSettings(BaseModel):
@@ -53,9 +53,17 @@ class AnalysisModeSettings(BaseModel):
             object.__setattr__(self, "allow_sls_workflow", True)
             object.__setattr__(self, "allow_beam_girder_placeholder", False)
         elif self.member_type == "beam_girder":
-            object.__setattr__(self, "analysis_workflow", "beam_girder_future")
+            # WORKFLOW.TYPE2: keep the legacy internal value ``beam_girder``
+            # as the Bridge Beam/Girder workflow so old project JSON and
+            # existing girder SLS/prestress modules continue to route safely.
+            object.__setattr__(self, "analysis_workflow", "bridge_beam_girder")
             object.__setattr__(self, "allow_pmm_workflow", False)
             object.__setattr__(self, "allow_sls_workflow", True)
+            object.__setattr__(self, "allow_beam_girder_placeholder", True)
+        elif self.member_type == "building_beam_girder":
+            object.__setattr__(self, "analysis_workflow", "building_beam_girder")
+            object.__setattr__(self, "allow_pmm_workflow", False)
+            object.__setattr__(self, "allow_sls_workflow", False)
             object.__setattr__(self, "allow_beam_girder_placeholder", True)
         elif self.member_type == "general_section":
             # MEMBER.TYPE1.3 removes General Section from the active workflow UI.

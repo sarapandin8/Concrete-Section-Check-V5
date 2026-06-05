@@ -23,7 +23,7 @@ def test_analysis_mode_settings_default_is_column_pier_pmm() -> None:
 
 
 def test_column_pier_pmm_maps_to_pmm_section_workflow() -> None:
-    settings = AnalysisModeSettings(member_type="column_pier_pmm", analysis_workflow="beam_girder_future")
+    settings = AnalysisModeSettings(member_type="column_pier_pmm", analysis_workflow="bridge_beam_girder")
 
     assert settings.analysis_workflow == "pmm_section"
     assert settings.allow_pmm_workflow is True
@@ -34,9 +34,20 @@ def test_column_pier_pmm_maps_to_pmm_section_workflow() -> None:
 def test_beam_girder_maps_to_future_workflow() -> None:
     settings = AnalysisModeSettings(member_type="beam_girder")
 
-    assert settings.analysis_workflow == "beam_girder_future"
+    assert settings.analysis_workflow == "bridge_beam_girder"
     assert settings.allow_pmm_workflow is False
     assert settings.allow_sls_workflow is True
+    assert settings.allow_beam_girder_placeholder is True
+
+
+
+
+def test_building_beam_girder_maps_to_guarded_building_workflow() -> None:
+    settings = AnalysisModeSettings(member_type="building_beam_girder")
+
+    assert settings.analysis_workflow == "building_beam_girder"
+    assert settings.allow_pmm_workflow is False
+    assert settings.allow_sls_workflow is False
     assert settings.allow_beam_girder_placeholder is True
 
 
@@ -88,7 +99,7 @@ def test_project_model_save_load_preserves_analysis_mode_settings() -> None:
 
     assert loaded.analysis_mode_settings is not None
     assert loaded.analysis_mode_settings.member_type == "beam_girder"
-    assert loaded.analysis_mode_settings.analysis_workflow == "beam_girder_future"
+    assert loaded.analysis_mode_settings.analysis_workflow == "bridge_beam_girder"
     assert loaded.analysis_mode_settings.note == "future beam workflow"
 
 

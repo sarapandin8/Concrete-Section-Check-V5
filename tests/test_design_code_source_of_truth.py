@@ -82,3 +82,36 @@ def test_code_setup1_source_files_have_project_code_guardrails() -> None:
     assert "Prestress loss code basis" in PRESTRESS_SOURCE
     assert "Prestress loss basis differs from Project Design Code" in PRESTRESS_SOURCE
     assert "ACI 318 / PCI-style prestress loss formulas are planned" in PRESTRESS_SOURCE
+
+
+def test_workflow_type2_filters_project_design_code_by_workflow() -> None:
+    bridge = ProjectModel(
+        code="ACI 318",
+        code_edition="ACI 318-19",
+        analysis_mode_settings=AnalysisModeSettings(member_type="beam_girder"),
+    )
+    assert bridge.code == PROJECT_CODE_AASHTO_LRFD
+    assert bridge.code_edition == "AASHTO LRFD 9th Edition"
+
+    building = ProjectModel(
+        code="AASHTO LRFD",
+        code_edition="AASHTO LRFD 9th Edition",
+        analysis_mode_settings=AnalysisModeSettings(member_type="building_beam_girder"),
+    )
+    assert building.code == PROJECT_CODE_ACI318
+    assert building.code_edition == "ACI 318-19"
+
+    column = ProjectModel(
+        code="AASHTO LRFD",
+        code_edition="AASHTO LRFD 9th Edition",
+        analysis_mode_settings=AnalysisModeSettings(member_type="column_pier_pmm"),
+    )
+    assert column.code == PROJECT_CODE_AASHTO_LRFD
+
+
+def test_project_page_source_has_workflow_aware_design_code_routing() -> None:
+    assert "allowed_project_design_codes_for_workflow" in PROJECT_SOURCE
+    assert "Bridge Beam/Girder is AASHTO LRFD only" in PROJECT_SOURCE
+    assert "Building Beam/Girder is ACI 318 only" in PROJECT_SOURCE
+    assert 'if analysis_mode.member_type == "beam_girder"' in PROJECT_SOURCE
+    assert 'elif analysis_mode.member_type == "building_beam_girder"' in PROJECT_SOURCE

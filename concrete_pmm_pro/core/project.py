@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
 from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
-from concrete_pmm_pro.core.design_code import normalize_project_code_edition, normalize_project_design_code
+from concrete_pmm_pro.core.design_code import default_project_design_code_for_workflow, normalize_project_code_edition, normalize_project_design_code
 from concrete_pmm_pro.core.models import (
     ConcreteMaterial,
     LoadCase,
@@ -77,7 +77,8 @@ class ProjectModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_concrete_material_library(self) -> "ProjectModel":
-        normalized_code = normalize_project_design_code(self.code)
+        workflow_member_type = getattr(self.analysis_mode_settings, "member_type", None) if self.analysis_mode_settings is not None else None
+        normalized_code = default_project_design_code_for_workflow(workflow_member_type, normalize_project_design_code(self.code))
         object.__setattr__(self, "code", normalized_code)
         object.__setattr__(self, "code_edition", normalize_project_code_edition(normalized_code, self.code_edition))
         library_state = ensure_concrete_material_library(

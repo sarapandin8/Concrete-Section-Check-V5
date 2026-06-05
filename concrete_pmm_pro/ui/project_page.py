@@ -11,11 +11,14 @@ import streamlit as st
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
 from concrete_pmm_pro.core.design_code import (
     PROJECT_DESIGN_CODE_OPTIONS,
+    allowed_project_design_codes_for_workflow,
     code_edition_options_for,
     default_code_edition_for,
+    default_project_design_code_for_workflow,
     normalize_project_code_edition,
     normalize_project_design_code,
     project_code_capability_cards,
+    workflow_code_policy_message,
 )
 from concrete_pmm_pro.core.analysis_modes import analysis_mode_description, analysis_mode_label, analysis_mode_warnings
 from concrete_pmm_pro.core.project import ProjectModel
@@ -175,8 +178,15 @@ _DASHBOARD_CSS = """
 
 
 _MEMBER_TYPE_OPTIONS: dict[str, str] = {
-    "Column / Pier / Wall / Pylon - PMM Mode": "column_pier_pmm",
-    "Beam / Girder - Future Design Workflow": "beam_girder",
+    "Column / Pier / Wall / Pylon — RC / Prestressed Member": "column_pier_pmm",
+    "Bridge Beam / Girder — RC / Prestressed Member": "beam_girder",
+    "Building Beam / Girder — RC / Prestressed Member": "building_beam_girder",
+}
+
+_LEGACY_MEMBER_TYPE_LABELS: dict[str, str] = {
+    "Column / Pier / Wall / Pylon - PMM Mode": "Column / Pier / Wall / Pylon — RC / Prestressed Member",
+    "Beam / Girder - Future Design Workflow": "Bridge Beam / Girder — RC / Prestressed Member",
+    "Beam / Girder - Flexure Mode Future": "Bridge Beam / Girder — RC / Prestressed Member",
 }
 
 
@@ -200,13 +210,19 @@ def _mode_guidance_lines(settings: AnalysisModeSettings) -> list[str]:
     """Concise project-level guidance for the selected member workflow."""
     if settings.member_type == "beam_girder":
         return [
-            "Beam/Girder mode is a routing placeholder for future girder Mu/Vu/SLS/prestress design checks.",
-            "Current PMM tools are not the primary design method for typical bridge girders.",
-            "Deck/topping material remains composite metadata only until future composite/girder milestones.",
+            "Bridge Beam/Girder workflow uses AASHTO LRFD design basis.",
+            "Bridge-specific system settings, staged SLS loads, CSiBridge LL+IM workflow, prestress, and debonding tools are active only here.",
+            "Current bridge girder ULS engines remain future milestones; implemented SLS tools are preview / engineering-review workflows.",
+        ]
+    if settings.member_type == "building_beam_girder":
+        return [
+            "Building Beam/Girder workflow uses ACI 318 design basis.",
+            "Bridge-specific girder spacing, number of girders, barrier/sidewalk/wearing surface, CSiBridge, and staged composite assumptions are hidden.",
+            "Building beam/girder ULS/SLS engines are planned and guarded until implemented.",
         ]
     return [
         "Column/Pier/Wall/Pylon mode uses the existing Pu, Mux, Muy PMM workflow.",
-        "The primary section concrete material is used for PMM analysis; deck/topping material is ignored by PMM.",
+        "This workflow may use ACI 318 or AASHTO LRFD as project code basis; unsupported engines show capability guards.",
     ]
 
 
@@ -219,6 +235,9 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
     """
     labels = list(_MEMBER_TYPE_OPTIONS.keys())
     current_label = _analysis_mode_label_for_member_type(current.member_type)
+    legacy_label = st.session_state.get(widget_key)
+    if legacy_label in _LEGACY_MEMBER_TYPE_LABELS:
+        st.session_state[widget_key] = _LEGACY_MEMBER_TYPE_LABELS[str(legacy_label)]
     widget_key = "project_analysis_mode_member_type_label"
     note_key = "project_analysis_mode_note"
     sync_key = "project_analysis_mode_member_type_sync"
@@ -235,13 +254,13 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
         st.markdown("#### Analysis Mode / Member Type")
         st.caption(
             "Select the primary engineering workflow before defining sections, loads, and analysis. "
-            "Custom sections are handled inside Section Builder under the selected workflow; MEMBER.TYPE1.3 removes ambiguous General Section mode."
+            "Workflow controls design-code routing and hides assumptions that do not belong to the selected member family."
         )
         selected_label = st.selectbox(
             "Active member workflow",
             labels,
             key=widget_key,
-            help="Column/Pier uses the existing PMM workflow. Beam/Girder is prepared as a future girder-design workflow. Custom section presets are selected in Section Builder.",
+            help="Bridge Beam/Girder activates AASHTO LRFD bridge girder tools. Building Beam/Girder is guarded for future ACI beam tools. Column/Pier can use ACI 318 or AASHTO LRFD with capability guards.",
         )
         with st.expander("Optional workflow note", expanded=bool(current.note)):
             note = st.text_area(
@@ -250,7 +269,7 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
                 height=80,
                 help="Optional project note for member/workflow interpretation. Saved with the project JSON.",
             )
-        selected_member_type = _MEMBER_TYPE_OPTIONS[selected_label]
+        selected_member_type = _MEMBER_TYPE_OPTIONS[_LEGACY_MEMBER_TYPE_LABELS.get(selected_label, selected_label)]
         settings = AnalysisModeSettings(member_type=selected_member_type, note=note or None)
         st.session_state["analysis_mode_settings"] = settings
         st.session_state[sync_key] = settings.member_type
@@ -419,7 +438,15 @@ def _project_overview_cards(
 
 
 def _analysis_configuration_cards(analysis_mode: AnalysisModeSettings) -> list[DashboardCard]:
-    beam_status = "Future / not implemented" if analysis_mode.allow_beam_girder_placeholder else "Not active"
+    if analysis_mode.member_type == "beam_girder":
+        beam_status = "Bridge active"
+        beam_detail = "Bridge-specific girder SLS/prestress tools are available as preview workflows"
+    elif analysis_mode.member_type == "building_beam_girder":
+        beam_status = "Building planned"
+        beam_detail = "Building beam/girder engines are guarded; bridge-specific assumptions are hidden"
+    else:
+        beam_status = "Not active"
+        beam_detail = "Select Bridge or Building Beam/Girder to activate beam/girder routing"
     pmm_value = "Available" if analysis_mode.allow_pmm_workflow else "Not applicable"
     pmm_detail = (
         "Column/Pier/Wall/Pylon PMM workspace availability"
@@ -438,12 +465,12 @@ def _analysis_configuration_cards(analysis_mode: AnalysisModeSettings) -> list[D
         ),
         DashboardCard(
             "SLS Workflow",
-            "Yes" if analysis_mode.allow_sls_workflow else "No",
+            "Yes" if analysis_mode.allow_sls_workflow else "Guarded / planned",
             "Service stress workflow availability",
-            "ready" if analysis_mode.allow_sls_workflow else "danger",
+            "ready" if analysis_mode.allow_sls_workflow else "warning",
             strong=not analysis_mode.allow_sls_workflow,
         ),
-        DashboardCard("Beam/Girder Workflow", beam_status, "Placeholder workflow status", status_style_for_value(beam_status)),
+        DashboardCard("Beam/Girder Workflow", beam_status, beam_detail, status_style_for_value(beam_status)),
     ]
 
 
@@ -458,6 +485,47 @@ def _project_design_code_cards(project: ProjectModel, analysis_mode: AnalysisMod
     for row in capability_rows[2:]:
         cards.append(DashboardCard(row["title"], row["value"], row["detail"], row["status"], strong=row["status"] == "warning"))
     return cards
+
+
+def _render_workflow_aware_design_code_selector(analysis_mode: AnalysisModeSettings) -> None:
+    """Render Setup design-code selector after workflow is known.
+
+    WORKFLOW.TYPE2 filters Design Code by active workflow:
+    Bridge Beam/Girder -> AASHTO LRFD only; Building Beam/Girder -> ACI 318
+    only; Column/Pier/Wall/Pylon -> ACI 318 or AASHTO LRFD.
+    """
+
+    allowed_codes = list(allowed_project_design_codes_for_workflow(analysis_mode.member_type))
+    current_code = default_project_design_code_for_workflow(analysis_mode.member_type, st.session_state.get("design_code"))
+    st.session_state["design_code"] = current_code
+    edition_options = code_edition_options_for(current_code)
+    if st.session_state.get("code_edition") not in edition_options:
+        st.session_state["code_edition"] = default_code_edition_for(current_code)
+
+    with st.container(border=True):
+        st.markdown("#### Project Design Code")
+        st.caption(workflow_code_policy_message(analysis_mode.member_type))
+        code_cols = st.columns(2)
+        with code_cols[0]:
+            selected_code = st.selectbox(
+                "Design Code",
+                allowed_codes,
+                key="design_code",
+                disabled=len(allowed_codes) == 1,
+                help="Workflow-aware source of truth. Bridge Beam/Girder is AASHTO LRFD only; Building Beam/Girder is ACI 318 only; Column/Pier/Wall/Pylon may choose either code.",
+            )
+        with code_cols[1]:
+            edition_options = code_edition_options_for(selected_code)
+            if st.session_state.get("code_edition") not in edition_options:
+                st.session_state["code_edition"] = default_code_edition_for(selected_code)
+            st.selectbox(
+                "Code Edition",
+                list(edition_options),
+                key="code_edition",
+                help="Saved with the project JSON. Solver-specific edition calibration is added only by named future milestones.",
+            )
+        if len(allowed_codes) == 1:
+            st.info(f"Design Code is locked by workflow: {selected_code}.")
 
 
 def _sls_stress_point_cards(custom_points: list[Any], include_default_stress_points: bool) -> list[DashboardCard]:
@@ -676,37 +744,23 @@ def render_project_page() -> None:
         st.text_input("Project Name", key="project_name")
         st.text_input("Designer", key="designer")
         st.text_area("Description", key="description")
-        code_cols = st.columns(2)
-        with code_cols[0]:
-            if st.session_state.get("design_code") not in PROJECT_DESIGN_CODE_OPTIONS:
-                st.session_state["design_code"] = normalize_project_design_code(st.session_state.get("design_code"))
-            selected_code = st.selectbox(
-                "Design Code",
-                list(PROJECT_DESIGN_CODE_OPTIONS),
-                key="design_code",
-                help="Project-level source of truth. Downstream tabs read this value and show REVIEW when the selected workflow is not fully implemented for that code.",
-            )
-        with code_cols[1]:
-            edition_options = code_edition_options_for(selected_code)
-            if st.session_state.get("code_edition") not in edition_options:
-                st.session_state["code_edition"] = default_code_edition_for(selected_code)
-            st.selectbox(
-                "Code Edition",
-                list(edition_options),
-                key="code_edition",
-                help="Saved with the project JSON. Solver-specific edition calibration is added only by named future milestones.",
-            )
         if st.button("Update Project Info", use_container_width=False):
             st.success("Project information updated.")
 
     analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
     analysis_mode = _render_analysis_mode_selector(analysis_mode)
 
+    _render_workflow_aware_design_code_selector(analysis_mode)
     project = project_from_session_state(st.session_state)
     _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
 
     if analysis_mode.member_type == "beam_girder":
         _render_beam_girder_system_settings()
+    elif analysis_mode.member_type == "building_beam_girder":
+        st.info(
+            "Building Beam/Girder workflow is guarded. Bridge-specific system settings, staged SLS load components, "
+            "barrier/parapet/sidewalk, wearing surface, CSiBridge LL+IM, and bridge prestress/debonding tools are hidden."
+        )
 
     project = project_from_session_state(st.session_state)
 

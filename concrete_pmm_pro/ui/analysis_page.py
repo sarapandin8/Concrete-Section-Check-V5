@@ -142,7 +142,20 @@ from concrete_pmm_pro.serviceability import (
     validate_stress_check_points_against_geometry,
 )
 
-from concrete_pmm_pro.serviceability.girder_prestress_station import evaluate_girder_prestress_station
+from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    evaluate_girder_prestress_station,
+    station_candidates_from_debonding,
+)
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    auto_load_breakdown_for_stage,
+    auto_load_settings_from_mapping,
+    default_sls_station_grid,
+    simple_span_udl_moment_kNm,
+    simple_span_udl_shear_kN,
+    system_settings_from_mapping,
+)
 
 from concrete_pmm_pro.visualization.pmm_dashboard import (
     build_selected_load_case_summary,
@@ -3779,16 +3792,123 @@ def _girder_sls_stage_pe_value_from_station(station_result: object, stage_label:
 
 
 def _girder_sls_span_length_from_session(rows: list[Mapping[str, object]] | None = None) -> float:
-    """Return a safe girder span length for station-based SLS previews."""
+    """Return the Setup single-source girder span length for SLS previews."""
 
+    system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    if system.span_length_m > 0.0:
+        return system.span_length_m
     settings = st.session_state.get("girder_prestress_system_settings") or {}
-    span = _analysis_float_or_zero(settings.get("span_length_m"))
+    span = _analysis_float_or_zero(settings.get("span_length_m")) if isinstance(settings, dict) else 0.0
     if span > 0.0:
         return span
     max_station = 0.0
     for row in rows or []:
         max_station = max(max_station, _analysis_float_or_zero(row.get("Station x (m)")))
     return max(1.0, max_station)
+
+
+def _girder_sls_precast_area_from_session() -> float:
+    geometry = st.session_state.get("section_geometry")
+    if geometry is None:
+        return 0.0
+    try:
+        return float(summarize_geometry(geometry).area_mm2)
+    except Exception:
+        return 0.0
+
+
+def _girder_sls_topping_thickness_from_session() -> float:
+    params = st.session_state.get("section_parameters") or {}
+    if not isinstance(params, dict):
+        return 0.0
+    return max(_analysis_float_or_zero(params.get("Tslab_mm")), 0.0)
+
+
+def _girder_sls_auto_load_breakdown(stage_label: str):
+    """Return GIRDER.SLS5A auto-load component breakdown for one stage."""
+
+    return auto_load_breakdown_for_stage(
+        stage_label=stage_label,
+        system=system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY)),
+        settings=auto_load_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)),
+        precast_area_mm2=_girder_sls_precast_area_from_session(),
+        topping_thickness_mm=_girder_sls_topping_thickness_from_session(),
+    )
+
+
+def _girder_sls_auto_station_grid(span_length_m: float) -> list[float]:
+    strand_table = st.session_state.get("girder_strand_layout_table")
+    extra: list[float] = []
+    try:
+        extra = station_candidates_from_debonding(strand_table, span_length_m)
+    except Exception:
+        extra = []
+    return default_sls_station_grid(span_length_m, extra_stations_m=extra, divisions=20)
+
+
+def _girder_sls_default_case_name_for_stage(stage_label: str) -> str:
+    stage = _beam_sls_stage_label_for_analysis(stage_label)
+    if stage == "Transfer stage":
+        return "AUTO-TR"
+    if stage == "Construction stage":
+        return "AUTO-CONST"
+    if stage == "Service stage":
+        return "AUTO-SERV-SDL"
+    return "AUTO-SLS"
+
+
+def _girder_sls_stage_rows_with_auto_station_grid(
+    stage_label: str,
+    stage_rows: list[dict[str, object]],
+    span_length_m: float,
+) -> list[dict[str, object]]:
+    """Return stage rows with a generated full-length grid when user rows are insufficient.
+
+    GIRDER.SLS5A makes Transfer/Construction/Service diagrams usable even when
+    external station loads are absent.  Generated rows carry zero user N/Mx;
+    auto UDL components and Pe(x) are added later in the diagram dataframe.
+    Existing multi-station user/imported rows are preserved.
+    """
+
+    rows = list(stage_rows or [])
+    case_names = sorted({str(row.get("Case Name") or "Unnamed") for row in rows})
+    for case_name in case_names:
+        case_rows = [row for row in rows if str(row.get("Case Name") or "Unnamed") == case_name]
+        unique_stations = {round(_analysis_float_or_zero(row.get("Station x (m)")), 6) for row in case_rows}
+        if len(unique_stations) >= 2:
+            return rows
+
+    template = dict(rows[0]) if rows else {}
+    stage = _beam_sls_stage_label_for_analysis(stage_label) or stage_label
+    case_name = str(template.get("Case Name") or _girder_sls_default_case_name_for_stage(stage)).strip() or _girder_sls_default_case_name_for_stage(stage)
+    basis = str(template.get("Section Basis") or ("Composite transformed" if stage == "Service stage" else "Precast gross"))
+    grid = _girder_sls_auto_station_grid(span_length_m)
+    existing_by_station = {
+        round(_analysis_float_or_zero(row.get("Station x (m)")), 6): row
+        for row in rows
+        if str(row.get("Case Name") or case_name) == case_name
+    }
+    generated: list[dict[str, object]] = []
+    for x_m in grid:
+        existing = existing_by_station.get(round(x_m, 6), {})
+        generated.append(
+            {
+                "Active": True,
+                "Station x (m)": x_m,
+                "Case Name": case_name,
+                "Stage": stage,
+                "Load Component": _beam_sls_component_for_analysis(stage),
+                "Section Basis": existing.get("Section Basis", basis),
+                "N": existing.get("N", 0.0),
+                "Mx": existing.get("Mx", 0.0),
+                "My": existing.get("My", 0.0),
+                "Vy": existing.get("Vy", 0.0),
+                "Vx": existing.get("Vx", 0.0),
+                "T": existing.get("T", 0.0),
+                "Note": existing.get("Note", "Generated SLS5A station grid for auto load + Pe(x) diagram"),
+            }
+        )
+    return generated
 
 
 def _girder_full_length_sls_stage_rows(
@@ -3807,16 +3927,23 @@ def _girder_full_length_sls_stage_rows(
     formula.
     """
 
+    load_rows = _girder_sls_stage_rows_with_auto_station_grid(stage_label, load_rows, span_length_m)
     strand_table = st.session_state.get("girder_strand_layout_table")
+    auto_breakdown = _girder_sls_auto_load_breakdown(stage_label)
     rows: list[dict[str, object]] = []
     for raw_row in load_rows:
         x_m = _analysis_float_or_zero(raw_row.get("Station x (m)"))
         basis_name = _beam_sls_load_basis_key(raw_row, basis_names) or _beam_sls_default_basis_for_stage(stage_label, basis_names)
         basis = basis_options.bases[basis_name]
+        user_n_kN = _analysis_float_or_zero(raw_row.get("N"))
+        user_mx_kNm = _analysis_float_or_zero(raw_row.get("Mx"))
+        auto_mx_kNm = simple_span_udl_moment_kNm(auto_breakdown.total_kN_m, x_m, span_length_m)
+        auto_vy_kN = simple_span_udl_shear_kN(auto_breakdown.total_kN_m, x_m, span_length_m)
+        total_mx_kNm = user_mx_kNm + auto_mx_kNm
         service = run_basic_girder_service_stress(
             basis,
-            N_kN=_analysis_float_or_zero(raw_row.get("N")),
-            M_kNm=_analysis_float_or_zero(raw_row.get("Mx")),
+            N_kN=user_n_kN,
+            M_kNm=total_mx_kNm,
         )
         pe_kN = 0.0
         yps = None
@@ -3851,8 +3978,13 @@ def _girder_full_length_sls_stage_rows(
                 "Case Name": str(raw_row.get("Case Name") or "Unnamed"),
                 "Stage": _beam_sls_stage_label_for_analysis(raw_row.get("Stage")) or stage_label,
                 "Basis": basis_options.labels.get(basis_name, basis_name),
-                "N (kN)": _analysis_float_or_zero(raw_row.get("N")),
-                "Mx (kN-m)": _analysis_float_or_zero(raw_row.get("Mx")),
+                "N (kN)": user_n_kN,
+                "User Mx (kN-m)": user_mx_kNm,
+                "Auto Mx (kN-m)": auto_mx_kNm,
+                "Mx (kN-m)": total_mx_kNm,
+                "Auto Vy (kN)": auto_vy_kN,
+                "Auto load w (kN/m)": auto_breakdown.total_kN_m,
+                "Auto load components": auto_breakdown.component_label,
                 "Pe stage (kN)": pe_kN,
                 "yps eff (mm)": yps,
                 "Top service (MPa)": service.top.total_stress_MPa,
@@ -4318,17 +4450,17 @@ def _render_girder_sls4b_combined_stage_result_table(
         "It reports actual stress versus the matching preview limit, utilization, governing station, and controlling fiber."
     )
     if not beam_sls_rows:
-        st.info("No active Beam/Girder SLS Loads rows are available for a combined stage summary.")
-        return
+        st.info("No active imported Beam/Girder SLS Loads rows are available; SLS5A will use generated auto-load station rows where possible.")
     summary_rows: list[dict[str, object]] = []
     demand_detail_rows: list[dict[str, object]] = []
     for _stage_key, stage_label, _stage_note in _beam_sls_stage_tab_specs():
         stage_rows = _beam_sls_rows_for_stage(beam_sls_rows, stage_label)
+        span = _girder_sls_span_length_from_session(stage_rows)
+        stage_rows = _girder_sls_stage_rows_with_auto_station_grid(stage_label, stage_rows, span)
         selected_case = _girder_sls4b_selected_case_for_stage(stage_label, stage_rows)
         if not selected_case:
             continue
         selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
-        span = _girder_sls_span_length_from_session(selected_rows)
         df = _girder_full_length_sls_stage_rows(
             stage_label=stage_label,
             load_rows=selected_rows,
@@ -4342,7 +4474,7 @@ def _render_girder_sls4b_combined_stage_result_table(
         for demand_row in _girder_sls4b_governing_demand_rows(df, stage_label):
             demand_detail_rows.append({"Stage": stage_label, **demand_row})
     if not summary_rows:
-        st.info("Active SLS rows exist, but no valid full-length stage result could be summarized. Check station, case name, and section basis inputs.")
+        st.info("No valid full-length stage result could be summarized. Check section geometry, auto-load settings, station inputs, and section basis availability.")
         return
     summary_df = pd.DataFrame(summary_rows)
     _render_girder_sls4b_governing_summary_cards(summary_df)
@@ -4463,8 +4595,10 @@ def _render_girder_full_length_sls_diagram(
         "This remains a preview, not final code-certified staged design. "
         "Transfer-length ramp, development, shear, and end-zone checks remain future work."
     )
+    span = _girder_sls_span_length_from_session(stage_rows)
+    stage_rows = _girder_sls_stage_rows_with_auto_station_grid(stage_label, stage_rows, span)
     if not stage_rows:
-        st.info("Import or enter active Loads rows for this stage to plot full-length SLS stress along the girder.")
+        st.info("No generated or imported station rows are available for this stage.")
         return
     case_names = _girder_sls4b_case_names(stage_rows)
     _girder_sls4b_selected_case_for_stage(stage_label, stage_rows)
@@ -4479,7 +4613,6 @@ def _render_girder_full_length_sls_diagram(
         selected_case = case_names[0]
         st.caption(f"Diagram load case: {selected_case}")
     selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
-    span = _girder_sls_span_length_from_session(selected_rows)
     df = _girder_full_length_sls_stage_rows(
         stage_label=stage_label,
         load_rows=selected_rows,
@@ -4544,9 +4677,10 @@ def _render_girder_full_length_sls_diagram(
     with st.expander(f"Full-length stress table — {stage_label}", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(df), use_container_width=True, hide_index=True)
     with st.expander("Full-length diagram assumptions", expanded=False):
-        st.write("- Loads page station rows are the source of N and Mx; My/Vx/Vy/T are stored but not used in this one-dimensional preview.")
+        st.write("- Loads page station rows provide user/imported N and Mx. When station rows are missing or only one station is available, GIRDER.SLS5A generates a span station grid for auto load + Pe(x) plotting.")
+        st.write("- Transfer auto load = girder self-weight; Construction auto load = girder self-weight + wet deck/topping; Service auto load = SDL after composite only. LL+IM remains user/imported.")
         st.write("- Stage Pe is read from the current Prestress Force States / Losses backend values at each station, including debonded-strand step-function effectiveness.")
-        st.write("- The graph connects station rows for one Case Name; it does not generate an envelope or interpolate missing load effects beyond the station table.")
+        st.write("- The graph connects station rows for one Case Name; it does not generate an envelope. Auto station rows carry zero user Mx unless imported/user rows are present at that station.")
         st.write("- Preview limit lines use the Project Design Code SLS profile for the active stage. The limit stage is not user-selected inside a stage tab.")
         st.write("- GIRDER.SLS4C keeps engineering action hints advisory only; final design still requires code, transfer/development length, shear, end-zone, and detailing checks.")
 

@@ -32,6 +32,12 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
 )
 from concrete_pmm_pro.serviceability.models import ServiceabilitySettings
 from concrete_pmm_pro.serviceability.points import stress_check_points_to_dataframe
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    auto_load_settings_from_mapping,
+    system_settings_from_mapping,
+)
 
 
 class ProjectIOError(ValueError):
@@ -172,6 +178,26 @@ def _girder_prestress_code_loss_settings_metadata_from_session(session_state: An
     return {key: _clean_table_value(value) for key, value in settings.items() if key in allowed and not _is_blank(value)}
 
 
+
+
+def _beam_girder_system_settings_metadata_from_session(session_state: Any) -> dict[str, Any]:
+    """Serialize single-source Beam/Girder system settings."""
+
+    settings = _get_session_value(session_state, BEAM_GIRDER_SYSTEM_SETTINGS_KEY, None)
+    if not isinstance(settings, dict):
+        return {}
+    return {key: _clean_table_value(value) for key, value in system_settings_from_mapping(settings).as_metadata().items() if not _is_blank(value)}
+
+
+def _beam_girder_sls_auto_load_settings_metadata_from_session(session_state: Any) -> dict[str, Any]:
+    """Serialize Beam/Girder SLS auto-load component settings."""
+
+    settings = _get_session_value(session_state, BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY, None)
+    if not isinstance(settings, dict):
+        return {}
+    return {key: _clean_table_value(value) for key, value in auto_load_settings_from_mapping(settings).as_metadata().items() if not _is_blank(value)}
+
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -239,6 +265,12 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     girder_prestress_code_loss_settings = _girder_prestress_code_loss_settings_metadata_from_session(session_state)
     if girder_prestress_code_loss_settings:
         metadata["girder_prestress_code_loss_settings"] = girder_prestress_code_loss_settings
+    beam_girder_system_settings = _beam_girder_system_settings_metadata_from_session(session_state)
+    if beam_girder_system_settings:
+        metadata[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = beam_girder_system_settings
+    beam_girder_sls_auto_load_settings = _beam_girder_sls_auto_load_settings_metadata_from_session(session_state)
+    if beam_girder_sls_auto_load_settings:
+        metadata[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = beam_girder_sls_auto_load_settings
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -565,6 +597,17 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     girder_prestress_code_loss_settings = project.metadata.get("girder_prestress_code_loss_settings")
     if isinstance(girder_prestress_code_loss_settings, dict):
         session_state["girder_prestress_code_loss_settings"] = dict(girder_prestress_code_loss_settings)
+    beam_girder_system_settings = project.metadata.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY)
+    if isinstance(beam_girder_system_settings, dict):
+        normalized_system = system_settings_from_mapping(beam_girder_system_settings).as_metadata()
+        session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized_system
+        # Keep legacy prestress-span consumers synchronized to the Setup single source.
+        existing_ps_system = dict(session_state.get("girder_prestress_system_settings", {}) or {})
+        existing_ps_system["span_length_m"] = normalized_system.get("span_length_m")
+        session_state["girder_prestress_system_settings"] = existing_ps_system
+    beam_girder_sls_auto_load_settings = project.metadata.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)
+    if isinstance(beam_girder_sls_auto_load_settings, dict):
+        session_state[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = auto_load_settings_from_mapping(beam_girder_sls_auto_load_settings).as_metadata()
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

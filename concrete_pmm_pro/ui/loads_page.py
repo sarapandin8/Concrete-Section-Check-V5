@@ -19,6 +19,19 @@ from concrete_pmm_pro.core.analysis import AnalysisModeSettings
 from concrete_pmm_pro.core.analysis_modes import analysis_mode_label
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to_Nmm
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    DEFAULT_BARRIER_SIDEWALK_TOTAL_AREA_BOTH_SIDES_M2,
+    DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3,
+    DEFAULT_WEARING_THICKNESS_MM,
+    auto_load_breakdown_for_stage,
+    auto_load_settings_from_mapping,
+    barrier_sidewalk_load_per_girder_kN_m,
+    system_settings_from_mapping,
+    wearing_surface_load_per_girder_kN_m,
+    other_sdl_load_per_girder_kN_m,
+)
 
 LOAD_TYPE_OPTIONS = ["ULS", "SLS", "Extreme", "Construction", "Other"]
 FORCE_UNIT_OPTIONS = ["kN", "N", "tonf"]
@@ -1599,6 +1612,189 @@ def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
         st.dataframe(_preview_dataframe(st.session_state["load_cases"]), use_container_width=True, hide_index=True)
 
 
+
+
+def _active_topping_thickness_mm_from_session() -> float:
+    params = st.session_state.get("section_parameters") or {}
+    if isinstance(params, dict):
+        try:
+            return max(float(params.get("Tslab_mm", 0.0) or 0.0), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _ensure_beam_girder_sls_auto_load_settings() -> dict[str, Any]:
+    existing = st.session_state.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)
+    if not isinstance(existing, dict):
+        existing = {}
+    normalized = auto_load_settings_from_mapping(existing).as_metadata()
+    st.session_state[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = normalized
+    return normalized
+
+
+def _render_beam_girder_auto_sls_load_component_inputs() -> None:
+    """Render practical SLS auto-load component settings for Beam/Girder workflows."""
+
+    system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    settings_data = _ensure_beam_girder_sls_auto_load_settings()
+    settings = auto_load_settings_from_mapping(settings_data)
+    with st.container(border=True):
+        st.markdown("#### Beam/Girder SLS Auto Load Components")
+        st.caption(
+            "Practical simple-span auto-load inputs for SLS stress diagrams. Transfer and Construction can use auto dead-load components; "
+            "Service SDL after composite can be calculated here while LL+IM remains a user/imported action from CSiBridge."
+        )
+        sys_cols = st.columns(4)
+        sys_cols[0].metric("Span L", f"{system.span_length_m:.3f} m")
+        sys_cols[1].metric("Girder spacing", f"{system.girder_spacing_m:.3f} m")
+        sys_cols[2].metric("Number of girders", f"{system.number_of_girders:d}")
+        sys_cols[3].metric("Tributary width", f"{system.effective_tributary_width_m:.3f} m")
+        st.caption("These values come from Setup → Beam/Girder System Settings. Change them there, not inside this load-component panel.")
+
+        stage_cols = st.columns(3)
+        with stage_cols[0]:
+            st.markdown("**Transfer**")
+            settings_data["include_transfer_girder_self_weight"] = st.checkbox(
+                "Include auto girder self-weight",
+                value=bool(settings.include_transfer_girder_self_weight),
+                key="beam_sls_auto_include_transfer_self_weight",
+                help="Uses gross precast section area and concrete unit weight from Setup. Pe_transfer is still added separately in Analysis.",
+            )
+        with stage_cols[1]:
+            st.markdown("**Construction**")
+            settings_data["include_construction_girder_self_weight"] = st.checkbox(
+                "Include girder self-weight",
+                value=bool(settings.include_construction_girder_self_weight),
+                key="beam_sls_auto_include_construction_self_weight",
+            )
+            settings_data["include_construction_wet_topping"] = st.checkbox(
+                "Include wet deck/topping",
+                value=bool(settings.include_construction_wet_topping),
+                key="beam_sls_auto_include_construction_topping",
+                help="Uses Tslab from Section Builder and tributary width from Setup. Section basis remains pre-composite/precast gross.",
+            )
+            st.caption(f"Current Tslab from Section Builder: {_active_topping_thickness_mm_from_session():.1f} mm")
+        with stage_cols[2]:
+            st.markdown("**Service**")
+            st.caption("Auto SDL after composite only. Import/enter LL+IM separately; do not import total service combo unless auto components are disabled.")
+
+        with st.expander("Service SDL after composite inputs", expanded=True):
+            left, right = st.columns(2)
+            with left:
+                settings_data["include_service_barrier_sidewalk"] = st.checkbox(
+                    "Include Barrier / Parapet / Sidewalk",
+                    value=bool(settings.include_service_barrier_sidewalk),
+                    key="beam_sls_auto_include_barrier_sidewalk",
+                )
+                settings_data["barrier_sidewalk_total_area_both_sides_m2"] = st.number_input(
+                    "🟨 Barrier / Parapet / Sidewalk total area for both sides (m²)",
+                    min_value=0.0,
+                    step=0.05,
+                    value=float(settings.barrier_sidewalk_total_area_both_sides_m2),
+                    format="%.3f",
+                    key="beam_sls_auto_barrier_total_area_both_sides_m2",
+                    help="Default 1.50 m² is the combined area for both sides; each side is 0.75 m².",
+                )
+                settings_data["barrier_sidewalk_unit_weight_kN_m3"] = st.number_input(
+                    "Barrier / Parapet / Sidewalk unit weight (kN/m³)",
+                    min_value=0.0,
+                    step=0.5,
+                    value=float(settings.barrier_sidewalk_unit_weight_kN_m3),
+                    format="%.2f",
+                    key="beam_sls_auto_barrier_unit_weight",
+                )
+                settings_data["include_service_wearing_surface"] = st.checkbox(
+                    "Include wearing surface",
+                    value=bool(settings.include_service_wearing_surface),
+                    key="beam_sls_auto_include_wearing",
+                )
+                settings_data["wearing_thickness_mm"] = st.number_input(
+                    "🟨 Wearing surface thickness (mm)",
+                    min_value=0.0,
+                    step=5.0,
+                    value=float(settings.wearing_thickness_mm),
+                    format="%.1f",
+                    key="beam_sls_auto_wearing_thickness_mm",
+                    help="Default 80 mm.",
+                )
+                settings_data["wearing_unit_weight_kN_m3"] = st.number_input(
+                    "Wearing surface unit weight (kN/m³)",
+                    min_value=0.0,
+                    step=0.5,
+                    value=float(settings.wearing_unit_weight_kN_m3),
+                    format="%.2f",
+                    key="beam_sls_auto_wearing_unit_weight",
+                    help="Default 24 kN/m³ unless overridden.",
+                )
+            with right:
+                settings_data["include_service_other_sdl"] = st.checkbox(
+                    "Include Other SDL",
+                    value=bool(settings.include_service_other_sdl),
+                    key="beam_sls_auto_include_other_sdl",
+                )
+                mode_options = ["Area load kN/m²", "Direct kN/m per girder"]
+                mode_value = settings.other_sdl_mode if settings.other_sdl_mode in mode_options else mode_options[0]
+                settings_data["other_sdl_mode"] = st.selectbox(
+                    "Other SDL input mode",
+                    mode_options,
+                    index=mode_options.index(mode_value),
+                    key="beam_sls_auto_other_sdl_mode",
+                    help="Area load is multiplied by tributary width. Direct line load is already per girder.",
+                )
+                settings_data["other_sdl_area_load_kN_m2"] = st.number_input(
+                    "Other SDL area load (kN/m²)",
+                    min_value=0.0,
+                    step=0.25,
+                    value=float(settings.other_sdl_area_load_kN_m2),
+                    format="%.3f",
+                    key="beam_sls_auto_other_sdl_area_load",
+                )
+                settings_data["other_sdl_line_load_kN_m_per_girder"] = st.number_input(
+                    "Other SDL direct line load (kN/m per girder)",
+                    min_value=0.0,
+                    step=0.25,
+                    value=float(settings.other_sdl_line_load_kN_m_per_girder),
+                    format="%.3f",
+                    key="beam_sls_auto_other_sdl_line_load",
+                )
+                st.warning(
+                    "Import LL+IM only from CSiBridge for this workflow. Do not import total service combination unless auto SDL components are disabled."
+                )
+
+            normalized = auto_load_settings_from_mapping(settings_data)
+            st.session_state[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = normalized.as_metadata()
+            barrier = barrier_sidewalk_load_per_girder_kN_m(system, normalized)
+            wearing = wearing_surface_load_per_girder_kN_m(system, normalized)
+            other = other_sdl_load_per_girder_kN_m(system, normalized)
+            summary = pd.DataFrame(
+                [
+                    {
+                        "Component": "Barrier / Parapet / Sidewalk",
+                        "Basis": "Total area both sides / number of girders",
+                        "Input": f"A_total={normalized.barrier_sidewalk_total_area_both_sides_m2:.3f} m², A/side={normalized.barrier_sidewalk_area_per_side_m2:.3f} m²",
+                        "w per girder (kN/m)": barrier if normalized.include_service_barrier_sidewalk else 0.0,
+                    },
+                    {
+                        "Component": "Wearing surface",
+                        "Basis": "thickness × tributary width × unit weight",
+                        "Input": f"t={normalized.wearing_thickness_mm:.1f} mm, b_trib={system.effective_tributary_width_m:.3f} m",
+                        "w per girder (kN/m)": wearing if normalized.include_service_wearing_surface else 0.0,
+                    },
+                    {
+                        "Component": "Other SDL",
+                        "Basis": normalized.other_sdl_mode,
+                        "Input": f"q={normalized.other_sdl_area_load_kN_m2:.3f} kN/m² or w={normalized.other_sdl_line_load_kN_m_per_girder:.3f} kN/m",
+                        "w per girder (kN/m)": other if normalized.include_service_other_sdl else 0.0,
+                    },
+                ]
+            )
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            st.caption(
+                f"Defaults: Barrier/Parapet/Sidewalk total area both sides = {DEFAULT_BARRIER_SIDEWALK_TOTAL_AREA_BOTH_SIDES_M2:.2f} m²; "
+                f"wearing thickness = {DEFAULT_WEARING_THICKNESS_MM:.0f} mm; unit weight = {DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3:.0f} kN/m³."
+            )
+
 def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     st.markdown("### Beam / Girder Loads")
     st.caption(
@@ -1648,6 +1844,8 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     edited_uls = _stringify_table(edited_uls, BEAM_ULS_LOAD_COLUMNS)
     st.session_state["beam_uls_loads_table"] = edited_uls
 
+    _render_beam_girder_auto_sls_load_component_inputs()
+
     st.markdown("#### SLS Girder Service Loads")
     st.caption(
         "LOADS.SLS2C aligns this input area with Analysis: enter service actions by stage, not by detailed load-component dropdown. "
@@ -1655,7 +1853,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     )
     st.info(
         "Stage meaning: Transfer = precast girder self-weight + Pe_transfer in Analysis; "
-        "Construction = precast girder + wet deck/topping; Service = total SLS resultant including SDL and LL+IM. "
+        "Construction = auto girder + wet deck/topping unless overridden; Service = auto SDL after composite plus user/imported LL+IM. "
         "Do not include prestress in the Loads resultant when Pe is added separately in Analysis."
     )
 
@@ -1779,7 +1977,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         st.write("- SLS table uses three engineer-facing stages instead of a detailed Load Component dropdown.")
         st.write("- Transfer stage: external action is precast girder self-weight; Analysis must include Pe_transfer/initial prestress for a meaningful transfer check.")
         st.write("- Construction stage: external action is precast girder plus wet deck/topping before composite action.")
-        st.write("- Service stage: external action is the Total SLS resultant including SDL and LL+IM; do not include prestress again if Analysis adds Pe separately.")
+        st.write("- Service stage: use auto SDL after composite plus user/imported LL+IM. Do not import total service combo unless auto SDL components are disabled.")
         st.write("- ULS rows and full staged summation are not yet connected to final code-certified girder design.")
 
 def render_loads_page() -> None:

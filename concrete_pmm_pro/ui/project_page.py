@@ -27,6 +27,14 @@ from concrete_pmm_pro.io.project_io import (
     project_to_json,
 )
 from concrete_pmm_pro.reporting import build_result_traceability_snapshot, check_report_readiness
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3,
+    DEFAULT_GIRDER_SPACING_M,
+    DEFAULT_NUMBER_OF_GIRDERS,
+    DEFAULT_SPAN_LENGTH_M,
+    system_settings_from_mapping,
+)
 
 
 @dataclass(frozen=True)
@@ -524,6 +532,131 @@ def _ensure_project_defaults() -> None:
     )
 
 
+
+
+def _sync_beam_girder_span_to_existing_sources(settings: dict[str, Any]) -> None:
+    """Keep legacy span consumers synchronized with Setup single-source settings."""
+
+    span_length_m = float(settings.get("span_length_m", DEFAULT_SPAN_LENGTH_M) or DEFAULT_SPAN_LENGTH_M)
+    prestress_system = dict(st.session_state.get("girder_prestress_system_settings", {}) or {})
+    prestress_system["span_length_m"] = span_length_m
+    st.session_state["girder_prestress_system_settings"] = prestress_system
+
+    section_params = dict(st.session_state.get("section_parameters", {}) or {})
+    if section_params:
+        section_params["girder_length_mm"] = span_length_m * 1000.0
+        st.session_state["section_parameters"] = section_params
+        preset_key = str(st.session_state.get("section_preset_key") or "").strip()
+        if preset_key:
+            st.session_state[f"{preset_key}_girder_length_mm"] = span_length_m * 1000.0
+
+
+def _ensure_beam_girder_system_settings_defaults() -> dict[str, Any]:
+    """Initialize Beam/Girder system settings from current session data."""
+
+    existing = st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY)
+    if not isinstance(existing, dict):
+        existing = {}
+    if "span_length_m" not in existing:
+        ps_settings = st.session_state.get("girder_prestress_system_settings") or {}
+        span_from_ps = ps_settings.get("span_length_m") if isinstance(ps_settings, dict) else None
+        section_params = st.session_state.get("section_parameters") or {}
+        span_from_section = None
+        if isinstance(section_params, dict):
+            try:
+                span_from_section = float(section_params.get("girder_length_mm", 0.0) or 0.0) / 1000.0
+            except (TypeError, ValueError):
+                span_from_section = None
+        existing["span_length_m"] = span_from_ps or span_from_section or DEFAULT_SPAN_LENGTH_M
+    existing.setdefault("girder_spacing_m", DEFAULT_GIRDER_SPACING_M)
+    existing.setdefault("number_of_girders", DEFAULT_NUMBER_OF_GIRDERS)
+    existing.setdefault("concrete_unit_weight_kN_m3", DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3)
+    existing.setdefault("tributary_width_m", existing.get("girder_spacing_m", DEFAULT_GIRDER_SPACING_M))
+    normalized = system_settings_from_mapping(existing).as_metadata()
+    st.session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized
+    _sync_beam_girder_span_to_existing_sources(normalized)
+    return normalized
+
+
+def _render_beam_girder_system_settings() -> None:
+    """Render single-source span/girder spacing settings for Beam/Girder workflows."""
+
+    settings = _ensure_beam_girder_system_settings_defaults()
+    with st.container(border=True):
+        st.markdown("#### Beam/Girder System Settings")
+        st.caption(
+            "Single source of truth for span length, girder spacing, number of girders, and load tributary width. "
+            "Loads, Prestress debonding preview, and SLS stress diagrams read these values instead of duplicating span inputs."
+        )
+        cols = st.columns(4)
+        with cols[0]:
+            settings["span_length_m"] = st.number_input(
+                "🟨 Span length L (m)",
+                min_value=0.1,
+                step=0.5,
+                value=float(settings.get("span_length_m", DEFAULT_SPAN_LENGTH_M)),
+                format="%.3f",
+                key="beam_girder_system_span_length_m_input",
+                help="Single source for simple-span SLS load diagrams and prestress/debonding station previews.",
+            )
+        with cols[1]:
+            settings["girder_spacing_m"] = st.number_input(
+                "🟨 Girder spacing (m)",
+                min_value=0.1,
+                step=0.1,
+                value=float(settings.get("girder_spacing_m", DEFAULT_GIRDER_SPACING_M)),
+                format="%.3f",
+                key="beam_girder_system_girder_spacing_m_input",
+                help="Used as the default tributary width for wearing surface and area-load take-down. This is not the same thing as Be.",
+            )
+        with cols[2]:
+            settings["number_of_girders"] = int(
+                st.number_input(
+                    "🟨 Number of girders",
+                    min_value=1,
+                    step=1,
+                    value=int(settings.get("number_of_girders", DEFAULT_NUMBER_OF_GIRDERS)),
+                    key="beam_girder_system_number_of_girders_input",
+                    help="Required for equal-share Barrier / Parapet / Sidewalk load distribution.",
+                )
+            )
+        with cols[3]:
+            settings["concrete_unit_weight_kN_m3"] = st.number_input(
+                "Concrete unit weight (kN/m³)",
+                min_value=1.0,
+                step=0.5,
+                value=float(settings.get("concrete_unit_weight_kN_m3", DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3)),
+                format="%.2f",
+                key="beam_girder_system_unit_weight_input",
+                help="Default unit weight for girder self-weight and wet topping load preview.",
+            )
+        trib_default = float(settings.get("tributary_width_m") or settings.get("girder_spacing_m") or DEFAULT_GIRDER_SPACING_M)
+        settings["tributary_width_m"] = st.number_input(
+            "Tributary width for load take-down (m)",
+            min_value=0.1,
+            step=0.1,
+            value=trib_default,
+            format="%.3f",
+            key="beam_girder_system_tributary_width_m_input",
+            help="Use girder spacing by default. Do not confuse load tributary width with effective slab width Be used for composite section properties.",
+        )
+        normalized = system_settings_from_mapping(settings).as_metadata()
+        st.session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized
+        _sync_beam_girder_span_to_existing_sources(normalized)
+        summary = system_settings_from_mapping(normalized)
+        st.markdown(
+            _compact_panel_html(
+                [
+                    DashboardCard("Span source", f"{summary.span_length_m:.3f} m", "Used by SLS station grid and debonding preview", "ready"),
+                    DashboardCard("Load tributary width", f"{summary.effective_tributary_width_m:.3f} m", "Default = girder spacing unless overridden", "info"),
+                    DashboardCard("Girders for equal share", f"{summary.number_of_girders:d}", "Used by Barrier/Parapet/Sidewalk SDL", "ready"),
+                    DashboardCard("Be separation", "Not used for load take-down", "Be remains section-property metadata", "warning"),
+                ],
+                columns=2,
+            ),
+            unsafe_allow_html=True,
+        )
+
 def render_project_page() -> None:
     _apply_pending_project_load()
     _ensure_project_defaults()
@@ -565,6 +698,8 @@ def render_project_page() -> None:
             )
         if st.button("Update Project Info", use_container_width=False):
             st.success("Project information updated.")
+
+    _render_beam_girder_system_settings()
 
     project = project_from_session_state(st.session_state)
 

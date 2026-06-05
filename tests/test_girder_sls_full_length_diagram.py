@@ -20,7 +20,7 @@ def test_full_length_sls_diagram_uses_loads_and_stage_pe_without_solver_changes(
     assert "pe_transfer_eff_kN" in SOURCE
     assert "pe_construction_eff_kN" in SOURCE
     assert "pe_eff_final_eff_kN" in SOURCE
-    assert "Loads page station rows are the source of N and Mx" in SOURCE
+    assert "Loads page station rows provide user/imported N and Mx" in SOURCE
     assert "not final code-certified staged design" in SOURCE
     assert "Transfer-length ramp, development, shear, and end-zone checks remain future work" in SOURCE
 
@@ -38,7 +38,7 @@ def test_full_length_sls_diagram_has_preview_limit_lines_and_governing_cards() -
 def test_full_length_sls_diagram_groups_one_case_name_at_a_time() -> None:
     assert "diagram load case" in SOURCE
     assert "The diagram connects station rows with the same Case Name" in SOURCE
-    assert "it does not generate an envelope or interpolate missing load effects" in SOURCE
+    assert "GIRDER.SLS5A generates a span station grid" in SOURCE
 
 
 def test_sls4a1_decision_workspace_collapses_audit_controls() -> None:

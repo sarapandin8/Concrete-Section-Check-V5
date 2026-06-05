@@ -15,6 +15,12 @@ from pydantic import ValidationError
 from shapely.geometry import LineString, Point, Polygon
 
 from concrete_pmm_pro.core.models import PrestressElement, SectionGeometry
+from concrete_pmm_pro.core.design_code import (
+    PROJECT_CODE_AASHTO_LRFD,
+    PROJECT_CODE_ACI318,
+    normalize_project_design_code,
+    project_design_code_from_session,
+)
 from concrete_pmm_pro.core.reinforcement_system import ordinary_rebar_enabled, prestressing_steel_enabled
 from concrete_pmm_pro.core.units import kN_to_N
 from concrete_pmm_pro.data.prestress_tendon_products import (
@@ -143,6 +149,16 @@ GIRDER_PRESTRESS_FORCE_STATE_SPECS = [
 ]
 
 GIRDER_LOSS_INPUT_MODE_OPTIONS = ["Manual stage Pe", "Percentage loss", "Approximate code-based loss", "Refined AASHTO time-dependent loss"]
+GIRDER_LOSS_BASIS_USE_PROJECT = "Use project design code"
+GIRDER_LOSS_BASIS_AASHTO = PROJECT_CODE_AASHTO_LRFD
+GIRDER_LOSS_BASIS_ACI_PCI = "ACI 318 / PCI-style"
+GIRDER_LOSS_BASIS_MANUAL = "Manual / project-specific"
+GIRDER_LOSS_CODE_BASIS_OPTIONS = [
+    GIRDER_LOSS_BASIS_USE_PROJECT,
+    GIRDER_LOSS_BASIS_AASHTO,
+    GIRDER_LOSS_BASIS_ACI_PCI,
+    GIRDER_LOSS_BASIS_MANUAL,
+]
 DEFAULT_CODE_LOSS_FPJ_RATIO = 0.75
 
 REFINED_COEFFICIENT_USER_DEFINED = "User-defined / project-specific"
@@ -1580,9 +1596,63 @@ def _girder_code_loss_settings_from_session() -> dict[str, Any]:
     settings.setdefault("delta_fcdf_MPa", refined_defaults["delta_fcdf_MPa"])
     settings.setdefault("fpy_MPa", DEFAULT_STRAND_FPY_MPA)
     settings.setdefault("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO)
+    settings.setdefault("loss_code_basis", GIRDER_LOSS_BASIS_USE_PROJECT)
     return settings
 
 
+
+
+def _effective_girder_loss_code_basis(settings: dict[str, Any]) -> str:
+    """Return the actual code basis used by the loss workflow selector."""
+
+    selected = str(settings.get("loss_code_basis", GIRDER_LOSS_BASIS_USE_PROJECT) or GIRDER_LOSS_BASIS_USE_PROJECT)
+    if selected == GIRDER_LOSS_BASIS_USE_PROJECT:
+        return project_design_code_from_session(st.session_state)
+    if selected == GIRDER_LOSS_BASIS_ACI_PCI:
+        return PROJECT_CODE_ACI318
+    if selected == GIRDER_LOSS_BASIS_AASHTO:
+        return PROJECT_CODE_AASHTO_LRFD
+    return GIRDER_LOSS_BASIS_MANUAL
+
+
+def _render_girder_loss_code_basis_selector(settings: dict[str, Any], *, method: str) -> tuple[dict[str, Any], str, bool]:
+    """Render the local prestress-loss code-basis selector.
+
+    CODE.SETUP1 permits a loss-basis override while keeping the project design
+    code as the default.  Only the existing AASHTO-style loss calculators are
+    active in this milestone; ACI/PCI and manual/project-specific choices are
+    status guards, not new formulas.
+    """
+
+    project_code = project_design_code_from_session(st.session_state)
+    current = str(settings.get("loss_code_basis", GIRDER_LOSS_BASIS_USE_PROJECT) or GIRDER_LOSS_BASIS_USE_PROJECT)
+    if current not in GIRDER_LOSS_CODE_BASIS_OPTIONS:
+        current = GIRDER_LOSS_BASIS_USE_PROJECT
+    selected = st.selectbox(
+        "🟨 Prestress loss code basis",
+        GIRDER_LOSS_CODE_BASIS_OPTIONS,
+        index=GIRDER_LOSS_CODE_BASIS_OPTIONS.index(current),
+        key="girder_prestress_loss_code_basis",
+        help="Default inherits the Project Design Code from Setup. Override only when the project specification requires a different loss basis.",
+    )
+    settings["loss_code_basis"] = str(selected)
+    effective_basis = _effective_girder_loss_code_basis(settings)
+    differs = effective_basis not in {project_code, GIRDER_LOSS_BASIS_MANUAL}
+    if selected != GIRDER_LOSS_BASIS_USE_PROJECT and effective_basis != project_code:
+        st.warning("Prestress loss basis differs from Project Design Code — Engineering review required.")
+    if effective_basis == PROJECT_CODE_AASHTO_LRFD:
+        st.info("AASHTO LRFD loss basis selected. Existing approximate/refined loss calculators remain engineering-preview workflows, not final code-certified loss design.")
+        return settings, effective_basis, True
+    if effective_basis == PROJECT_CODE_ACI318:
+        st.warning(
+            "ACI 318 / PCI-style prestress loss formulas are planned but not implemented in this milestone. "
+            "Use Manual stage Pe or Percentage loss for ACI-governed projects until the ACI/PCI loss solver is added."
+        )
+        return settings, effective_basis, False
+    st.warning(
+        "Manual / project-specific loss basis selected. Enter reviewed force states manually; the AASHTO calculate-and-use buttons are disabled for this basis."
+    )
+    return settings, effective_basis, False
 
 
 def _apply_refined_coefficient_preset(
@@ -2188,6 +2258,7 @@ def _render_girder_code_based_loss_estimate(
 
     settings = _girder_code_loss_settings_from_session()
     settings["method"] = str(method)
+    settings, effective_loss_basis, loss_calculation_enabled = _render_girder_loss_code_basis_selector(settings, method=str(method))
     concrete = st.session_state.get("concrete_material")
     fc_detected = float(getattr(concrete, "fc_MPa", 45.0) or 45.0)
 
@@ -2400,6 +2471,7 @@ def _render_girder_code_based_loss_estimate(
             key="calculate_girder_refined_aashto_loss_estimate",
             type="primary",
             use_container_width=True,
+            disabled=not loss_calculation_enabled,
         )
         if calc_clicked:
             loss_input = _build_girder_refined_aashto_loss_input(
@@ -2445,6 +2517,7 @@ def _render_girder_code_based_loss_estimate(
             key="calculate_girder_code_loss_estimate",
             type="primary",
             use_container_width=True,
+            disabled=not loss_calculation_enabled,
         )
         if calc_clicked:
             if loss_input is None:
@@ -2546,8 +2619,11 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
         status, messages = _girder_loss_force_state_qa_summary(synced_force_table)
         mapping_status, mapping_messages = girder_stage_pe_mapping_status(synced_force_table)
         sls_feed_ready = status == "OK" and mapping_status == "READY" and _girder_force_states_match_strand_layout(strand_table, synced_force_table)
+        loss_settings = _girder_code_loss_settings_from_session()
+        effective_loss_basis = _effective_girder_loss_code_basis(loss_settings)
         metrics = [
             PrestressMetric("Loss mode", "Refined AASHTO" if mode == "Refined AASHTO time-dependent loss" else "Code estimate", "LOSS3A refined workflow" if mode == "Refined AASHTO time-dependent loss" else "approximate LOSS2A workflow", "info", strong=True),
+            PrestressMetric("Loss basis", effective_loss_basis, "inherits from Setup unless overridden", "warning" if effective_loss_basis != project_design_code_from_session(st.session_state) else "info"),
             PrestressMetric("Apply status", st.session_state.get("girder_prestress_code_loss_apply_status", "Pending apply"), "calculated loss result"),
         ]
         metrics.extend(_stage_pe_mapping_metrics_from_table(synced_force_table, sls_feed_ready=sls_feed_ready))
@@ -2566,7 +2642,7 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
             )
         else:
             st.warning(
-                "LOSS2A approximate code-based loss results are engineering-preview values, not final code-certified AASHTO/ACI loss calculations. "
+                "LOSS2A approximate code-based loss results are engineering-preview values. AASHTO calculation is available now; ACI/PCI loss calculation is planned. "
                 "The Calculate-and-use action is the single source of truth for this mode."
             )
         return

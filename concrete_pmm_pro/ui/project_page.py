@@ -9,6 +9,14 @@ from typing import Any
 import streamlit as st
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
+from concrete_pmm_pro.core.design_code import (
+    PROJECT_DESIGN_CODE_OPTIONS,
+    code_edition_options_for,
+    default_code_edition_for,
+    normalize_project_code_edition,
+    normalize_project_design_code,
+    project_code_capability_cards,
+)
 from concrete_pmm_pro.core.analysis_modes import analysis_mode_description, analysis_mode_label, analysis_mode_warnings
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.io.project_io import (
@@ -431,6 +439,19 @@ def _analysis_configuration_cards(analysis_mode: AnalysisModeSettings) -> list[D
     ]
 
 
+def _project_design_code_cards(project: ProjectModel, analysis_mode: AnalysisModeSettings) -> list[DashboardCard]:
+    """Return CODE.SETUP1 source-of-truth and capability guard cards."""
+
+    capability_rows = project_code_capability_cards(project.code, analysis_mode.member_type)
+    cards: list[DashboardCard] = [
+        DashboardCard("Design Code", project.code, "Project-level source of truth", "info", strong=True),
+        DashboardCard("Code Edition", project.code_edition or "Project-specified", "Saved with project JSON", "info"),
+    ]
+    for row in capability_rows[2:]:
+        cards.append(DashboardCard(row["title"], row["value"], row["detail"], row["status"], strong=row["status"] == "warning"))
+    return cards
+
+
 def _sls_stress_point_cards(custom_points: list[Any], include_default_stress_points: bool) -> list[DashboardCard]:
     active_custom_count = len([point for point in custom_points if getattr(point, "active", False)])
     return [
@@ -496,7 +517,11 @@ def _ensure_project_defaults() -> None:
     st.session_state.setdefault("project_name", "Untitled Project")
     st.session_state.setdefault("designer", "")
     st.session_state.setdefault("description", "")
-    st.session_state.setdefault("design_code", "ACI 318")
+    st.session_state["design_code"] = normalize_project_design_code(st.session_state.get("design_code", "ACI 318"))
+    st.session_state["code_edition"] = normalize_project_code_edition(
+        st.session_state["design_code"],
+        st.session_state.get("code_edition"),
+    )
 
 
 def render_project_page() -> None:
@@ -513,12 +538,32 @@ def render_project_page() -> None:
     if error_message:
         st.error(f"Invalid project file: {error_message}")
 
-    with st.form("project_information_form"):
+    with st.container(border=True):
+        st.markdown("#### Project Information")
         st.text_input("Project Name", key="project_name")
         st.text_input("Designer", key="designer")
         st.text_area("Description", key="description")
-        st.text_input("Design Code", key="design_code")
-        if st.form_submit_button("Update Project Info"):
+        code_cols = st.columns(2)
+        with code_cols[0]:
+            if st.session_state.get("design_code") not in PROJECT_DESIGN_CODE_OPTIONS:
+                st.session_state["design_code"] = normalize_project_design_code(st.session_state.get("design_code"))
+            selected_code = st.selectbox(
+                "Design Code",
+                list(PROJECT_DESIGN_CODE_OPTIONS),
+                key="design_code",
+                help="Project-level source of truth. Downstream tabs read this value and show REVIEW when the selected workflow is not fully implemented for that code.",
+            )
+        with code_cols[1]:
+            edition_options = code_edition_options_for(selected_code)
+            if st.session_state.get("code_edition") not in edition_options:
+                st.session_state["code_edition"] = default_code_edition_for(selected_code)
+            st.selectbox(
+                "Code Edition",
+                list(edition_options),
+                key="code_edition",
+                help="Saved with the project JSON. Solver-specific edition calibration is added only by named future milestones.",
+            )
+        if st.button("Update Project Info", use_container_width=False):
             st.success("Project information updated.")
 
     project = project_from_session_state(st.session_state)
@@ -547,6 +592,7 @@ def render_project_page() -> None:
     include_default_stress_points = bool(st.session_state.get("include_default_stress_check_points", True))
     analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
     analysis_mode = _render_analysis_mode_selector(analysis_mode)
+    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
 
     rebar_valid = st.session_state.get("rebars_valid_for_analysis")
     prestress_valid = st.session_state.get("prestress_valid_for_analysis")

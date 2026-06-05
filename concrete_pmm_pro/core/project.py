@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
 from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
+from concrete_pmm_pro.core.design_code import normalize_project_code_edition, normalize_project_design_code
 from concrete_pmm_pro.core.models import (
     ConcreteMaterial,
     LoadCase,
@@ -35,6 +36,7 @@ class ProjectModel(BaseModel):
     description: str | None = None
     unit_system: str = "mm-MPa-N"
     code: str = "ACI 318"
+    code_edition: str | None = None
     version: str = "PS.DB1.2"
 
     section_preset_key: str | None = None
@@ -75,6 +77,9 @@ class ProjectModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_concrete_material_library(self) -> "ProjectModel":
+        normalized_code = normalize_project_design_code(self.code)
+        object.__setattr__(self, "code", normalized_code)
+        object.__setattr__(self, "code_edition", normalize_project_code_edition(normalized_code, self.code_edition))
         library_state = ensure_concrete_material_library(
             concrete_material=self.concrete_material,
             concrete_materials=self.concrete_materials,

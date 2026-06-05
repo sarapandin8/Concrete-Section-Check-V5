@@ -49,6 +49,13 @@ from concrete_pmm_pro.analysis.warnings import (
 )
 from concrete_pmm_pro.code_checks import aci_beta1
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisModeSettings, AnalysisSettings
+from concrete_pmm_pro.core.design_code import (
+    PROJECT_CODE_AASHTO_LRFD,
+    girder_sls_code_for_project_code,
+    normalize_project_design_code,
+    project_code_edition_from_session,
+    project_design_code_from_session,
+)
 from concrete_pmm_pro.core.reinforcement_system import (
     effective_prestress_for_analysis,
     effective_rebars_for_analysis,
@@ -2463,6 +2470,45 @@ def _analysis_card_html(title: str, value: str, detail: str = "", status: str = 
     )
 
 
+def _project_design_code_status_cards(*, workflow: str) -> list[dict[str, object]]:
+    """Return CODE.SETUP1 read-only design-code status cards for Analysis."""
+
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    if workflow == "pmm" and code == PROJECT_CODE_AASHTO_LRFD:
+        capability = "REVIEW / planned"
+        detail = "AASHTO LRFD PMM is planned; current PMM solver remains ACI-oriented until a named solver milestone."
+        status = "warning"
+    elif workflow == "pmm":
+        capability = "Available"
+        detail = "Current PMM workflow is ACI-oriented."
+        status = "ready"
+    elif workflow == "girder_sls":
+        profile_code = girder_sls_code_for_project_code(code)
+        capability = "Preview available"
+        detail = f"Girder SLS stress-limit profile: {profile_code}. Final code-certified girder design remains future work."
+        status = "warning"
+    else:
+        capability = "Review"
+        detail = "Confirm workflow-specific code support before final design use."
+        status = "warning"
+    return [
+        {"title": "Project design code", "value": code, "detail": "Source of truth from Setup", "status": "info", "strong": True},
+        {"title": "Code edition", "value": edition, "detail": "Saved project basis", "status": "info"},
+        {"title": "Workflow code capability", "value": capability, "detail": detail, "status": status, "strong": status == "warning"},
+    ]
+
+
+def _render_project_design_code_guard(*, workflow: str) -> None:
+    _render_analysis_summary_strip(_project_design_code_status_cards(workflow=workflow), columns=3)
+    code = project_design_code_from_session(st.session_state)
+    if workflow == "pmm" and code == PROJECT_CODE_AASHTO_LRFD:
+        st.warning(
+            "Project Design Code is AASHTO LRFD, but the current Column/Pier/Wall/Pylon PMM solver is still ACI-oriented. "
+            "Treat PMM results as REVIEW until the future AASHTO LRFD PMM solver milestone is implemented."
+        )
+
+
 def _render_analysis_summary_strip(cards: list[dict[str, object]], columns: int = 4) -> None:
     for start in range(0, len(cards), columns):
         cols = st.columns(min(columns, len(cards) - start))
@@ -3826,9 +3872,9 @@ def _girder_full_length_sls_stage_rows(
 
 
 def _girder_stage_limit_profile_for_diagram(stage_label: str):
-    """Return the default AASHTO preview stress-limit profile for a stage diagram."""
+    """Return the project-code preview stress-limit profile for a stage diagram."""
 
-    code = DEFAULT_GIRDER_SLS_CODES[0]
+    code = girder_sls_code_for_project_code(project_design_code_from_session(st.session_state))
     limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
     return build_girder_sls_limit_profile(code=code, stage=limit_stage, limit_profile_key=None)
 
@@ -4501,7 +4547,7 @@ def _render_girder_full_length_sls_diagram(
         st.write("- Loads page station rows are the source of N and Mx; My/Vx/Vy/T are stored but not used in this one-dimensional preview.")
         st.write("- Stage Pe is read from the current Prestress Force States / Losses backend values at each station, including debonded-strand step-function effectiveness.")
         st.write("- The graph connects station rows for one Case Name; it does not generate an envelope or interpolate missing load effects beyond the station table.")
-        st.write("- Preview limit lines use the default AASHTO SLS profile for the active stage. The limit stage is not user-selected inside a stage tab.")
+        st.write("- Preview limit lines use the Project Design Code SLS profile for the active stage. The limit stage is not user-selected inside a stage tab.")
         st.write("- GIRDER.SLS4C keeps engineering action hints advisory only; final design still requires code, transfer/development length, shear, end-zone, and detailing checks.")
 
 
@@ -5041,13 +5087,27 @@ def _render_girder_code_limit_preview(
             st.session_state[stage_key] = normalized_stage
 
     controls = st.columns([1.0, 1.05, 1.55, 0.85, 0.85])
+    project_design_code = project_design_code_from_session(st.session_state)
+    project_profile_code = girder_sls_code_for_project_code(project_design_code)
+    code_key = f"girder_code_limit_code_{title}"
+    code_sync_key = f"{code_key}_project_code_sync"
     with controls[0]:
-        code = st.selectbox(
-            "Design code profile",
-            list(DEFAULT_GIRDER_SLS_CODES),
-            key=f"girder_code_limit_code_{title}",
-            help="AASHTO is generally the bridge-girder default; ACI is available for building/general prestressed members.",
-        )
+        if locked_stage_label is not None:
+            code = project_profile_code
+            st.markdown("**Project code profile**")
+            st.caption(f"{project_design_code} → {code}")
+            st.session_state[code_key] = code
+            st.session_state[code_sync_key] = code
+        else:
+            if st.session_state.get(code_sync_key) != project_profile_code or st.session_state.get(code_key) not in DEFAULT_GIRDER_SLS_CODES:
+                st.session_state[code_key] = project_profile_code
+                st.session_state[code_sync_key] = project_profile_code
+            code = st.selectbox(
+                "Design code profile",
+                list(DEFAULT_GIRDER_SLS_CODES),
+                key=code_key,
+                help="Defaults to the Project Design Code from Setup. Override only for legacy/audit trials.",
+            )
     with controls[1]:
         if locked_stage is not None:
             stage = locked_stage
@@ -5437,7 +5497,7 @@ def _render_beam_girder_service_stress_preview() -> None:
             {
                 "title": "Code stress limits",
                 "value": "Optional preview",
-                "detail": "AASHTO + ACI editable limit profiles",
+                "detail": "Uses Project Design Code profile from Setup",
                 "status": "info",
             },
         ],
@@ -6425,7 +6485,9 @@ def _render_analysis_settings_panel() -> None:
     with st.expander("Analysis Settings", expanded=True):
         cols = st.columns(3)
         with cols[0]:
-            code = st.text_input("Code", value=current.code)
+            code = project_design_code_from_session(st.session_state)
+            st.markdown("**Code**")
+            st.caption(f"{code} — from Setup / Project Design Code")
             analysis_type = st.selectbox("Analysis type", ["PMM Surface"], index=0)
             strength_load_type = st.selectbox(
                 "Strength load type",
@@ -6491,6 +6553,7 @@ def _render_analysis_settings_panel() -> None:
 
 def render_analysis_uls_pmm() -> None:
     st.subheader("ULS / PMM")
+    _render_project_design_code_guard(workflow="pmm")
     st.info(
         "ULS compression Pu remains positive. Prestress is treated as internal prestress/reinforcement action "
         "and should not be duplicated as external Pu demand."
@@ -6504,6 +6567,7 @@ def render_analysis_uls_pmm() -> None:
 
 def render_analysis_sls_stress() -> None:
     st.subheader("SLS / Stress & Cracking")
+    _render_project_design_code_guard(workflow="girder_sls")
     st.info("SLS stress convention: compression is negative and tension is positive.")
     _render_beam_girder_service_stress_preview()
     _render_serviceability_expander()

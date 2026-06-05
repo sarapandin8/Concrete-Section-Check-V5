@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings, AnalysisSettings
 from concrete_pmm_pro.core.concrete_materials import c45_precast_material, ensure_concrete_material_library
+from concrete_pmm_pro.core.design_code import normalize_project_code_edition, normalize_project_design_code
 from concrete_pmm_pro.core.reinforcement_system import (
     ORDINARY_REBAR_FLAG_KEY,
     PRESTRESSING_STEEL_FLAG_KEY,
@@ -150,6 +151,27 @@ def _girder_prestress_system_settings_metadata_from_session(session_state: Any) 
     allowed = {"girder_system", "prestress_type", "span_length_m", "station_convention", "debond_model"}
     return {key: _clean_table_value(value) for key, value in settings.items() if key in allowed and not _is_blank(value)}
 
+
+
+def _girder_prestress_code_loss_settings_metadata_from_session(session_state: Any) -> dict[str, Any]:
+    """Serialize selected prestress-loss settings such as local code basis."""
+
+    settings = _get_session_value(session_state, "girder_prestress_code_loss_settings", None)
+    if not isinstance(settings, dict):
+        return {}
+    allowed = {
+        "method",
+        "loss_code_basis",
+        "fci_MPa",
+        "fpj_ratio",
+        "humidity_percent",
+        "relaxation_class",
+        "refined_coefficient_source",
+        "refined_coefficient_preset",
+    }
+    return {key: _clean_table_value(value) for key, value in settings.items() if key in allowed and not _is_blank(value)}
+
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -214,6 +236,9 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     girder_prestress_system_settings = _girder_prestress_system_settings_metadata_from_session(session_state)
     if girder_prestress_system_settings:
         metadata["girder_prestress_system_settings"] = girder_prestress_system_settings
+    girder_prestress_code_loss_settings = _girder_prestress_code_loss_settings_metadata_from_session(session_state)
+    if girder_prestress_code_loss_settings:
+        metadata["girder_prestress_code_loss_settings"] = girder_prestress_code_loss_settings
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -229,7 +254,11 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
         project_name=_get_session_value(session_state, "project_name", "Untitled Project") or "Untitled Project",
         designer=_get_session_value(session_state, "designer", None),
         description=_get_session_value(session_state, "description", None),
-        code=_get_session_value(session_state, "design_code", _get_session_value(session_state, "code", "ACI 318")) or "ACI 318",
+        code=normalize_project_design_code(_get_session_value(session_state, "design_code", _get_session_value(session_state, "code", "ACI 318"))),
+        code_edition=normalize_project_code_edition(
+            _get_session_value(session_state, "design_code", _get_session_value(session_state, "code", "ACI 318")),
+            _get_session_value(session_state, "code_edition", _get_session_value(session_state, "design_code_edition", None)),
+        ),
         section_preset_key=_get_session_value(session_state, "section_preset_key", None),
         section_preset_name=_get_session_value(session_state, "section_preset_name", None),
         section_parameters=dict(_get_session_value(session_state, "section_parameters", {}) or {}),
@@ -271,6 +300,7 @@ def _migrate_legacy_data(data: dict[str, Any]) -> dict[str, Any]:
         "preset_name": "section_preset_name",
         "parameters": "section_parameters",
         "design_code": "code",
+        "design_code_edition": "code_edition",
     }
     for old_name, new_name in legacy_project_fields.items():
         if old_name in migrated and new_name not in migrated:
@@ -486,7 +516,8 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     session_state["project_name"] = project.project_name
     session_state["designer"] = project.designer or ""
     session_state["description"] = project.description or ""
-    session_state["design_code"] = project.code
+    session_state["design_code"] = normalize_project_design_code(project.code)
+    session_state["code_edition"] = normalize_project_code_edition(project.code, project.code_edition)
 
     session_state["section_preset_key"] = project.section_preset_key
     session_state["section_preset_name"] = project.section_preset_name
@@ -531,6 +562,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     girder_prestress_system_settings = project.metadata.get("girder_prestress_system_settings")
     if isinstance(girder_prestress_system_settings, dict):
         session_state["girder_prestress_system_settings"] = dict(girder_prestress_system_settings)
+    girder_prestress_code_loss_settings = project.metadata.get("girder_prestress_code_loss_settings")
+    if isinstance(girder_prestress_code_loss_settings, dict):
+        session_state["girder_prestress_code_loss_settings"] = dict(girder_prestress_code_loss_settings)
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

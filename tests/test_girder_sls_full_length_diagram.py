@@ -39,3 +39,11 @@ def test_full_length_sls_diagram_groups_one_case_name_at_a_time() -> None:
     assert "diagram load case" in SOURCE
     assert "The diagram connects station rows with the same Case Name" in SOURCE
     assert "it does not generate an envelope or interpolate missing load effects" in SOURCE
+
+
+def test_sls4a1_decision_workspace_collapses_audit_controls() -> None:
+    assert "SLS result workspace" in SOURCE
+    assert "Default view shows the full-length decision diagram" in SOURCE
+    assert "Load / section / single-station audit" in SOURCE
+    assert "expanded=False" in SOURCE
+    assert "legacy single-station SLS check/audit panels" in SOURCE

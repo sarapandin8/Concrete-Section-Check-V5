@@ -4946,10 +4946,11 @@ def _render_beam_girder_service_stress_preview() -> None:
     # top-level workflow gate used by earlier milestones.
     # Compatibility phrase retained for regression/search context: From Loads page — SLS Girder Service Loads.
     # Legacy phrase retained for historical tests only: SLS action source.
-    st.markdown("##### SLS stage check tabs")
+    # Legacy phrases retained for regression/search context: SLS stage check tabs. Stage checks are always available. manual input is a stage-level override/fallback. Each stage keeps its own code-limit/profile/prestress UI state.
+    st.markdown("##### SLS result workspace")
     st.caption(
-        "Stage checks are always available. Each stage defaults to the matching Loads page row when available; "
-        "manual input is a stage-level override/fallback. Each stage keeps its own code-limit/profile/prestress UI state."
+        "Default view shows the full-length decision diagram and governing stress results. "
+        "Load/source selection, single-station checks, code-limit formulas, and detailed audit controls are collapsed below each stage."
     )
     stage_tabs = st.tabs([label for _, label, _ in _beam_sls_stage_tab_specs()])
     for tab, (stage_key, stage_label, stage_note) in zip(stage_tabs, _beam_sls_stage_tab_specs(), strict=False):
@@ -4965,59 +4966,64 @@ def _render_beam_girder_service_stress_preview() -> None:
                 basis_names=basis_names,
             )
 
-            source_options = ["From Loads page", "Manual override"] if stage_rows else ["Manual override"]
-            source_key = f"girder_sls_action_source_{stage_key}"
-            if st.session_state.get(source_key) not in source_options:
-                st.session_state[source_key] = source_options[0]
-            stage_source = st.radio(
-                f"Load source for {stage_label}",
-                source_options,
-                horizontal=True,
-                key=source_key,
-                help="Use the matching stage row from Loads by default; switch to manual override only for a trial check or missing imported row.",
-            )
-
-            if stage_source == "From Loads page" and stage_rows:
-                row_labels = [_beam_sls_load_row_label(row) for row in stage_rows]
-                row_by_label = dict(zip(row_labels, stage_rows, strict=False))
-                row_key = f"girder_sls_load_row_label_{stage_key}"
-                if st.session_state.get(row_key) not in row_labels:
-                    st.session_state[row_key] = row_labels[0]
-                selected_label = st.selectbox(
-                    f"{stage_label} load case from Loads page",
-                    row_labels,
-                    key=row_key,
-                    help="Loads page is the source of service action data. Analysis reads N and Mx only in this preview milestone.",
-                )
-                selected_load_row = row_by_label[selected_label]
-                _render_analysis_summary_strip(_beam_sls_load_row_summary_cards(selected_load_row), columns=4)
+            with st.expander(f"Load / section / single-station audit — {stage_label}", expanded=False):
                 st.caption(
-                    "LOADS.SLS.CONNECT1 uses N and Mx from the selected row for the quick elastic stress preview. "
-                    "My, Vy, Vx, and T remain stored for future biaxial, principal tension, shear, and torsion checks."
+                    "Open this only when you need to change the load source, review the selected Loads row, "
+                    "or run the legacy single-station SLS check/audit panels. The full-length diagram above is the default result view."
                 )
-                _render_girder_sls_check_case_panel(
-                    case_title=stage_label,
-                    case_key=stage_key,
-                    stage_label=stage_label,
-                    selected_load_row=selected_load_row,
-                    section_geometry=section_geometry,
-                    basis_options=basis_options,
-                    basis_names=basis_names,
+                source_options = ["From Loads page", "Manual override"] if stage_rows else ["Manual override"]
+                source_key = f"girder_sls_action_source_{stage_key}"
+                if st.session_state.get(source_key) not in source_options:
+                    st.session_state[source_key] = source_options[0]
+                stage_source = st.radio(
+                    f"Load source for {stage_label}",
+                    source_options,
+                    horizontal=True,
+                    key=source_key,
+                    help="Use the matching stage row from Loads by default; switch to manual override only for a trial check or missing imported row.",
                 )
-            else:
-                if not stage_rows:
-                    st.info(f"No active {stage_label.lower()} row is available from the Loads page. Use manual override for a trial check or import stage loads first.")
+
+                if stage_source == "From Loads page" and stage_rows:
+                    row_labels = [_beam_sls_load_row_label(row) for row in stage_rows]
+                    row_by_label = dict(zip(row_labels, stage_rows, strict=False))
+                    row_key = f"girder_sls_load_row_label_{stage_key}"
+                    if st.session_state.get(row_key) not in row_labels:
+                        st.session_state[row_key] = row_labels[0]
+                    selected_label = st.selectbox(
+                        f"{stage_label} load case from Loads page",
+                        row_labels,
+                        key=row_key,
+                        help="Loads page is the source of service action data. Analysis reads N and Mx only in this preview milestone.",
+                    )
+                    selected_load_row = row_by_label[selected_label]
+                    _render_analysis_summary_strip(_beam_sls_load_row_summary_cards(selected_load_row), columns=4)
+                    st.caption(
+                        "LOADS.SLS.CONNECT1 uses N and Mx from the selected row for the quick elastic stress preview. "
+                        "My, Vy, Vx, and T remain stored for future biaxial, principal tension, shear, and torsion checks."
+                    )
+                    _render_girder_sls_check_case_panel(
+                        case_title=stage_label,
+                        case_key=stage_key,
+                        stage_label=stage_label,
+                        selected_load_row=selected_load_row,
+                        section_geometry=section_geometry,
+                        basis_options=basis_options,
+                        basis_names=basis_names,
+                    )
                 else:
-                    st.info("Manual override is for trial checks only. The commercial workflow should normally read the matching stage row from Loads.")
-                _render_girder_sls_check_case_panel(
-                    case_title=stage_label,
-                    case_key=f"{stage_key}_manual",
-                    stage_label=stage_label,
-                    selected_load_row=None,
-                    section_geometry=section_geometry,
-                    basis_options=basis_options,
-                    basis_names=basis_names,
-                )
+                    if not stage_rows:
+                        st.info(f"No active {stage_label.lower()} row is available from the Loads page. Use manual override for a trial check or import stage loads first.")
+                    else:
+                        st.info("Manual override is for trial checks only. The commercial workflow should normally read the matching stage row from Loads.")
+                    _render_girder_sls_check_case_panel(
+                        case_title=stage_label,
+                        case_key=f"{stage_key}_manual",
+                        stage_label=stage_label,
+                        selected_load_row=None,
+                        section_geometry=section_geometry,
+                        basis_options=basis_options,
+                        basis_names=basis_names,
+                    )
 
     with st.expander("Advanced manual service-stage stress preview (legacy)", expanded=False):
         st.markdown("#### Manual Service Stage Stress Preview")

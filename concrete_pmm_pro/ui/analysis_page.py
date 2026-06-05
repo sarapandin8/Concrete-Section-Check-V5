@@ -134,6 +134,9 @@ from concrete_pmm_pro.serviceability import (
     transformed_section_properties_to_dataframe,
     validate_stress_check_points_against_geometry,
 )
+
+from concrete_pmm_pro.serviceability.girder_prestress_station import evaluate_girder_prestress_station
+
 from concrete_pmm_pro.visualization.pmm_dashboard import (
     build_selected_load_case_summary,
     demand_capacity_result_to_display_dataframe,
@@ -3690,6 +3693,288 @@ def _initialize_girder_code_limit_stage_for_case(title: str, stage_label: str) -
         st.session_state[stage_key] = default_stage
 
 
+def _girder_sls_stage_pe_value_from_station(station_result: object, stage_label: str) -> float:
+    """Return the effective stage Pe at one station for the full-length SLS preview."""
+
+    normalized = _beam_sls_stage_label_for_analysis(stage_label)
+    if normalized == "Transfer stage":
+        return float(getattr(station_result, "pe_transfer_eff_kN", 0.0) or 0.0)
+    if normalized == "Construction stage":
+        return float(getattr(station_result, "pe_construction_eff_kN", 0.0) or 0.0)
+    return float(getattr(station_result, "pe_eff_final_eff_kN", 0.0) or 0.0)
+
+
+def _girder_sls_span_length_from_session(rows: list[Mapping[str, object]] | None = None) -> float:
+    """Return a safe girder span length for station-based SLS previews."""
+
+    settings = st.session_state.get("girder_prestress_system_settings") or {}
+    span = _analysis_float_or_zero(settings.get("span_length_m"))
+    if span > 0.0:
+        return span
+    max_station = 0.0
+    for row in rows or []:
+        max_station = max(max_station, _analysis_float_or_zero(row.get("Station x (m)")))
+    return max(1.0, max_station)
+
+
+def _girder_full_length_sls_stage_rows(
+    *,
+    stage_label: str,
+    load_rows: list[dict[str, object]],
+    basis_options: object,
+    basis_names: list[str],
+    span_length_m: float,
+) -> pd.DataFrame:
+    """Return station-based combined top/bottom stress rows for one SLS stage.
+
+    GIRDER.SLS4A is a preview graph/data helper.  It reads station rows from
+    the Loads workflow and stage Pe from the Prestress force-state/loss workflow;
+    it does not change any solver, load table, prestress table, or code-limit
+    formula.
+    """
+
+    strand_table = st.session_state.get("girder_strand_layout_table")
+    rows: list[dict[str, object]] = []
+    for raw_row in load_rows:
+        x_m = _analysis_float_or_zero(raw_row.get("Station x (m)"))
+        basis_name = _beam_sls_load_basis_key(raw_row, basis_names) or _beam_sls_default_basis_for_stage(stage_label, basis_names)
+        basis = basis_options.bases[basis_name]
+        service = run_basic_girder_service_stress(
+            basis,
+            N_kN=_analysis_float_or_zero(raw_row.get("N")),
+            M_kNm=_analysis_float_or_zero(raw_row.get("Mx")),
+        )
+        pe_kN = 0.0
+        yps = None
+        ps_top = 0.0
+        ps_bottom = 0.0
+        active_groups = ""
+        if strand_table is not None:
+            try:
+                station = evaluate_girder_prestress_station(
+                    strand_table,
+                    x_m=x_m,
+                    span_length_m=span_length_m,
+                )
+                pe_kN = _girder_sls_stage_pe_value_from_station(station, stage_label)
+                yps = station.yps_eff_mm_from_bottom
+                active_groups = station.active_group_ids
+                if pe_kN > 0.0 and yps is not None:
+                    prestress = run_girder_prestress_stress_effect(
+                        basis,
+                        Pe_eff_kN=pe_kN,
+                        tendon_y_from_bottom_mm=float(yps),
+                    )
+                    ps_top = prestress.top.total_stress_MPa
+                    ps_bottom = prestress.bottom.total_stress_MPa
+            except (TypeError, ValueError, KeyError) as exc:
+                active_groups = f"Prestress unavailable: {exc}"
+        top_total = service.top.total_stress_MPa + ps_top
+        bottom_total = service.bottom.total_stress_MPa + ps_bottom
+        rows.append(
+            {
+                "Station x (m)": x_m,
+                "Case Name": str(raw_row.get("Case Name") or "Unnamed"),
+                "Stage": _beam_sls_stage_label_for_analysis(raw_row.get("Stage")) or stage_label,
+                "Basis": basis_options.labels.get(basis_name, basis_name),
+                "N (kN)": _analysis_float_or_zero(raw_row.get("N")),
+                "Mx (kN-m)": _analysis_float_or_zero(raw_row.get("Mx")),
+                "Pe stage (kN)": pe_kN,
+                "yps eff (mm)": yps,
+                "Top service (MPa)": service.top.total_stress_MPa,
+                "Bottom service (MPa)": service.bottom.total_stress_MPa,
+                "Top PS (MPa)": ps_top,
+                "Bottom PS (MPa)": ps_bottom,
+                "Top total (MPa)": top_total,
+                "Bottom total (MPa)": bottom_total,
+                "Max compression (MPa)": min(top_total, bottom_total),
+                "Max tension (MPa)": max(top_total, bottom_total),
+                "Active PS groups": active_groups,
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["Case Name", "Station x (m)"]).reset_index(drop=True)
+
+
+def _girder_stage_limit_profile_for_diagram(stage_label: str):
+    """Return the default AASHTO preview stress-limit profile for a stage diagram."""
+
+    code = DEFAULT_GIRDER_SLS_CODES[0]
+    limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
+    return build_girder_sls_limit_profile(code=code, stage=limit_stage, limit_profile_key=None)
+
+
+def _girder_sls_diagram_limit_summary(stage_label: str) -> tuple[float, float, str]:
+    """Return compression/tension preview limits for full-length diagrams."""
+
+    fc = _girder_fc_for_sls_limit_preview()
+    profile = _girder_stage_limit_profile_for_diagram(stage_label)
+    compression_limit = profile.compression_limit_MPa(fc)
+    tension_allowable = profile.tension_allowable_MPa(fc)
+    return float(compression_limit), float(tension_allowable), profile.limit_profile_label
+
+
+def _girder_full_length_preview_status(df: pd.DataFrame, stage_label: str) -> tuple[str, str, str]:
+    """Return compact Preview PASS/FAIL/REVIEW status for a full-length SLS table."""
+
+    if df.empty:
+        return "REVIEW", "No station rows", "warning"
+    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    min_stress = float(df[["Top total (MPa)", "Bottom total (MPa)"]].min().min())
+    max_stress = float(df[["Top total (MPa)", "Bottom total (MPa)"]].max().max())
+    compression_ok = min_stress >= -compression_limit - _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA
+    tension_ok = max_stress <= tension_limit + _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA
+    if compression_ok and tension_ok:
+        return "Preview PASS", profile_label, "ready"
+    return "Preview FAIL", f"{profile_label}; check compression/tension exceedance", "danger"
+
+
+def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -> go.Figure:
+    """Build a top/bottom stress-along-station preview figure."""
+
+    fig = go.Figure()
+    if df.empty:
+        return fig
+    x = df["Station x (m)"]
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=df["Top total (MPa)"],
+            mode="lines+markers",
+            name="Top total stress",
+            hovertemplate="x=%{x:.3f} m<br>Top total=%{y:.3f} MPa<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=df["Bottom total (MPa)"],
+            mode="lines+markers",
+            name="Bottom total stress",
+            hovertemplate="x=%{x:.3f} m<br>Bottom total=%{y:.3f} MPa<extra></extra>",
+        )
+    )
+    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    x_min = float(x.min())
+    x_max = float(x.max())
+    if abs(x_max - x_min) <= 1e-9:
+        x_min -= 0.5
+        x_max += 0.5
+    fig.add_trace(
+        go.Scatter(
+            x=[x_min, x_max],
+            y=[-compression_limit, -compression_limit],
+            mode="lines",
+            name="Compression preview limit",
+            line={"dash": "dash"},
+            hovertemplate=f"Compression limit = -{compression_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
+        )
+    )
+    if tension_limit > _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+        fig.add_trace(
+            go.Scatter(
+                x=[x_min, x_max],
+                y=[tension_limit, tension_limit],
+                mode="lines",
+                name="Tension preview limit",
+                line={"dash": "dash"},
+                hovertemplate=f"Tension limit = {tension_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 MPa", annotation_position="top left")
+    fig.update_layout(
+        height=420,
+        margin={"l": 20, "r": 20, "t": 40, "b": 40},
+        xaxis_title="station x from left support (m)",
+        yaxis_title="stress (MPa) · compression − / tension +",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+        plot_bgcolor="white",
+    )
+    fig.update_xaxes(gridcolor="rgba(0,0,0,0.08)")
+    fig.update_yaxes(gridcolor="rgba(0,0,0,0.08)", zerolinecolor="rgba(0,0,0,0.20)")
+    return fig
+
+
+def _render_girder_full_length_sls_diagram(
+    *,
+    stage_label: str,
+    stage_rows: list[dict[str, object]],
+    basis_options: object,
+    basis_names: list[str],
+) -> None:
+    """Render GIRDER.SLS4A station-based stress diagram for one stage."""
+
+    st.markdown("##### Full-length SLS stress diagram preview")
+    st.caption(
+        "GIRDER.SLS4A plots station-based top/bottom stresses from Loads rows and active stage Pe. "
+        "It is a preview graph, not final code-certified staged design. Transfer-length ramp, development, shear, and end-zone checks remain future work."
+    )
+    if not stage_rows:
+        st.info("Import or enter active Loads rows for this stage to plot full-length SLS stress along the girder.")
+        return
+    case_names = sorted({str(row.get("Case Name") or "Unnamed") for row in stage_rows})
+    selected_case = st.selectbox(
+        f"{stage_label} diagram load case",
+        case_names,
+        key=f"girder_sls4a_case_{_beam_sls_stage_label_for_analysis(stage_label).replace(' ', '_')}",
+        help="The diagram connects station rows with the same Case Name. Use one case per diagram to avoid mixing envelopes with single-case curves.",
+    )
+    selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
+    span = _girder_sls_span_length_from_session(selected_rows)
+    df = _girder_full_length_sls_stage_rows(
+        stage_label=stage_label,
+        load_rows=selected_rows,
+        basis_options=basis_options,
+        basis_names=basis_names,
+        span_length_m=span,
+    )
+    if df.empty:
+        st.info("No valid station rows are available for this diagram case.")
+        return
+    status, detail, style = _girder_full_length_preview_status(df, stage_label)
+    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    governing_comp_idx = df["Max compression (MPa)"].idxmin()
+    governing_tens_idx = df["Max tension (MPa)"].idxmax()
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Diagram status",
+                "value": status,
+                "detail": detail,
+                "status": style,
+            },
+            {
+                "title": "Governing compression",
+                "value": _format_girder_stress_mpa(df.loc[governing_comp_idx, "Max compression (MPa)"]),
+                "detail": f"x={float(df.loc[governing_comp_idx, 'Station x (m)']):.3f} m · limit -{compression_limit:.3f} MPa",
+                "status": "ready" if float(df.loc[governing_comp_idx, "Max compression (MPa)"]) >= -compression_limit else "danger",
+            },
+            {
+                "title": "Governing tension",
+                "value": _format_girder_stress_mpa(df.loc[governing_tens_idx, "Max tension (MPa)"]),
+                "detail": f"x={float(df.loc[governing_tens_idx, 'Station x (m)']):.3f} m · limit {tension_limit:.3f} MPa",
+                "status": "ready" if float(df.loc[governing_tens_idx, "Max tension (MPa)"]) <= tension_limit else "danger",
+            },
+            {
+                "title": "Limit profile",
+                "value": profile_label,
+                "detail": "AASHTO default preview line; editable single-case code checks remain below",
+                "status": "info",
+            },
+        ],
+        columns=4,
+    )
+    st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
+    with st.expander(f"Full-length stress table — {stage_label}", expanded=False):
+        st.dataframe(_clean_girder_stress_dataframe(df), use_container_width=True, hide_index=True)
+    with st.expander("Full-length diagram assumptions", expanded=False):
+        st.write("- Loads page station rows are the source of N and Mx; My/Vx/Vy/T are stored but not used in this one-dimensional preview.")
+        st.write("- Stage Pe is read from the current Prestress Force States / Losses backend values at each station, including debonded-strand step-function effectiveness.")
+        st.write("- The graph connects station rows for one Case Name; it does not generate an envelope or interpolate missing load effects beyond the station table.")
+        st.write("- Preview limit lines use the default AASHTO SLS profile for the selected stage. Open the single-case code-limit panels below for editable profile/audit controls.")
+
+
 def _render_girder_sls_check_case_panel(
     *,
     case_title: str,
@@ -4671,6 +4956,14 @@ def _render_beam_girder_service_stress_preview() -> None:
         with tab:
             stage_rows = _beam_sls_rows_for_stage(beam_sls_rows, stage_label)
             st.caption(stage_note)
+
+            # GIRDER.SLS4A — full-length station-based stress diagram preview.
+            _render_girder_full_length_sls_diagram(
+                stage_label=stage_label,
+                stage_rows=stage_rows,
+                basis_options=basis_options,
+                basis_names=basis_names,
+            )
 
             source_options = ["From Loads page", "Manual override"] if stage_rows else ["Manual override"]
             source_key = f"girder_sls_action_source_{stage_key}"

@@ -3830,6 +3830,300 @@ def _girder_full_length_preview_status(df: pd.DataFrame, stage_label: str) -> tu
     return "Preview FAIL", f"{profile_label}; check compression/tension exceedance", "danger"
 
 
+def _girder_sls4b_case_state_key(stage_label: str) -> str:
+    """Return the shared Streamlit key for a stage diagram case selector."""
+
+    return f"girder_sls4a_case_{_beam_sls_stage_label_for_analysis(stage_label).replace(' ', '_')}"
+
+
+def _girder_sls4b_case_names(stage_rows: list[dict[str, object]]) -> list[str]:
+    """Return stable case-name choices for full-length SLS result views."""
+
+    return sorted({str(row.get("Case Name") or "Unnamed") for row in stage_rows})
+
+
+def _girder_sls4b_selected_case_for_stage(stage_label: str, stage_rows: list[dict[str, object]]) -> str | None:
+    """Return and normalize the selected case name used by SLS4A/SLS4B views.
+
+    GIRDER.SLS4B keeps the combined stage table and the per-stage diagram in
+    sync.  The selected case remains a UI presentation choice only; it does not
+    mutate Loads rows, prestress force states, or stress solver inputs.
+    """
+
+    case_names = _girder_sls4b_case_names(stage_rows)
+    if not case_names:
+        return None
+    key = _girder_sls4b_case_state_key(stage_label)
+    if st.session_state.get(key) not in case_names:
+        st.session_state[key] = case_names[0]
+    return str(st.session_state[key])
+
+
+def _girder_sls_demand_utilization(actual_MPa: float, limit_MPa: float, *, demand_type: str) -> float | None:
+    """Return display-only stress utilization for compression or tension demand."""
+
+    if not math.isfinite(float(limit_MPa)) or float(limit_MPa) < 0.0:
+        return None
+    if demand_type == "compression":
+        demand = max(0.0, -float(actual_MPa))
+    else:
+        demand = max(0.0, float(actual_MPa))
+    if float(limit_MPa) <= _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+        if demand <= _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+            return 0.0
+        return math.inf
+    return demand / float(limit_MPa)
+
+
+def _girder_sls_fiber_for_value(row: Mapping[str, object], target_value: float, *, demand_type: str) -> str:
+    """Return Top/Bottom fiber label for a governing stress value."""
+
+    top = float(row.get("Top total (MPa)", 0.0) or 0.0)
+    bottom = float(row.get("Bottom total (MPa)", 0.0) or 0.0)
+    if demand_type == "compression":
+        if abs(top - target_value) <= abs(bottom - target_value):
+            return "Top"
+        return "Bottom"
+    if abs(top - target_value) <= abs(bottom - target_value):
+        return "Top"
+    return "Bottom"
+
+
+def _girder_sls4b_governing_demand_rows(df: pd.DataFrame, stage_label: str) -> list[dict[str, object]]:
+    """Return compression and tension governing rows for one full-length stage result.
+
+    The function is a SLS result-interpretation helper only.  It consumes the
+    existing GIRDER.SLS4A dataframe and default preview limits; no stress formula,
+    Pe(x), section-basis, or load-schema logic is changed.
+    """
+
+    if df.empty:
+        return []
+    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    comp_idx = df["Max compression (MPa)"].idxmin()
+    tens_idx = df["Max tension (MPa)"].idxmax()
+    demand_specs = [
+        ("Compression", "compression", comp_idx, "Max compression (MPa)", -compression_limit),
+        ("Tension", "tension", tens_idx, "Max tension (MPa)", tension_limit),
+    ]
+    rows: list[dict[str, object]] = []
+    for label, demand_type, idx, value_column, signed_limit in demand_specs:
+        row = df.loc[idx]
+        actual = float(row[value_column])
+        limit_magnitude = compression_limit if demand_type == "compression" else tension_limit
+        utilization = _girder_sls_demand_utilization(actual, limit_magnitude, demand_type=demand_type)
+        status = "Preview PASS"
+        if utilization is None:
+            status = "REVIEW"
+        elif math.isinf(float(utilization)) or float(utilization) > 1.0 + _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+            status = "Preview FAIL"
+        rows.append(
+            {
+                "Demand": label,
+                "Status": status,
+                "Station x (m)": float(row["Station x (m)"]),
+                "Fiber": _girder_sls_fiber_for_value(row, actual, demand_type=demand_type),
+                "Actual stress (MPa)": actual,
+                "Limit stress (MPa)": float(signed_limit),
+                "Utilization": utilization,
+                "Limit profile": profile_label,
+                "Case Name": str(row.get("Case Name") or "Unnamed"),
+                "Basis": str(row.get("Basis") or ""),
+            }
+        )
+    return rows
+
+
+def _girder_sls4b_controlling_row(demand_rows: list[dict[str, object]]) -> dict[str, object] | None:
+    """Return the display row with the highest utilization for one stage."""
+
+    if not demand_rows:
+        return None
+
+    def sort_key(row: Mapping[str, object]) -> float:
+        value = row.get("Utilization")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return -math.inf
+        if math.isnan(numeric):
+            return -math.inf
+        return numeric
+
+    return max(demand_rows, key=sort_key)
+
+
+def _girder_sls4b_stage_decision_row(df: pd.DataFrame, stage_label: str, selected_case: str) -> dict[str, object]:
+    """Return one compact stage-level decision row for the combined SLS table."""
+
+    status, detail, _style = _girder_full_length_preview_status(df, stage_label)
+    demand_rows = _girder_sls4b_governing_demand_rows(df, stage_label)
+    controlling = _girder_sls4b_controlling_row(demand_rows)
+    if controlling is None:
+        return {
+            "Stage": stage_label,
+            "Case Name": selected_case,
+            "Status": "REVIEW",
+            "Controls": "No valid station rows",
+            "Station x (m)": None,
+            "Fiber": "N/A",
+            "Actual stress (MPa)": None,
+            "Limit stress (MPa)": None,
+            "Utilization": None,
+            "Limit profile": detail,
+        }
+    return {
+        "Stage": stage_label,
+        "Case Name": selected_case,
+        "Status": status,
+        "Controls": str(controlling["Demand"]),
+        "Station x (m)": controlling["Station x (m)"],
+        "Fiber": controlling["Fiber"],
+        "Actual stress (MPa)": controlling["Actual stress (MPa)"],
+        "Limit stress (MPa)": controlling["Limit stress (MPa)"],
+        "Utilization": controlling["Utilization"],
+        "Limit profile": controlling["Limit profile"],
+    }
+
+
+def _format_girder_sls_utilization(value: object) -> str:
+    """Format display-only stress utilization for compact SLS result tables."""
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(numeric):
+        return "∞"
+    return f"{numeric:.3f}"
+
+
+def _clean_girder_sls4b_decision_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Format the SLS4B governing result table for commercial-style display."""
+
+    if df.empty:
+        return df
+    cleaned = _clean_girder_stress_dataframe(df)
+    if "Station x (m)" in cleaned.columns:
+        cleaned["Station x (m)"] = cleaned["Station x (m)"].map(
+            lambda value: "N/A" if _analysis_value_is_blank(value) else f"{float(value):.3f}"
+        )
+    if "Utilization" in cleaned.columns:
+        cleaned["Utilization"] = cleaned["Utilization"].map(_format_girder_sls_utilization)
+    return cleaned
+
+
+def _render_girder_sls4b_governing_summary_cards(summary_df: pd.DataFrame) -> None:
+    """Render compact all-stage governing result cards."""
+
+    if summary_df.empty:
+        return
+    failed = int((summary_df["Status"] == "Preview FAIL").sum()) if "Status" in summary_df.columns else 0
+    review = int((summary_df["Status"] == "REVIEW").sum()) if "Status" in summary_df.columns else 0
+    complete = int(len(summary_df))
+    controlling = _girder_sls4b_controlling_row(summary_df.to_dict("records"))
+    controlling_stage = str(controlling.get("Stage", "N/A")) if controlling else "N/A"
+    controlling_util = _format_girder_sls_utilization(controlling.get("Utilization")) if controlling else "N/A"
+    if failed:
+        overall_status = "Preview FAIL"
+        style = "danger"
+        detail = "At least one stage exceeds the preview stress limit."
+    elif review:
+        overall_status = "REVIEW"
+        style = "warning"
+        detail = "One or more stages lack a complete preview decision."
+    else:
+        overall_status = "Preview PASS"
+        style = "ready"
+        detail = "All available stages are within preview compression/tension limits."
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Overall SLS preview",
+                "value": overall_status,
+                "detail": detail,
+                "status": style,
+                "strong": True,
+            },
+            {
+                "title": "Controlling stage",
+                "value": controlling_stage,
+                "detail": f"Max utilization {controlling_util}",
+                "status": "danger" if failed else "info",
+            },
+            {
+                "title": "Stages summarized",
+                "value": f"{complete:,}",
+                "detail": f"Preview FAIL {failed:,} · REVIEW {review:,}",
+                "status": "warning" if review else "ready",
+            },
+            {
+                "title": "Result basis",
+                "value": "Station table + Pe(x)",
+                "detail": "Uses selected case per stage; audit details remain below",
+                "status": "neutral",
+            },
+        ],
+        columns=4,
+    )
+
+
+def _render_girder_sls4b_combined_stage_result_table(
+    *,
+    beam_sls_rows: list[dict[str, object]],
+    basis_options: object,
+    basis_names: list[str],
+) -> None:
+    """Render GIRDER.SLS4B combined governing station / result table.
+
+    GIRDER.SLS4B is UI/result-interpretation polish.  It reuses the existing
+    full-length stage stress dataframe and preview-limit helper, keeping audit
+    details collapsed: no solver, Pe, load, geometry, or report changes.
+    """
+
+    st.markdown("##### Governing station / stage result summary")
+    st.caption(
+        "GIRDER.SLS4B summarizes Transfer, Construction, and Service in one decision table. "
+        "It reports actual stress versus the matching preview limit, utilization, governing station, and controlling fiber."
+    )
+    if not beam_sls_rows:
+        st.info("No active Beam/Girder SLS Loads rows are available for a combined stage summary.")
+        return
+    summary_rows: list[dict[str, object]] = []
+    demand_detail_rows: list[dict[str, object]] = []
+    for _stage_key, stage_label, _stage_note in _beam_sls_stage_tab_specs():
+        stage_rows = _beam_sls_rows_for_stage(beam_sls_rows, stage_label)
+        selected_case = _girder_sls4b_selected_case_for_stage(stage_label, stage_rows)
+        if not selected_case:
+            continue
+        selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
+        span = _girder_sls_span_length_from_session(selected_rows)
+        df = _girder_full_length_sls_stage_rows(
+            stage_label=stage_label,
+            load_rows=selected_rows,
+            basis_options=basis_options,
+            basis_names=basis_names,
+            span_length_m=span,
+        )
+        if df.empty:
+            continue
+        summary_rows.append(_girder_sls4b_stage_decision_row(df, stage_label, selected_case))
+        for demand_row in _girder_sls4b_governing_demand_rows(df, stage_label):
+            demand_detail_rows.append({"Stage": stage_label, **demand_row})
+    if not summary_rows:
+        st.info("Active SLS rows exist, but no valid full-length stage result could be summarized. Check station, case name, and section basis inputs.")
+        return
+    summary_df = pd.DataFrame(summary_rows)
+    _render_girder_sls4b_governing_summary_cards(summary_df)
+    st.dataframe(_clean_girder_sls4b_decision_dataframe(summary_df), use_container_width=True, hide_index=True)
+    with st.expander("Compression / tension demand details — all stages", expanded=False):
+        st.caption(
+            "Shows both governing compression and governing tension demand for each summarized stage. "
+            "Compression limit is displayed as a negative stress line; tension limit is displayed as a positive stress line."
+        )
+        st.dataframe(_clean_girder_sls4b_decision_dataframe(pd.DataFrame(demand_detail_rows)), use_container_width=True, hide_index=True)
+
+
 def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -> go.Figure:
     """Build a top/bottom stress-along-station preview figure."""
 
@@ -3913,11 +4207,12 @@ def _render_girder_full_length_sls_diagram(
     if not stage_rows:
         st.info("Import or enter active Loads rows for this stage to plot full-length SLS stress along the girder.")
         return
-    case_names = sorted({str(row.get("Case Name") or "Unnamed") for row in stage_rows})
+    case_names = _girder_sls4b_case_names(stage_rows)
+    _girder_sls4b_selected_case_for_stage(stage_label, stage_rows)
     selected_case = st.selectbox(
         f"{stage_label} diagram load case",
         case_names,
-        key=f"girder_sls4a_case_{_beam_sls_stage_label_for_analysis(stage_label).replace(' ', '_')}",
+        key=_girder_sls4b_case_state_key(stage_label),
         help="The diagram connects station rows with the same Case Name. Use one case per diagram to avoid mixing envelopes with single-case curves.",
     )
     selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
@@ -4951,6 +5246,11 @@ def _render_beam_girder_service_stress_preview() -> None:
     st.caption(
         "Default view shows the full-length decision diagram and governing stress results. "
         "Load/source selection, single-station checks, code-limit formulas, and detailed audit controls are collapsed below each stage."
+    )
+    _render_girder_sls4b_combined_stage_result_table(
+        beam_sls_rows=beam_sls_rows,
+        basis_options=basis_options,
+        basis_names=basis_names,
     )
     stage_tabs = st.tabs([label for _, label, _ in _beam_sls_stage_tab_specs()])
     for tab, (stage_key, stage_label, stage_note) in zip(stage_tabs, _beam_sls_stage_tab_specs(), strict=False):

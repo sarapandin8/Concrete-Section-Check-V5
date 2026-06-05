@@ -47,3 +47,23 @@ def test_sls4a1_decision_workspace_collapses_audit_controls() -> None:
     assert "Load / section / single-station audit" in SOURCE
     assert "expanded=False" in SOURCE
     assert "legacy single-station SLS check/audit panels" in SOURCE
+
+
+def test_sls4b_has_combined_governing_stage_result_summary() -> None:
+    assert "GIRDER.SLS4B" in SOURCE
+    assert "Governing station / stage result summary" in SOURCE
+    assert "_render_girder_sls4b_combined_stage_result_table" in SOURCE
+    assert "actual stress versus the matching preview limit" in SOURCE
+    assert "controlling fiber" in SOURCE
+    assert "Overall SLS preview" in SOURCE
+    assert "Controlling stage" in SOURCE
+
+
+def test_sls4b_result_table_reports_utilization_without_solver_changes() -> None:
+    assert "_girder_sls4b_governing_demand_rows" in SOURCE
+    assert "_girder_sls4b_stage_decision_row" in SOURCE
+    assert "Utilization" in SOURCE
+    assert "Limit stress (MPa)" in SOURCE
+    assert "Compression / tension demand details" in SOURCE
+    assert "no stress formula" in SOURCE
+    assert "no solver, Pe, load, geometry, or report" in SOURCE

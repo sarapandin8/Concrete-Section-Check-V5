@@ -9,7 +9,11 @@ from typing import Any
 import streamlit as st
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
-from concrete_pmm_pro.core.analysis_modes import analysis_mode_label
+from concrete_pmm_pro.core.analysis_modes import (
+    analysis_mode_label,
+    is_bridge_beam_girder_workflow,
+    is_building_beam_girder_workflow,
+)
 from concrete_pmm_pro.core.concrete_materials import (
     DEFAULT_DECK_TOPPING_MATERIAL,
     c45_precast_material,
@@ -314,6 +318,22 @@ def _hidden_material_parameter_names(preset: dict[str, Any]) -> set[str]:
     return set()
 
 
+def _bridge_composite_metadata_enabled(
+    preset: dict[str, Any], settings: AnalysisModeSettings | None = None
+) -> bool:
+    """Return True when bridge-specific composite metadata controls should show.
+
+    WORKFLOW.TYPE3 separates section geometry from workflow/design-code
+    context.  Precast I-Girder geometry may be selected in the Building
+    Beam/Girder ACI workflow, but AASHTO Be, bridge staged composite metadata,
+    and bridge SLS assumptions remain hidden unless the active workflow is the
+    Bridge Beam/Girder workflow.
+    """
+
+    active_settings = settings or _analysis_mode_from_session_state()
+    return _is_composite_capable_preset(preset) and is_bridge_beam_girder_workflow(active_settings)
+
+
 def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, Any]:
     materials = _ensure_concrete_material_session()
     material_map = concrete_materials_by_name(materials)
@@ -338,14 +358,15 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
     st.session_state["primary_concrete_material_name"] = selected_primary
     st.session_state["concrete_material"] = primary_material
 
+    bridge_composite_metadata = _bridge_composite_metadata_enabled(preset)
     assignment: dict[str, Any] = {
         "primary_material_name": selected_primary,
         "primary_fc_MPa": primary_material.fc_MPa,
         "Ebeam_MPa": primary_material.effective_Ec_MPa,
-        "is_composite_applicable": _is_composite_capable_preset(preset),
+        "is_composite_applicable": bridge_composite_metadata,
     }
 
-    if _is_composite_capable_preset(preset):
+    if bridge_composite_metadata:
         deck_name = st.session_state.get("deck_topping_material_name", DEFAULT_DECK_TOPPING_MATERIAL)
         deck_index = _material_select_index(material_names, deck_name, fallback_index=min(1, len(material_names) - 1))
         if deck_name not in material_map:
@@ -387,7 +408,15 @@ def _render_concrete_material_assignment(preset: dict[str, Any]) -> dict[str, An
             unsafe_allow_html=True,
         )
     else:
-        st.caption("Deck / topping material: Not applicable for this section type.")
+        settings = _analysis_mode_from_session_state()
+        if _is_composite_capable_preset(preset) and is_building_beam_girder_workflow(settings):
+            st.caption(
+                "Deck / topping material: Hidden for Building Beam/Girder. "
+                "The selected precast girder is used as shared geometry under the ACI 318 building workflow; "
+                "bridge AASHTO Be and staged composite metadata are not active."
+            )
+        else:
+            st.caption("Deck / topping material: Not applicable for this section type.")
         st.markdown(
             _kv_panel_html(
                 [
@@ -408,7 +437,7 @@ def _render_section_builder_status_strip(preset: dict[str, Any], material_assign
     primary = str(material_assignment.get("primary_material_name", "N/A"))
     deck = str(material_assignment.get("deck_topping_material_name", "N/A"))
     material_detail = f"Precast {primary}"
-    if _is_composite_capable_preset(preset):
+    if _bridge_composite_metadata_enabled(preset, settings):
         material_detail += f" / topping {deck}"
 
     rebar_status = "Enabled" if ordinary_rebar_enabled(st.session_state) else "Disabled"
@@ -607,31 +636,47 @@ def _render_reinforcement_prestress_system_panel(preset: dict[str, Any]) -> None
 
 
 _COLUMN_PIER_SECTION_CATEGORIES = frozenset({"Basic Solid", "Hollow / Voided", "Pier / Column", "Custom"})
-_BEAM_GIRDER_SECTION_CATEGORIES = frozenset(
+_BRIDGE_BEAM_GIRDER_SECTION_CATEGORIES = frozenset(
     {"Precast Composite Girder", "General / Non-composite Girder", "Girder", "Box Girder", "Custom"}
+)
+_BUILDING_BEAM_GIRDER_SECTION_CATEGORIES = frozenset(
+    {"Basic Solid", "Hollow / Voided", "General / Non-composite Girder", "Custom"}
+)
+_BUILDING_SHARED_PRECAST_GIRDER_PRESET_KEYS = frozenset(
+    {
+        # Shared geometry only: available under Building Beam/Girder ACI workflow
+        # without enabling bridge-specific AASHTO Be, staged SLS, or SDL tools.
+        "parametric_i_girder",
+    }
 )
 
 
 def _section_categories_for_member_type(settings: AnalysisModeSettings) -> set[str]:
     """Return the section preset categories allowed by the active member workflow.
 
-    MEMBER.TYPE1.3 removes the ambiguous General Section workflow. Custom
-    presets remain available inside the active workflow: Custom PMM sections for
-    Column/Pier/Wall/Pylon and Custom Girder sections for Beam/Girder. This is a
-    UI-routing guard only; it does not change geometry generation or solver
-    behavior.
+    WORKFLOW.TYPE3 separates physical section geometry from design-code context.
+    Bridge Beam/Girder exposes bridge girder categories under AASHTO LRFD.
+    Building Beam/Girder exposes building beam categories under ACI 318 plus
+    explicitly shared precast girder geometry such as Precast I-Girder.  Shared
+    geometry does not activate bridge-only load/stage/effective-width tools.
     """
 
-    if settings.member_type == "beam_girder":
-        return set(_BEAM_GIRDER_SECTION_CATEGORIES)
+    if is_bridge_beam_girder_workflow(settings):
+        return set(_BRIDGE_BEAM_GIRDER_SECTION_CATEGORIES)
+    if is_building_beam_girder_workflow(settings):
+        return set(_BUILDING_BEAM_GIRDER_SECTION_CATEGORIES | {"Precast Composite Girder"})
     return set(_COLUMN_PIER_SECTION_CATEGORIES)
 
 
 def _preset_matches_member_type(preset: dict[str, Any], settings: AnalysisModeSettings) -> bool:
     """Return whether a section preset should be shown for the active workflow."""
 
+    category = str(preset.get("category", "General"))
+    preset_key = str(preset.get("key", ""))
+    if is_building_beam_girder_workflow(settings):
+        return category in _BUILDING_BEAM_GIRDER_SECTION_CATEGORIES or preset_key in _BUILDING_SHARED_PRECAST_GIRDER_PRESET_KEYS
     allowed_categories = _section_categories_for_member_type(settings)
-    return str(preset.get("category", "General")) in allowed_categories
+    return category in allowed_categories
 
 
 def _filter_presets_for_member_type(
@@ -659,6 +704,12 @@ def _categories_for_filtered_presets(
 def _member_type_filter_description(settings: AnalysisModeSettings) -> str:
     """Human-readable description of the active Section Type / Preset filter."""
 
+    if is_building_beam_girder_workflow(settings):
+        shared = ", ".join(sorted(_BUILDING_SHARED_PRECAST_GIRDER_PRESET_KEYS))
+        return (
+            "Section Type / Preset includes ACI building beam categories plus shared precast girder geometry "
+            f"({shared}). Bridge-specific load/stage/AASHTO Be tools stay hidden."
+        )
     allowed_categories = _section_categories_for_member_type(settings)
     category_text = ", ".join(sorted(allowed_categories))
     return f"Section Type / Preset is filtered to workflow-specific categories: {category_text}."
@@ -708,25 +759,45 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
     is_girder_preset = "girder" in str(preset.get("category", "")).casefold() or "girder" in preset_key
 
     rows = [("Active member workflow", analysis_mode_label(settings))]
-    if settings.member_type == "beam_girder":
+    if is_bridge_beam_girder_workflow(settings):
         family_label = _girder_section_family_label(preset)
         service_basis = _recommended_service_basis_for_preset(preset)
         rows.extend(
             [
+                ("Design context", "Bridge Beam/Girder under AASHTO LRFD"),
                 ("Selected girder family", family_label),
                 ("Service-stage basis default", service_basis),
                 ("Recommended section family", "Precast Composite Girder or General / Non-composite Girder presets"),
                 ("Custom category", "Custom Girder section presets remain under this workflow"),
                 ("Current geometry status", "Gross section polygon only; composite properties remain explicit metadata"),
                 ("Girder design checks", "Stage-based SLS preview uses the selected family to guide service basis"),
-                ("Current preset fit", "Good for Beam/Girder" if is_girder_preset else "Review: selected preset is not a girder preset"),
+                ("Current preset fit", "Good for Bridge Beam/Girder" if is_girder_preset else "Review: selected preset is not a girder preset"),
             ]
         )
         st.markdown("##### Member Workflow Guidance")
         st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
         if not is_girder_preset:
-            st.warning("Beam/Girder mode is active, but the selected preset is not a dedicated girder preset. Use only with engineering judgment.")
-        st.caption("MEMBER.TYPE1 routes the workflow only. It does not add AASHTO girder SLS/ULS equations yet.")
+            st.warning("Bridge Beam/Girder workflow is active, but the selected preset is not a dedicated girder preset. Use only with engineering judgment.")
+        st.caption("WORKFLOW.TYPE3 routes shared geometry separately from design-code context. Bridge tools remain AASHTO LRFD / engineering-review previews until full engines are implemented.")
+    elif is_building_beam_girder_workflow(settings):
+        is_shared_precast = preset_key in _BUILDING_SHARED_PRECAST_GIRDER_PRESET_KEYS
+        rows.extend(
+            [
+                ("Design context", "Building Beam/Girder under ACI 318"),
+                ("Geometry availability", "Building beam categories plus shared precast girder geometry"),
+                ("Shared geometry preset", "Yes — ACI building context" if is_shared_precast else "No"),
+                ("Bridge-specific tools", "Hidden: AASHTO Be, bridge staged SLS, barrier/sidewalk/wearing surface, CSiBridge LL+IM"),
+                ("Current preset fit", "Good for Building Beam/Girder" if (is_shared_precast or not is_girder_preset) else "Review: bridge-only girder preset"),
+            ]
+        )
+        st.markdown("##### Member Workflow Guidance")
+        st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
+        if is_shared_precast:
+            st.info(
+                "Precast I-Girder is available here as shared section geometry for ACI 318 building work. "
+                "Bridge load components, AASHTO effective-width helper, and staged bridge SLS tools are intentionally not active."
+            )
+        st.caption("WORKFLOW.TYPE3: same physical section geometry can be reused; design checks and load workflows remain workflow-specific.")
     else:
         rows.extend(
             [
@@ -1360,7 +1431,7 @@ def _render_geometry_parameters_workspace(
                 else:
                     st.warning(f"Unsupported parameter type: {parameter.get('type')}")
 
-        if _is_composite_capable_preset(preset):
+        if _bridge_composite_metadata_enabled(preset):
             params["Ebeam_MPa"] = float(material_assignment["Ebeam_MPa"])
             params["Edeck_MPa"] = float(material_assignment.get("Edeck_MPa", material_assignment["Ebeam_MPa"]))
             if _is_parametric_i_girder(preset) or _is_precast_u_girder(preset) or _is_precast_box_beam(preset):
@@ -1386,6 +1457,11 @@ def _render_geometry_parameters_workspace(
                 member_type=_analysis_mode_from_session_state().member_type,
             )
             _render_composite_metadata_panel(params, composite_active)
+        elif _is_composite_capable_preset(preset) and is_building_beam_girder_workflow(_analysis_mode_from_session_state()):
+            st.info(
+                "Shared precast girder geometry is active under the Building Beam/Girder ACI workflow. "
+                "Bridge composite metadata, AASHTO Be helper, and staged bridge SLS inputs are hidden for this workflow."
+            )
 
         if _is_parametric_i_girder(preset):
             _render_parametric_i_girder_dimension_qa(params)

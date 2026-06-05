@@ -151,9 +151,10 @@ def test_member_type_guidance_source_is_present_in_section_builder() -> None:
     source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
 
     assert "Member Workflow Guidance" in source
-    assert "Beam/Girder mode is active" in source
+    assert "Bridge Beam/Girder workflow is active" in source
+    assert "Building Beam/Girder under ACI 318" in source
     assert "Column / Pier / Wall / Pylon PMM" in source
-    assert "MEMBER.TYPE1 routes the workflow only" in source
+    assert "WORKFLOW.TYPE3: same physical section geometry can be reused" in source
 
 
 def test_column_pier_member_type_filters_out_girder_presets() -> None:
@@ -174,6 +175,52 @@ def test_column_pier_member_type_filters_out_girder_presets() -> None:
     assert "custom_polygon" in keys
     assert "parametric_i_girder" not in keys
     assert "single_cell_box_girder" not in keys
+
+
+def test_building_beam_girder_allows_basic_beams_and_shared_precast_i_girder_only() -> None:
+    rectangle = preset_by_key("rectangle")
+    circular_hollow = preset_by_key("circular_hollow")
+    i_girder = preset_by_key("parametric_i_girder")
+    plank = preset_by_key("parametric_plank_girder_interior")
+    box_beam = preset_by_key("box_section_fillet")
+    u_girder = preset_by_key("u_girder")
+    psc_i = preset_by_key("psc_i_girder")
+    custom_preset = {"key": "custom_polygon", "display_name": "Custom Polygon", "category": "Custom"}
+
+    filtered = section_builder._filter_presets_for_member_type(
+        [rectangle, circular_hollow, i_girder, plank, box_beam, u_girder, psc_i, custom_preset],
+        AnalysisModeSettings(member_type="building_beam_girder"),
+    )
+    keys = {preset["key"] for preset in filtered}
+
+    assert "rectangle" in keys
+    assert "circular_hollow" in keys
+    assert "custom_polygon" in keys
+    assert "psc_i_girder" in keys
+    assert "parametric_i_girder" in keys
+    assert "parametric_plank_girder_interior" not in keys
+    assert "box_section_fillet" not in keys
+    assert "u_girder" not in keys
+
+
+def test_building_beam_girder_keeps_bridge_composite_metadata_hidden_for_shared_i_girder() -> None:
+    i_girder = preset_by_key("parametric_i_girder")
+
+    assert section_builder._bridge_composite_metadata_enabled(
+        i_girder, AnalysisModeSettings(member_type="beam_girder")
+    )
+    assert not section_builder._bridge_composite_metadata_enabled(
+        i_girder, AnalysisModeSettings(member_type="building_beam_girder")
+    )
+
+
+def test_building_beam_girder_filter_description_mentions_shared_geometry_guard() -> None:
+    text = section_builder._member_type_filter_description(
+        AnalysisModeSettings(member_type="building_beam_girder")
+    )
+
+    assert "shared precast girder geometry" in text
+    assert "Bridge-specific load/stage/AASHTO Be tools stay hidden" in text
 
 
 def test_beam_girder_member_type_filters_out_column_basic_presets() -> None:
@@ -281,6 +328,8 @@ def test_section_builder_source_contains_member_type_preset_filter_notice() -> N
     assert "available_presets" in source
     assert "Custom PMM section presets" in source
     assert "Custom Girder section presets" in source
+    assert "_BUILDING_SHARED_PRECAST_GIRDER_PRESET_KEYS" in source
+    assert "Bridge-specific load/stage/AASHTO Be tools stay hidden" in source
 
 
 def test_composite1b_section_builder_source_displays_transformed_properties() -> None:

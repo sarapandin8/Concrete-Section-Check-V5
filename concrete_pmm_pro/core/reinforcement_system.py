@@ -85,6 +85,15 @@ def default_section_reinforcement_flags(
             prestress = True
         return ordinary_rebar, prestress
 
+    if member == "building_beam_girder":
+        # WORKFLOW.TYPE3: shared precast girder geometry can be used in the ACI
+        # Building Beam/Girder workflow without enabling bridge-specific tools.
+        # For Precast I-Girder, seed prestressing on because that is the usual
+        # engineering intent; ordinary RC beam shapes still default to rebar only.
+        if preset == "parametric_i_girder":
+            return False, True
+        return True, False
+
     return True, False
 
 

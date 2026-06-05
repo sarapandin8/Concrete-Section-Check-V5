@@ -1710,3 +1710,42 @@ def test_loss_display_dataframe_preserves_text_placeholders_without_to_numeric_e
     assert display.loc[0, "Loss MPa"] == 12.346
     assert display.loc[1, "Loss MPa"] == "—"
     assert display.loc[0, "Formula loss term"] == "εbdf × Ep × Kdf"
+
+
+def test_refined_auto_coefficients_tolerate_display_rows_without_strand_size(monkeypatch) -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "streamlit", st)
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        DEFAULT_STRAND_EP_MPA,
+        _girder_strand_total_aps_yps_ep,
+    )
+
+    # LOSS3B auto-coefficient estimation may receive a compact/display table
+    # while the editor is rerunning.  Missing Strand Size must fall back to the
+    # default product instead of crashing with KeyError.
+    compact = pd.DataFrame(
+        [
+            {
+                "Active": True,
+                "Group ID": "Row 1",
+                "No. strands": 2,
+                "Area/Strand_mm2": 98.7,
+                "y from bottom (mm)": 50,
+            }
+        ]
+    )
+    total_aps, yps, ep = _girder_strand_total_aps_yps_ep(compact)
+    assert round(total_aps, 3) == 197.4
+    assert yps == 50.0
+    assert ep == DEFAULT_STRAND_EP_MPA

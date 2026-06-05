@@ -1660,10 +1660,16 @@ def _girder_strand_total_aps_yps_ep(strand_table: pd.DataFrame) -> tuple[float, 
     weighted_y = 0.0
     weighted_ep = 0.0
     for _, row in active.iterrows():
-        count = int(_to_float(row.get("No. Strands")) or 0)
-        area = float(_to_float(row.get("Area/Strand_mm2")) or _strand_size_properties(row.get("Strand Size"))["area_mm2"])
-        y = float(_to_float(row.get("y_mm_from_bottom")) or 0.0)
-        ep = float(_strand_size_properties(row.get("Strand Size"))["Ep_MPa"])
+        strand_size = row.get("Strand Size") or row.get("strand_size") or DEFAULT_GIRDER_STRAND_SIZE
+        props = _strand_size_properties(strand_size)
+        count = int(_to_float(row.get("No. Strands")) or _to_float(row.get("No. strands")) or 0)
+        area = float(_to_float(row.get("Area/Strand_mm2")) or _to_float(row.get("area_per_strand_mm2")) or props.get("area_mm2", 0.0) or 0.0)
+        y = float(_to_float(row.get("y_mm_from_bottom")) or _to_float(row.get("y from bottom (mm)")) or 0.0)
+        # _strand_size_properties returns normalized lower-case product keys.
+        # Keep this helper tolerant of compact display rows so LOSS3B auto-
+        # coefficient estimation reports REVIEW/missing data instead of
+        # crashing with KeyError when a display table omits Strand Size.
+        ep = float(props.get("ep_mpa", DEFAULT_STRAND_EP_MPA) or DEFAULT_STRAND_EP_MPA)
         aps = max(count, 0) * max(area, 0.0)
         total_aps += aps
         weighted_y += aps * y

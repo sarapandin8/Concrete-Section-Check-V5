@@ -180,3 +180,15 @@ def test_project_page_member_type_selector_source_is_present() -> None:
     assert "Workflow controls design-code routing" in source
     assert "project_analysis_mode_member_type_label" in source
     assert '"General Section": "general_section"' not in source
+
+
+def test_analysis_mode_selector_initializes_widget_key_before_session_state_read() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "project_page.py").read_text(encoding="utf-8")
+    function_source = source[source.index("def _render_analysis_mode_selector") : source.index("def status_style_for_value")]
+
+    assert function_source.index('widget_key = "project_analysis_mode_member_type_label"') < function_source.index(
+        "legacy_label = st.session_state.get(widget_key)"
+    )

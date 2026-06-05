@@ -235,12 +235,13 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
     """
     labels = list(_MEMBER_TYPE_OPTIONS.keys())
     current_label = _analysis_mode_label_for_member_type(current.member_type)
-    legacy_label = st.session_state.get(widget_key)
-    if legacy_label in _LEGACY_MEMBER_TYPE_LABELS:
-        st.session_state[widget_key] = _LEGACY_MEMBER_TYPE_LABELS[str(legacy_label)]
     widget_key = "project_analysis_mode_member_type_label"
     note_key = "project_analysis_mode_note"
     sync_key = "project_analysis_mode_member_type_sync"
+
+    legacy_label = st.session_state.get(widget_key)
+    if legacy_label in _LEGACY_MEMBER_TYPE_LABELS:
+        st.session_state[widget_key] = _LEGACY_MEMBER_TYPE_LABELS[str(legacy_label)]
 
     # Keep the Project-page widgets synchronized when a project is loaded. This
     # selector is the single editable owner of analysis_mode_settings; downstream

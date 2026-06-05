@@ -6,7 +6,7 @@ SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(
 
 def test_analysis_page_has_full_length_sls_diagram_preview() -> None:
     assert "GIRDER.SLS4A" in SOURCE
-    assert "Full-length SLS stress diagram preview" in SOURCE
+    assert "Full-length SLS stress check diagram" in SOURCE
     assert "_render_girder_full_length_sls_diagram" in SOURCE
     assert "_make_girder_full_length_sls_figure" in SOURCE
     assert "Station x (m)" in SOURCE
@@ -32,7 +32,7 @@ def test_full_length_sls_diagram_has_preview_limit_lines_and_governing_cards() -
     assert "Governing tension" in SOURCE
     assert "Preview PASS" in SOURCE
     assert "Preview FAIL" in SOURCE
-    assert "AASHTO default preview line" in SOURCE
+    assert "Design code / limit basis" in SOURCE
 
 
 def test_full_length_sls_diagram_groups_one_case_name_at_a_time() -> None:
@@ -43,7 +43,7 @@ def test_full_length_sls_diagram_groups_one_case_name_at_a_time() -> None:
 
 def test_sls4a1_decision_workspace_collapses_audit_controls() -> None:
     assert "SLS result workspace" in SOURCE
-    assert "Default view shows the full-length decision diagram" in SOURCE
+    assert "Default view is for checking top/bottom stresses along the girder length" in SOURCE
     assert "Load / section / single-station audit" in SOURCE
     assert "expanded=False" in SOURCE
     assert "legacy single-station SLS check/audit panels" in SOURCE
@@ -67,3 +67,30 @@ def test_sls4b_result_table_reports_utilization_without_solver_changes() -> None
     assert "Compression / tension demand details" in SOURCE
     assert "no stress formula" in SOURCE
     assert "no solver, Pe, load, geometry, or report" in SOURCE
+
+
+
+def test_sls4c_stage_decision_workflow_hides_nonessential_controls() -> None:
+    assert "GIRDER.SLS4C" in SOURCE
+    assert "Full-length SLS stress check diagram" in SOURCE
+    assert "SLS check basis" in SOURCE
+    assert "Stage result summary" in SOURCE
+    assert "Design code / limit basis" in SOURCE
+    assert "Limit stage is auto-selected from the active tab" in SOURCE
+    assert "Engineering action hints" in SOURCE
+    assert "Advanced Serviceability / SLS Foundation settings" in SOURCE
+
+
+def test_sls4c_code_limit_stage_is_locked_to_active_stage_tab() -> None:
+    assert "locked_stage_label" in SOURCE
+    assert "Auto limit stage" in SOURCE
+    assert "active Transfer/Construction/Service tab" in SOURCE
+    assert 'st.selectbox(\n                "Stress limit stage"' not in SOURCE
+    assert "The limit stage is not user-selected inside a stage tab" in SOURCE
+
+
+def test_sls4c_graph_marks_governing_demands_without_solver_changes() -> None:
+    assert "Governing compression" in SOURCE
+    assert "Governing tension" in SOURCE
+    assert "Governing {demand.lower()}" in SOURCE
+    assert "no stress solver, Pe(x), load, section-basis, or code-limit formula changes" in SOURCE

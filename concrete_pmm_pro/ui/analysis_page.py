@@ -364,6 +364,30 @@ _ANALYSIS_DASHBOARD_CSS = """
   font-size: 0.72rem;
   font-weight: 650;
 }
+.cpmm-sls-action-panel {
+  border: 1px solid #f2d58a;
+  border-left: 5px solid #d99800;
+  border-radius: 12px;
+  background: #fffaf0;
+  padding: 0.85rem 1.0rem;
+  margin: 0.65rem 0 0.8rem 0;
+}
+.cpmm-sls-action-title {
+  color: #7a4b00;
+  font-size: 0.86rem;
+  font-weight: 780;
+  margin-bottom: 0.35rem;
+}
+.cpmm-sls-action-panel ul {
+  margin-top: 0.2rem;
+  margin-bottom: 0;
+}
+.cpmm-sls-action-panel li {
+  color: #344054;
+  font-size: 0.82rem;
+  line-height: 1.42;
+  margin-bottom: 0.15rem;
+}
 
 .cpmm-governing-card {
   border: 1px solid #d0d7e2;
@@ -3685,12 +3709,16 @@ def _beam_sls_default_basis_for_stage(stage_label: str, available_basis_names: l
 
 
 def _initialize_girder_code_limit_stage_for_case(title: str, stage_label: str) -> None:
-    """Initialize code-limit stage to match the active SLS stage tab without overriding user edits."""
+    """Lock code-limit stage to the active SLS stage tab.
+
+    GIRDER.SLS4C removes the confusing visible stress-limit-stage dropdown:
+    Transfer, Construction, and Service tabs own their matching code-limit
+    stage.  This preserves engineering context and prevents accidental
+    transfer/service profile mixups in a stage-specific check panel.
+    """
 
     stage_key = f"girder_code_limit_stage_{title}"
-    default_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
-    if st.session_state.get(stage_key) not in DEFAULT_GIRDER_SLS_STAGES:
-        st.session_state[stage_key] = default_stage
+    st.session_state[stage_key] = _beam_sls_stage_default_code_limit_stage(stage_label)
 
 
 def _girder_sls_stage_pe_value_from_station(station_result: object, stage_label: str) -> float:
@@ -4068,6 +4096,163 @@ def _render_girder_sls4b_governing_summary_cards(summary_df: pd.DataFrame) -> No
     )
 
 
+
+
+def _girder_sls4c_stage_basis_cards(
+    *,
+    stage_label: str,
+    selected_case: str,
+    selected_rows: list[Mapping[str, object]],
+    df: pd.DataFrame,
+    basis_options: object,
+) -> list[dict[str, object]]:
+    """Return decision-first code/load/section basis cards for one SLS stage.
+
+    GIRDER.SLS4C keeps the important engineering context visible without making
+    users open audit expanders: code/limit basis, stage context, load case, and
+    section/prestress source.  It is display-only and does not change stress
+    values, Pe(x), section basis, load schema, or code-limit formulas.
+    """
+
+    profile = _girder_stage_limit_profile_for_diagram(stage_label)
+    selected_basis = "From Loads rows"
+    if "Basis" in df.columns and not df.empty:
+        basis_values = [str(value) for value in df["Basis"].dropna().unique() if str(value).strip()]
+        if len(basis_values) == 1:
+            selected_basis = basis_options.labels.get(basis_values[0], basis_values[0])
+        elif len(basis_values) > 1:
+            selected_basis = f"Mixed ({len(basis_values)} basis values)"
+    load_detail = f"{len(selected_rows):,} station row(s)" if selected_rows else "No active station rows"
+    if selected_rows:
+        stations = sorted({_analysis_float_or_zero(row.get("Station x (m)")) for row in selected_rows})
+        if stations:
+            load_detail = f"{len(selected_rows):,} row(s), x={stations[0]:.3f}–{stations[-1]:.3f} m"
+    active_pe = "Pe(x) from Force States + debonding"
+    if "Pe stage (kN)" in df.columns and not df.empty:
+        pe_min = float(pd.to_numeric(df["Pe stage (kN)"], errors="coerce").fillna(0.0).min())
+        pe_max = float(pd.to_numeric(df["Pe stage (kN)"], errors="coerce").fillna(0.0).max())
+        active_pe = f"Pe(x) {pe_min:,.1f}–{pe_max:,.1f} kN"
+    return [
+        {
+            "title": "Design code / limit basis",
+            "value": str(profile.code),
+            "detail": f"{profile.stage} · {profile.limit_profile_label}",
+            "status": "info",
+            "strong": True,
+        },
+        {
+            "title": "Stage context",
+            "value": stage_label,
+            "detail": "Limit stage is auto-selected from the active tab",
+            "status": "ready",
+        },
+        {
+            "title": "Diagram load case",
+            "value": selected_case,
+            "detail": load_detail,
+            "status": "ready" if selected_rows else "warning",
+        },
+        {
+            "title": "Section / prestress source",
+            "value": selected_basis,
+            "detail": active_pe,
+            "status": "info",
+        },
+    ]
+
+
+def _girder_sls4c_action_hints(
+    *,
+    stage_label: str,
+    status: str,
+    demand_rows: list[dict[str, object]],
+) -> list[str]:
+    """Return compact engineering action hints for SLS preview fail/review cases."""
+
+    controlling = _girder_sls4b_controlling_row(demand_rows)
+    try:
+        utilization = float(controlling.get("Utilization")) if controlling else 0.0
+    except (TypeError, ValueError):
+        utilization = 0.0
+    demand = str(controlling.get("Demand", "") if controlling else "").casefold()
+    is_fail = "FAIL" in str(status).upper()
+    is_review = "REVIEW" in str(status).upper()
+    near_limit = math.isfinite(utilization) and utilization >= 0.90
+    if not (is_fail or is_review or near_limit):
+        return []
+
+    hints: list[str] = []
+    if is_review:
+        hints.append("Confirm active Loads rows, selected case, section basis, and stage Pe before relying on the preview result.")
+    if stage_label == "Transfer stage":
+        if "tension" in demand:
+            hints.extend(
+                [
+                    "Review initial strand force, strand eccentricity, and top-fiber tension at release.",
+                    "Consider additional debonding near the girder end or bonded top reinforcement only after checking transfer length and end-zone requirements.",
+                    "Check whether release strength f'ci and temporary release assumptions match the project specification.",
+                ]
+            )
+        elif "compression" in demand:
+            hints.extend(
+                [
+                    "Review initial Pe, strand count, and eccentricity; excessive bottom compression at release may require less initial force or more debonding.",
+                    "Check f'ci, end-zone bursting/splitting reinforcement, and local release-zone detailing before accepting the layout.",
+                ]
+            )
+    elif stage_label == "Construction stage":
+        hints.extend(
+            [
+                "Review wet deck/topping load, construction sequence, and whether the pre-composite section basis is appropriate.",
+                "Consider temporary support, adjusted strand force state, or section/deck staging changes if the construction-stage utilization controls.",
+            ]
+        )
+    elif stage_label == "Service stage":
+        if "tension" in demand:
+            hints.extend(
+                [
+                    "Review final effective prestress, strand layout/eccentricity, superimposed dead load, and live-load case used in the service resultant.",
+                    "Consider increasing effective prestress/composite stiffness or checking crack-control reinforcement if project criteria allow service tension.",
+                ]
+            )
+        elif "compression" in demand:
+            hints.extend(
+                [
+                    "Review final prestress level, composite section basis, concrete strength, and service load combination.",
+                    "Consider reducing prestress eccentricity/force or increasing section/composite capacity if compression utilization controls.",
+                ]
+            )
+    if not hints and near_limit:
+        hints.append("Utilization is close to the preview limit; review assumptions and consider reserve before final design use.")
+    # Keep the default view compact: no more than four direct action hints.
+    deduped: list[str] = []
+    for hint in hints:
+        if hint not in deduped:
+            deduped.append(hint)
+    return deduped[:4]
+
+
+def _render_girder_sls4c_action_hints(
+    *,
+    stage_label: str,
+    status: str,
+    demand_rows: list[dict[str, object]],
+) -> None:
+    """Render short SLS action hints only when the preview result needs attention."""
+
+    hints = _girder_sls4c_action_hints(stage_label=stage_label, status=status, demand_rows=demand_rows)
+    if not hints:
+        return
+    items = "".join(f"<li>{escape(hint)}</li>" for hint in hints)
+    html = (
+        '<div class="cpmm-sls-action-panel">'
+        '<div class="cpmm-sls-action-title">Engineering action hints</div>'
+        f"<ul>{items}</ul>"
+        '<div class="cpmm-analysis-detail">Preview guidance only: confirm code clauses, transfer/development length, end-zone, shear, and detailing checks before final design.</div>'
+        "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 def _render_girder_sls4b_combined_stage_result_table(
     *,
     beam_sls_rows: list[dict[str, object]],
@@ -4176,6 +4361,32 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
                 hovertemplate=f"Tension limit = {tension_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
             )
         )
+    # GIRDER.SLS4C: the graph is a stress-check diagram, not only a curve plot.
+    # Add explicit governing demand markers using the existing dataframe only;
+    # no stress solver, Pe(x), load, section-basis, or code-limit formula changes.
+    for demand_row in _girder_sls4b_governing_demand_rows(df, stage_label):
+        demand = str(demand_row.get("Demand", "Demand"))
+        actual = float(demand_row.get("Actual stress (MPa)", 0.0) or 0.0)
+        limit = float(demand_row.get("Limit stress (MPa)", 0.0) or 0.0)
+        station = float(demand_row.get("Station x (m)", 0.0) or 0.0)
+        utilization = _format_girder_sls_utilization(demand_row.get("Utilization"))
+        fig.add_trace(
+            go.Scatter(
+                x=[station],
+                y=[actual],
+                mode="markers",
+                name=f"Governing {demand.lower()}",
+                marker={"size": 13, "symbol": "diamond-open" if demand == "Tension" else "circle-open"},
+                hovertemplate=(
+                    f"Governing {escape(demand.lower())}<br>"
+                    "x=%{x:.3f} m<br>"
+                    "stress=%{y:.3f} MPa<br>"
+                    f"fiber={escape(str(demand_row.get('Fiber', 'N/A')))}<br>"
+                    f"limit={limit:.3f} MPa<br>"
+                    f"utilization={escape(utilization)}<extra></extra>"
+                ),
+            )
+        )
     fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 MPa", annotation_position="top left")
     fig.update_layout(
         height=420,
@@ -4199,22 +4410,28 @@ def _render_girder_full_length_sls_diagram(
 ) -> None:
     """Render GIRDER.SLS4A station-based stress diagram for one stage."""
 
-    st.markdown("##### Full-length SLS stress diagram preview")
+    st.markdown("##### Full-length SLS stress check diagram")
     st.caption(
-        "GIRDER.SLS4A plots station-based top/bottom stresses from Loads rows and active stage Pe. "
-        "It is a preview graph, not final code-certified staged design. Transfer-length ramp, development, shear, and end-zone checks remain future work."
+        "Decision view for top/bottom fiber stresses along the girder length. "
+        "The active stage tab selects the matching code-limit stage automatically; detailed audit controls stay collapsed below. "
+        "This remains a preview, not final code-certified staged design. "
+        "Transfer-length ramp, development, shear, and end-zone checks remain future work."
     )
     if not stage_rows:
         st.info("Import or enter active Loads rows for this stage to plot full-length SLS stress along the girder.")
         return
     case_names = _girder_sls4b_case_names(stage_rows)
     _girder_sls4b_selected_case_for_stage(stage_label, stage_rows)
-    selected_case = st.selectbox(
-        f"{stage_label} diagram load case",
-        case_names,
-        key=_girder_sls4b_case_state_key(stage_label),
-        help="The diagram connects station rows with the same Case Name. Use one case per diagram to avoid mixing envelopes with single-case curves.",
-    )
+    if len(case_names) > 1:
+        selected_case = st.selectbox(
+            f"{stage_label} diagram load case",
+            case_names,
+            key=_girder_sls4b_case_state_key(stage_label),
+            help="The diagram connects station rows with the same Case Name. Use one case per diagram to avoid mixing envelopes with single-case curves.",
+        )
+    else:
+        selected_case = case_names[0]
+        st.caption(f"Diagram load case: {selected_case}")
     selected_rows = [row for row in stage_rows if str(row.get("Case Name") or "Unnamed") == selected_case]
     span = _girder_sls_span_length_from_session(selected_rows)
     df = _girder_full_length_sls_stage_rows(
@@ -4231,6 +4448,18 @@ def _render_girder_full_length_sls_diagram(
     compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     governing_comp_idx = df["Max compression (MPa)"].idxmin()
     governing_tens_idx = df["Max tension (MPa)"].idxmax()
+    st.markdown("**SLS check basis**")
+    _render_analysis_summary_strip(
+        _girder_sls4c_stage_basis_cards(
+            stage_label=stage_label,
+            selected_case=selected_case,
+            selected_rows=selected_rows,
+            df=df,
+            basis_options=basis_options,
+        ),
+        columns=4,
+    )
+    st.markdown("**Stage result summary**")
     _render_analysis_summary_strip(
         [
             {
@@ -4254,11 +4483,16 @@ def _render_girder_full_length_sls_diagram(
             {
                 "title": "Limit profile",
                 "value": profile_label,
-                "detail": "AASHTO default preview line; editable single-case code checks remain below",
+                "detail": "Auto-selected from the active stage tab",
                 "status": "info",
             },
         ],
         columns=4,
+    )
+    _render_girder_sls4c_action_hints(
+        stage_label=stage_label,
+        status=status,
+        demand_rows=_girder_sls4b_governing_demand_rows(df, stage_label),
     )
     st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
     with st.expander(f"Full-length stress table — {stage_label}", expanded=False):
@@ -4267,7 +4501,8 @@ def _render_girder_full_length_sls_diagram(
         st.write("- Loads page station rows are the source of N and Mx; My/Vx/Vy/T are stored but not used in this one-dimensional preview.")
         st.write("- Stage Pe is read from the current Prestress Force States / Losses backend values at each station, including debonded-strand step-function effectiveness.")
         st.write("- The graph connects station rows for one Case Name; it does not generate an envelope or interpolate missing load effects beyond the station table.")
-        st.write("- Preview limit lines use the default AASHTO SLS profile for the selected stage. Open the single-case code-limit panels below for editable profile/audit controls.")
+        st.write("- Preview limit lines use the default AASHTO SLS profile for the active stage. The limit stage is not user-selected inside a stage tab.")
+        st.write("- GIRDER.SLS4C keeps engineering action hints advisory only; final design still requires code, transfer/development length, shear, end-zone, and detailing checks.")
 
 
 def _render_girder_sls_check_case_panel(
@@ -4421,6 +4656,7 @@ def _render_girder_sls_check_case_panel(
                 load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
                 stress_includes_prestress=False,
                 prestress_force_state_label=None,
+                locked_stage_label=stage_label,
             )
     else:
         _render_girder_code_limit_preview(
@@ -4431,6 +4667,7 @@ def _render_girder_sls_check_case_panel(
             load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
             stress_includes_prestress=False,
             prestress_force_state_label=None,
+            locked_stage_label=stage_label,
         )
 
     with st.expander(f"{case_title} stress table", expanded=False):
@@ -4614,6 +4851,7 @@ def _render_girder_sls_check_case_panel(
                 load_component=None if selected_load_row is None else str(selected_load_row.get("Load Component") or ""),
                 stress_includes_prestress=True,
                 prestress_force_state_label=prestress_force_state_label_for_preview,
+                locked_stage_label=stage_label,
             )
 
 
@@ -4768,6 +5006,7 @@ def _render_girder_code_limit_preview(
     load_component: str | None = None,
     stress_includes_prestress: bool | None = None,
     prestress_force_state_label: str | None = None,
+    locked_stage_label: str | None = None,
 ) -> None:
     """Render compact CODE.SLS.LIMIT3 preview checks for a set of fiber stresses.
 
@@ -4786,12 +5025,17 @@ def _render_girder_code_limit_preview(
     # GIRDER.SLS3 clean check-case layout: default screen is a decision view; expanders are audit view.
     st.markdown(f"##### Code Limit Summary — {title}")
     st.caption(
-        "Compact preview only. Select code/stage/profile here; detailed formulas, basis notes, and stress rows stay in expanders."
+        "Compact preview only. The stress-limit stage follows the active Transfer/Construction/Service tab; "
+        "detailed formulas, basis notes, and stress rows stay in expanders."
     )
 
     fc_default = _girder_fc_for_sls_limit_preview()
     stage_key = f"girder_code_limit_stage_{title}"
-    if stage_key in st.session_state:
+    locked_stage = None
+    if locked_stage_label is not None:
+        locked_stage = _beam_sls_stage_default_code_limit_stage(locked_stage_label)
+        st.session_state[stage_key] = locked_stage
+    elif stage_key in st.session_state:
         normalized_stage = normalize_girder_sls_stage(st.session_state.get(stage_key))
         if normalized_stage in DEFAULT_GIRDER_SLS_STAGES and normalized_stage != st.session_state.get(stage_key):
             st.session_state[stage_key] = normalized_stage
@@ -4805,12 +5049,17 @@ def _render_girder_code_limit_preview(
             help="AASHTO is generally the bridge-girder default; ACI is available for building/general prestressed members.",
         )
     with controls[1]:
-        stage = st.selectbox(
-            "Stress limit stage",
-            list(DEFAULT_GIRDER_SLS_STAGES),
-            key=stage_key,
-            help="Stage controls which concrete strength, prestress-force state, and section basis should be checked.",
-        )
+        if locked_stage is not None:
+            stage = locked_stage
+            st.markdown("**Auto limit stage**")
+            st.caption(f"{stage} — from {locked_stage_label}")
+        else:
+            stage = st.selectbox(
+                "Code-limit stage",
+                list(DEFAULT_GIRDER_SLS_STAGES),
+                key=stage_key,
+                help="Advanced/manual checks only: stage controls which concrete strength, prestress-force state, and section basis should be checked.",
+            )
 
     profile_options = girder_sls_limit_profile_options(code=code, stage=stage)
     profile_option_labels = {option.key: option.label for option in profile_options}
@@ -5244,8 +5493,8 @@ def _render_beam_girder_service_stress_preview() -> None:
     # Legacy phrases retained for regression/search context: SLS stage check tabs. Stage checks are always available. manual input is a stage-level override/fallback. Each stage keeps its own code-limit/profile/prestress UI state.
     st.markdown("##### SLS result workspace")
     st.caption(
-        "Default view shows the full-length decision diagram and governing stress results. "
-        "Load/source selection, single-station checks, code-limit formulas, and detailed audit controls are collapsed below each stage."
+        "Default view is for checking top/bottom stresses along the girder length in Transfer, Construction, and Service. "
+        "It shows code basis, stress diagram, governing result, and action hints first; audit/detail controls stay collapsed below each stage."
     )
     _render_girder_sls4b_combined_stage_result_table(
         beam_sls_rows=beam_sls_rows,
@@ -5346,10 +5595,10 @@ def _render_beam_girder_service_stress_preview() -> None:
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()
-    with st.expander("Serviceability / SLS Foundation", expanded=False):
+    with st.expander("Advanced Serviceability / SLS Foundation settings", expanded=False):
         st.info(
-            "This section prepares serviceability settings, SLS load cases, gross section properties, "
-            "transformed section properties, stress check points, and elastic SLS stress checks."
+            "Advanced foundation settings for legacy/manual serviceability workflows. "
+            "The default girder SLS decision view above already shows the code basis, stress diagram, governing result, and action hints."
         )
         cols = st.columns(3)
         with cols[0]:

@@ -81,6 +81,12 @@ def test_prestress_page_contains_strand_layout_debonding_workflow() -> None:
     assert "calculate_refined_aashto_time_dependent_loss" in PRESTRESS_SOURCE
     assert "estimate_refined_aashto_coefficients" in PRESTRESS_SOURCE
     assert "V/S override" in PRESTRESS_SOURCE
+    assert "Δfcd source" in PRESTRESS_SOURCE
+    assert "Δfcdf source" in PRESTRESS_SOURCE
+    assert "Not included / use 0.00 MPa" in PRESTRESS_SOURCE
+    assert "Manual input" in PRESTRESS_SOURCE
+    assert "Auto from Loads / staged effects (future)" in PRESTRESS_SOURCE
+    assert "Δfcd / Δfcdf guidance" in PRESTRESS_SOURCE
 
 
 
@@ -112,13 +118,52 @@ def test_refined_coefficient_presets_are_rh_labeled_and_practical(monkeypatch) -
     settings = _apply_refined_coefficient_preset({}, DEFAULT_REFINED_COEFFICIENT_PRESET)
     assert settings["humidity_percent"] == 75.0
     assert settings["psi_tf_ti"] == 1.60
-    assert _refined_coefficient_review_messages(settings) == []
+    default_messages = _refined_coefficient_review_messages(settings)
+    assert any("Δfcd is not included" in message for message in default_messages)
+    assert any("Δfcdf is not included" in message for message in default_messages)
 
-    risky = dict(settings)
+    settings_manual_effects = dict(settings)
+    settings_manual_effects.update({"delta_fcd_source": "Manual input", "delta_fcdf_source": "Manual input"})
+    assert _refined_coefficient_review_messages(settings_manual_effects) == []
+
+    risky = dict(settings_manual_effects)
     risky.update({"eps_bid_microstrain": 180.0, "eps_bdf_microstrain": 110.0, "psi_tf_ti": 2.8})
     messages = _refined_coefficient_review_messages(risky)
     assert any("Shrinkage strain sum" in message for message in messages)
     assert any("Ψb(tf,ti)" in message for message in messages)
+
+
+def test_refined_deck_sdl_stress_effect_audit_flags_not_included() -> None:
+    import sys
+    import types
+
+    st = types.ModuleType("streamlit")
+    st.session_state = {}
+    st.column_config = types.SimpleNamespace(
+        CheckboxColumn=lambda *args, **kwargs: None,
+        TextColumn=lambda *args, **kwargs: None,
+        NumberColumn=lambda *args, **kwargs: None,
+        SelectboxColumn=lambda *args, **kwargs: None,
+    )
+    sys.modules["streamlit"] = st
+
+    from concrete_pmm_pro.ui.prestress_page import (  # noqa: PLC0415
+        REFINED_STRESS_EFFECT_MANUAL,
+        REFINED_STRESS_EFFECT_NOT_INCLUDED,
+        _refined_stress_effect_input_dataframe,
+    )
+
+    df = _refined_stress_effect_input_dataframe(
+        {
+            "delta_fcd_source": REFINED_STRESS_EFFECT_NOT_INCLUDED,
+            "delta_fcdf_source": REFINED_STRESS_EFFECT_MANUAL,
+            "delta_fcd_MPa": 0.0,
+            "delta_fcdf_MPa": 0.25,
+        }
+    )
+    assert df.loc[df["Effect"] == "Δfcd", "Status"].iloc[0] == "REVIEW"
+    assert df.loc[df["Effect"] == "Δfcdf", "Status"].iloc[0] == "READY"
+    assert df.loc[df["Effect"] == "Δfcdf", "Value MPa"].iloc[0] == 0.25
 
 
 def test_code_based_loss_groups_derive_pjack_from_fpj_ratio(monkeypatch) -> None:

@@ -194,6 +194,14 @@ REFINED_COEFFICIENT_SOURCE_OPTIONS = [
     REFINED_COEFFICIENT_SOURCE_PRESET,
     REFINED_COEFFICIENT_SOURCE_MANUAL,
 ]
+REFINED_STRESS_EFFECT_NOT_INCLUDED = "Not included / use 0.00 MPa"
+REFINED_STRESS_EFFECT_MANUAL = "Manual input"
+REFINED_STRESS_EFFECT_AUTO_FUTURE = "Auto from Loads / staged effects (future)"
+REFINED_STRESS_EFFECT_SOURCE_OPTIONS = [
+    REFINED_STRESS_EFFECT_NOT_INCLUDED,
+    REFINED_STRESS_EFFECT_MANUAL,
+    REFINED_STRESS_EFFECT_AUTO_FUTURE,
+]
 REFINED_PRESET_WIDGET_KEYS = {
     "Kid": "girder_refined_kid",
     "Kdf": "girder_refined_kdf",
@@ -1566,6 +1574,8 @@ def _girder_code_loss_settings_from_session() -> dict[str, Any]:
     settings.setdefault("psi_td_ti", refined_defaults["psi_td_ti"])
     settings.setdefault("psi_tf_ti", refined_defaults["psi_tf_ti"])
     settings.setdefault("psi_tf_td", refined_defaults["psi_tf_td"])
+    settings.setdefault("delta_fcd_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)
+    settings.setdefault("delta_fcdf_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)
     settings.setdefault("delta_fcd_MPa", refined_defaults["delta_fcd_MPa"])
     settings.setdefault("delta_fcdf_MPa", refined_defaults["delta_fcdf_MPa"])
     settings.setdefault("fpy_MPa", DEFAULT_STRAND_FPY_MPA)
@@ -1610,6 +1620,10 @@ def _refined_coefficient_review_messages(settings: dict[str, Any]) -> list[str]:
         messages.append("Ψb(tf,ti) exceeds 2.5; review creep coefficient source before relying on refined loss results.")
     if float(settings.get("Kid", 0.0) or 0.0) > 1.0 or float(settings.get("Kdf", 0.0) or 0.0) > 1.0:
         messages.append("Kid/Kdf above 1.0 may amplify losses; verify transformed-section interaction coefficients.")
+    if str(settings.get("delta_fcd_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)) != REFINED_STRESS_EFFECT_MANUAL:
+        messages.append("Δfcd is not included or is marked future-auto; staged SDL/deck stress effect is 0.00 MPa in this preview.")
+    if str(settings.get("delta_fcdf_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)) != REFINED_STRESS_EFFECT_MANUAL:
+        messages.append("Δfcdf is not included or is marked future-auto; deck shrinkage interaction stress effect is 0.00 MPa in this preview.")
     humidity = float(settings.get("humidity_percent", 0.0) or 0.0)
     if humidity < 40.0 or humidity > 100.0:
         messages.append("Preset RH basis is outside 40%–100%; use project/site mean relative humidity.")
@@ -1636,6 +1650,121 @@ def _refined_coefficient_preset_dataframe() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+
+
+
+
+def _refined_stress_effect_source_status(source: str) -> tuple[str, str]:
+    if source == REFINED_STRESS_EFFECT_MANUAL:
+        return "Manual", "READY"
+    if source == REFINED_STRESS_EFFECT_AUTO_FUTURE:
+        return "Future auto", "REVIEW"
+    return "Not included", "REVIEW"
+
+
+def _refined_stress_effect_input_dataframe(settings: dict[str, Any]) -> pd.DataFrame:
+    fcd_source = str(settings.get("delta_fcd_source", REFINED_STRESS_EFFECT_NOT_INCLUDED))
+    fcdf_source = str(settings.get("delta_fcdf_source", REFINED_STRESS_EFFECT_NOT_INCLUDED))
+    fcd_src, fcd_status = _refined_stress_effect_source_status(fcd_source)
+    fcdf_src, fcdf_status = _refined_stress_effect_source_status(fcdf_source)
+    return pd.DataFrame(
+        [
+            {
+                "Effect": "Δfcd",
+                "Value MPa": float(settings.get("delta_fcd_MPa", 0.0) or 0.0),
+                "Source": fcd_src,
+                "Status": fcd_status,
+                "Engineering note": "Concrete stress change at prestress centroid from SDL/deck-stage effects after deck placement.",
+            },
+            {
+                "Effect": "Δfcdf",
+                "Value MPa": float(settings.get("delta_fcdf_MPa", 0.0) or 0.0),
+                "Source": fcdf_src,
+                "Status": fcdf_status,
+                "Engineering note": "Deck slab shrinkage interaction stress effect at prestress centroid.",
+            },
+        ]
+    )
+
+
+def _render_refined_deck_sdl_stress_effect_inputs(settings: dict[str, Any], *, key_prefix: str) -> dict[str, Any]:
+    """Render guided Δfcd/Δfcdf source selectors for LOSS3B.2.
+
+    These values are deliberately not silently estimated in LOSS3B because
+    they require staged load/composite stress effects.  The default 0.0 MPa
+    represents not included / preliminary review, not a final recommendation.
+    """
+
+    st.markdown("###### Deck / SDL stress effects")
+    st.caption(
+        "Δfcd and Δfcdf are refined AASHTO stress-effect terms at the prestress centroid. "
+        "Use 0.00 MPa only when these effects are intentionally not included in the current preview."
+    )
+    source_cols = st.columns(2)
+    with source_cols[0]:
+        current = str(settings.get("delta_fcd_source", REFINED_STRESS_EFFECT_NOT_INCLUDED))
+        if current not in REFINED_STRESS_EFFECT_SOURCE_OPTIONS:
+            current = REFINED_STRESS_EFFECT_NOT_INCLUDED
+        settings["delta_fcd_source"] = st.selectbox(
+            "🟨 Δfcd source",
+            REFINED_STRESS_EFFECT_SOURCE_OPTIONS,
+            index=REFINED_STRESS_EFFECT_SOURCE_OPTIONS.index(current),
+            key=f"{key_prefix}_delta_fcd_source",
+            help="Δfcd is concrete stress change at the prestress centroid from superimposed dead/deck-stage load effects after deck placement.",
+        )
+        if settings["delta_fcd_source"] == REFINED_STRESS_EFFECT_MANUAL:
+            settings["delta_fcd_MPa"] = st.number_input(
+                "🟨 Δfcd (MPa)",
+                min_value=0.0,
+                step=0.1,
+                value=float(settings.get("delta_fcd_MPa", 0.0) or 0.0),
+                format="%.3f",
+                key=f"{key_prefix}_delta_fcd_value",
+                help="Use a project-specific stress at the prestress centroid from staged SDL/deck effects.",
+            )
+        else:
+            settings["delta_fcd_MPa"] = 0.0
+            if settings["delta_fcd_source"] == REFINED_STRESS_EFFECT_AUTO_FUTURE:
+                st.info("Auto Δfcd from Loads/composite staged stress is a future milestone; 0.00 MPa is used in this preview.")
+            else:
+                st.warning("Δfcd is not included in this refined preview; 0.00 MPa is used and engineering review is required.")
+    with source_cols[1]:
+        current = str(settings.get("delta_fcdf_source", REFINED_STRESS_EFFECT_NOT_INCLUDED))
+        if current not in REFINED_STRESS_EFFECT_SOURCE_OPTIONS:
+            current = REFINED_STRESS_EFFECT_NOT_INCLUDED
+        settings["delta_fcdf_source"] = st.selectbox(
+            "🟨 Δfcdf source",
+            REFINED_STRESS_EFFECT_SOURCE_OPTIONS,
+            index=REFINED_STRESS_EFFECT_SOURCE_OPTIONS.index(current),
+            key=f"{key_prefix}_delta_fcdf_source",
+            help="Δfcdf is the deck slab shrinkage interaction stress effect at the prestress centroid.",
+        )
+        if settings["delta_fcdf_source"] == REFINED_STRESS_EFFECT_MANUAL:
+            settings["delta_fcdf_MPa"] = st.number_input(
+                "🟨 Δfcdf (MPa)",
+                min_value=0.0,
+                step=0.1,
+                value=float(settings.get("delta_fcdf_MPa", 0.0) or 0.0),
+                format="%.3f",
+                key=f"{key_prefix}_delta_fcdf_value",
+                help="Use a project-specific deck-shrinkage interaction stress effect.",
+            )
+        else:
+            settings["delta_fcdf_MPa"] = 0.0
+            if settings["delta_fcdf_source"] == REFINED_STRESS_EFFECT_AUTO_FUTURE:
+                st.info("Auto Δfcdf from deck shrinkage/composite interaction is a future milestone; 0.00 MPa is used in this preview.")
+            else:
+                st.warning("Δfcdf is not included in this refined preview; 0.00 MPa is used and engineering review is required.")
+    st.dataframe(_loss_display_dataframe(_refined_stress_effect_input_dataframe(settings)), use_container_width=True, hide_index=True)
+    with st.expander("Δfcd / Δfcdf guidance", expanded=False):
+        st.markdown(
+            "- **Δfcd**: concrete stress change at the prestress centroid from superimposed dead/deck-stage effects after deck placement.\n"
+            "- **Δfcdf**: concrete stress change at the prestress centroid from deck slab shrinkage interaction.\n"
+            "- Use **Not included / use 0.00 MPa** for preliminary checks when staged load/composite effects are not available.\n"
+            "- Use **Manual input** only when values are available from project-specific calculation or specification.\n"
+            "- Load/composite-derived automatic values are intentionally deferred to avoid hiding sign-convention or staged-stress assumptions."
+        )
+    return settings
 
 
 def _section_exposed_outer_perimeter_mm(geometry: SectionGeometry | None) -> float:
@@ -1739,6 +1868,12 @@ def _refined_current_coefficient_dataframe(settings: dict[str, Any], *, source: 
         {"Coefficient": "Ψb(tf,ti)", "Value": float(settings.get("psi_tf_ti", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Total transfer-to-final creep coefficient."},
         {"Coefficient": "Ψb(tf,td)", "Value": float(settings.get("psi_tf_td", 0.0) or 0.0), "Source": source, "Status": "READY", "Engineering note": "Deck-to-final creep coefficient."},
     ]
+    fcd_source, fcd_status = _refined_stress_effect_source_status(str(settings.get("delta_fcd_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)))
+    fcdf_source, fcdf_status = _refined_stress_effect_source_status(str(settings.get("delta_fcdf_source", REFINED_STRESS_EFFECT_NOT_INCLUDED)))
+    rows.extend([
+        {"Coefficient": "Δfcd", "Value": f"{float(settings.get('delta_fcd_MPa', 0.0) or 0.0):.3f} MPa", "Source": fcd_source, "Status": fcd_status, "Engineering note": "SDL/deck-stage stress effect at prestress centroid."},
+        {"Coefficient": "Δfcdf", "Value": f"{float(settings.get('delta_fcdf_MPa', 0.0) or 0.0):.3f} MPa", "Source": fcdf_source, "Status": fcdf_status, "Engineering note": "Deck shrinkage interaction stress effect at prestress centroid."},
+    ])
     return pd.DataFrame(rows)
 
 def _active_force_state_rows_by_group(force_table: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
@@ -2162,13 +2297,9 @@ def _render_girder_code_based_loss_estimate(
                 if auto_result.messages:
                     st.warning("Auto coefficient REVIEW: " + " ".join(auto_result.messages))
                 else:
-                    st.success("Auto-estimated refined coefficients are within the LOSS3B advisory range.")
-            stress_cols = st.columns(2)
-            with stress_cols[0]:
-                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_auto_delta_fcd", help="Manual concrete stress change from deck/load effects until load-derived values are implemented.")
-            with stress_cols[1]:
-                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_auto_delta_fcdf", help="Manual deck-shrinkage stress effect. Use 0.0 until project-specific/load-derived values are available.")
-            st.caption("LOSS3B auto-estimates creep/shrinkage/Kid/Kdf from RH, time, and gross section properties. Δfcd/Δfcdf remain manual until staged load-derived stress is implemented.")
+                    st.info("Auto-estimated refined coefficients are available; review deck/SDL stress-effect source status below before relying on refined loss results.")
+            settings = _render_refined_deck_sdl_stress_effect_inputs(settings, key_prefix="girder_refined_auto")
+            st.caption("LOSS3B auto-estimates creep/shrinkage/Kid/Kdf from RH, time, and gross section properties. Δfcd/Δfcdf are guided source inputs until staged load-derived stress is implemented.")
 
         elif coefficient_source == REFINED_COEFFICIENT_SOURCE_PRESET:
             preset_previous = str(settings.get("refined_coefficient_preset", DEFAULT_REFINED_COEFFICIENT_PRESET))
@@ -2191,11 +2322,7 @@ def _render_girder_code_based_loss_estimate(
                 st.dataframe(_loss_display_dataframe(_refined_coefficient_preset_dataframe()), use_container_width=True, hide_index=True)
                 st.caption("These are practical starter values for the LOSS3B refined workflow; choose Auto-estimated when section/RH/time-derived coefficients are preferred.")
             st.dataframe(_loss_display_dataframe(_refined_current_coefficient_dataframe(settings, source="Preset")), use_container_width=True, hide_index=True)
-            stress_cols = st.columns(2)
-            with stress_cols[0]:
-                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_preset_delta_fcd")
-            with stress_cols[1]:
-                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_preset_delta_fcdf")
+            settings = _render_refined_deck_sdl_stress_effect_inputs(settings, key_prefix="girder_refined_preset")
 
         else:
             settings["humidity_percent"] = st.number_input(
@@ -2226,10 +2353,7 @@ def _render_girder_code_based_loss_estimate(
                 settings["psi_tf_ti"] = st.number_input("🟨 Ψb(tf,ti)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_ti", 1.60)), format="%.3f", key="girder_refined_psi_tf_ti")
             with creep_cols[2]:
                 settings["psi_tf_td"] = st.number_input("🟨 Ψb(tf,td)", min_value=0.0, step=0.05, value=float(settings.get("psi_tf_td", 1.00)), format="%.3f", key="girder_refined_psi_tf_td")
-            with creep_cols[3]:
-                settings["delta_fcd_MPa"] = st.number_input("🟨 Δfcd (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcd_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcd")
-            with creep_cols[4]:
-                settings["delta_fcdf_MPa"] = st.number_input("🟨 Δfcdf (MPa)", min_value=0.0, step=0.1, value=float(settings.get("delta_fcdf_MPa", 0.0)), format="%.3f", key="girder_refined_delta_fcdf", help="Concrete stress change for deck shrinkage effect.")
+            settings = _render_refined_deck_sdl_stress_effect_inputs(settings, key_prefix="girder_refined_manual")
 
         review_messages = _refined_coefficient_review_messages(settings)
         if review_messages:

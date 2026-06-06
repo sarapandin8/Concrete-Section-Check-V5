@@ -132,3 +132,11 @@ def test_sls_limit4_1_tensile_limit_guide_is_visible_in_full_length_diagram() ->
     assert "expanded=True" in SOURCE
     assert "Selected by the visible tensile stress limit guide" in SOURCE
     assert "graph limit lines and stage PASS/FAIL preview update from this profile" in SOURCE
+
+
+def test_sls_limit4_2_visible_guide_shows_formula_and_non_service_aci_note() -> None:
+    assert "CODE.SLS.LIMIT4.2" in SOURCE
+    assert "Selected tensile limit" in SOURCE
+    assert "Tension formula substitution" in SOURCE
+    assert "ACI Class U / Class T service classification changes the Service-stage tensile limit only" in SOURCE
+    assert "Not applied to Transfer/Construction" in SOURCE

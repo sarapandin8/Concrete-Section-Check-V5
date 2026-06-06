@@ -113,6 +113,9 @@ from concrete_pmm_pro.serviceability import (
     DEFAULT_GIRDER_SLS_CODES,
     DEFAULT_GIRDER_SLS_STAGES,
     DEFAULT_TENSION_LIMIT_MODES,
+    STAGE_TRANSFER,
+    STAGE_DECK_CASTING,
+    STAGE_FINAL_SERVICE,
     GirderServiceStageCase,
     GirderServiceStressLimitCheckResult,
     GirderStressLimitPointResult,
@@ -5481,6 +5484,7 @@ def _render_girder_tension_limit_guidance(
 ) -> tuple[str, list[str]]:
     """Render CODE.SLS.LIMIT4 guided tensile-limit selection and return profile key."""
 
+    # CODE.SLS.LIMIT4.2: show the selected tensile-limit formula and substitution in the visible guide.
     # CODE.SLS.LIMIT4: reinforcement-aware tensile stress limit selection aid only.
     option_keys = {option.key for option in profile_options}
     guide_enabled_key = f"girder_tension_limit_guide_enabled_{title}"
@@ -5522,13 +5526,23 @@ def _render_girder_tension_limit_guidance(
             aci_options = ["Class U", "Class T", "No tension"]
             if st.session_state.get(aci_class_key) not in aci_options:
                 st.session_state[aci_class_key] = aci_options[0]
-            aci_service_class = st.selectbox("ACI service class", aci_options, key=aci_class_key)
+            if stage == STAGE_FINAL_SERVICE:
+                aci_service_class = st.selectbox("ACI service class", aci_options, key=aci_class_key)
+            else:
+                aci_service_class = "Class U"
+                st.markdown("**ACI service class**")
+                st.caption("Not applied to Transfer/Construction; this stage uses its stage-specific tensile stress limit formula.")
             exposure = "moderate"
     with cols[2]:
         duration_options = ["Full service / total", "Sustained or permanent only"]
         if st.session_state.get(duration_key) not in duration_options:
             st.session_state[duration_key] = duration_options[0]
-        duration = st.selectbox("Effect duration", duration_options, key=duration_key)
+        if stage == STAGE_FINAL_SERVICE:
+            duration = st.selectbox("Effect duration", duration_options, key=duration_key)
+        else:
+            duration = "Full service / total"
+            st.markdown("**Effect duration**")
+            st.caption("Not applied to this stage; service duration controls only service-stage classification.")
     if method == "Auto from current ordinary rebar layout":
         verified = summary.get("auto_verified")
     elif method == "Verified bonded tension reinforcement":
@@ -5571,10 +5585,35 @@ def _render_girder_tension_limit_guidance(
         ],
         columns=2,
     )
+
+    selected_profile_key = recommended_key if guide_enabled else str(st.session_state.get(profile_key, profile_key))
+    selected_profile = build_girder_sls_limit_profile(code=code, stage=stage, limit_profile_key=selected_profile_key)
+    fc_for_formula = _girder_fc_for_sls_limit_preview()
+    formula_summary = girder_sls_limit_formula_summary(profile=selected_profile, fc_MPa=float(fc_for_formula))
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Selected tensile limit",
+                "value": f"{formula_summary.tension_limit_MPa:.3f} MPa",
+                "detail": formula_summary.tension_formula,
+                "status": "ready" if formula_summary.tension_limit_MPa > 0.0 else "warning",
+            },
+            {
+                "title": "Tension formula substitution",
+                "value": formula_summary.tension_substitution,
+                "detail": f"{formula_summary.strength_label} = {float(fc_for_formula):.3f} MPa · {selected_profile.limit_profile_label}",
+                "status": "info",
+            },
+        ],
+        columns=2,
+    )
+    if code != "AASHTO LRFD Bridge" and stage != STAGE_FINAL_SERVICE:
+        st.info("ACI Class U / Class T service classification changes the Service-stage tensile limit only. Transfer and Construction use their own stage-specific limit formulas.")
+
     notes = list(guidance.warnings)
     if method == "Auto from current ordinary rebar layout":
         notes.append("Auto rebar detection is a screening aid only; it does not verify code-required bonded reinforcement area, detailing, development, or crack-control requirements.")
-    return (recommended_key if guide_enabled else str(st.session_state.get(profile_key, profile_key)), notes)
+    return (selected_profile_key, notes)
 
 
 def _render_girder_code_limit_preview(

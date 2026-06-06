@@ -306,13 +306,22 @@ def girder_sls_limit_profile_options(
             return (
                 GirderStressLimitProfileOption(
                     key="aashto_deck_precomp_user",
-                    label="Pre-composite construction stage — engineer-controlled",
-                    description="0.55 f'c_stage compression; 0.25√f'c_stage tension capped at 1.38 MPa. Use as editable construction-stage preview until project stage limits are defined.",
+                    label="Pre-composite construction stage — no bonded auxiliary reinforcement",
+                    description="0.55 f'c_stage compression; 0.25√f'c_stage tension capped at 1.38 MPa. Use where bonded auxiliary reinforcement condition is not verified.",
                     compression_limit_ratio=0.55,
                     tension_limit_mode="sqrt(fc) ratio",
                     tension_sqrt_fc_ratio=0.25,
                     tension_limit_cap_MPa=1.38,
-                    clause_note="Construction-stage preview. Wet deck generally acts on precast gross section. Confirm project-specific temporary stress limits.",
+                    clause_note="AASHTO-style construction/deck-casting temporary stress preview without verified bonded auxiliary reinforcement. Confirm project-specific temporary stress limits.",
+                ),
+                GirderStressLimitProfileOption(
+                    key="aashto_deck_precomp_bonded_aux",
+                    label="Pre-composite construction stage — bonded auxiliary reinforcement condition",
+                    description="0.55 f'c_stage compression; 0.58√f'c_stage tension preview where bonded auxiliary reinforcement condition is satisfied.",
+                    compression_limit_ratio=0.55,
+                    tension_limit_mode="sqrt(fc) ratio",
+                    tension_sqrt_fc_ratio=0.58,
+                    clause_note="AASHTO-style construction/deck-casting temporary stress preview with verified bonded auxiliary reinforcement assumption. Confirm reinforcement condition before final design.",
                 ),
                 GirderStressLimitProfileOption(
                     key="aashto_deck_no_tension",
@@ -530,13 +539,22 @@ def recommend_girder_tension_limit_profile(
             return GirderTensionLimitGuidance(key, status(), basis, tuple(warnings))
 
         if stage == STAGE_DECK_CASTING:
-            if "no" in exposure:
-                key = "aashto_deck_no_tension"
-                basis = "Pre-composite construction selected as no-tension preview."
+            if "no" in exposure or verified is False:
+                key = "aashto_deck_no_tension" if "no" in exposure else "aashto_deck_precomp_user"
+                basis = (
+                    "Pre-composite construction selected as no-tension preview."
+                    if key == "aashto_deck_no_tension"
+                    else "No verified auxiliary bonded tension reinforcement; conservative capped construction-stage tension profile selected."
+                )
+                if key == "aashto_deck_precomp_user":
+                    warnings.append("Do not use the higher construction-stage tensile limit unless bonded auxiliary reinforcement condition is verified at the tensile face.")
+            elif verified is True:
+                key = "aashto_deck_precomp_bonded_aux"
+                basis = "Pre-composite construction tension reinforcement condition verified; bonded auxiliary reinforcement profile selected."
             else:
                 key = "aashto_deck_precomp_user"
-                basis = "Pre-composite construction uses engineer-controlled temporary tension profile."
-                warnings.append("Construction-stage tensile limit is project/sequence dependent; confirm temporary stress criteria and reinforcement condition.")
+                basis = "Auxiliary bonded tension reinforcement not verified; conservative capped construction-stage tension profile selected."
+                warnings.append("Construction-stage bonded auxiliary reinforcement condition is not verified; keep REVIEW before final construction-stage acceptance.")
             return GirderTensionLimitGuidance(key, status(), basis, tuple(warnings))
 
         if stage == STAGE_FINAL_SERVICE:

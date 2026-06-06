@@ -194,6 +194,46 @@ def test_tension_limit_guidance_selects_aci_transfer_end_zone_only_when_verified
     assert unverified.status == "REVIEW"
 
 
+
+def test_aashto_construction_verified_bonded_reinforcement_uses_higher_tension_limit() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    guidance = recommend_girder_tension_limit_profile(
+        code="AASHTO LRFD Bridge",
+        stage="Deck casting / Pre-composite",
+        bonded_tension_reinforcement_verified=True,
+    )
+    profile = default_girder_sls_limit_profile(
+        "AASHTO LRFD Bridge",
+        "Deck casting / Pre-composite",
+        limit_profile_key=guidance.recommended_profile_key,
+    )
+
+    assert guidance.recommended_profile_key == "aashto_deck_precomp_bonded_aux"
+    assert guidance.status == "OK"
+    assert profile.tension_limit_cap_MPa is None
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.58 * math.sqrt(45.0))
+
+
+def test_aashto_construction_unverified_reinforcement_keeps_capped_tension_limit() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    guidance = recommend_girder_tension_limit_profile(
+        code="AASHTO LRFD Bridge",
+        stage="Deck casting / Pre-composite",
+        bonded_tension_reinforcement_verified=None,
+    )
+    profile = default_girder_sls_limit_profile(
+        "AASHTO LRFD Bridge",
+        "Deck casting / Pre-composite",
+        limit_profile_key=guidance.recommended_profile_key,
+    )
+
+    assert guidance.recommended_profile_key == "aashto_deck_precomp_user"
+    assert guidance.status == "REVIEW"
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(1.38)
+    assert profile.tension_limit_cap_MPa == pytest.approx(1.38)
+
 def test_girder_code_limit_validation_suite_passes() -> None:
     results = validate_girder_code_limits()
 

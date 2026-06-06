@@ -7453,9 +7453,14 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
         st.write("- This preview is a manual elastic stress check foundation only; code-limit checks are editable previews and staged checks are future work and remain engineer-controlled.")
 
+    # DEFLECT.SLS1.1 — render deflection/camber only inside the active Beam/Girder
+    # workspace, where the section-basis options are already available.  This
+    # avoids the NameError caused by calling the workspace from the generic
+    # serviceability expander, which has no local basis_options variable.
+    _render_girder_deflection_camber_workspace(basis_options=basis_options)
+
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()
-    _render_girder_deflection_camber_workspace(basis_options=basis_options)
 
     with st.expander("Advanced Serviceability / SLS Foundation settings", expanded=False):
         st.info(

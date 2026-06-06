@@ -207,6 +207,13 @@ def test_service_comp4_finalizes_service_stress_check_workflow_without_certified
     assert "code-certified" not in SOURCE[SOURCE.find("def _render_final_service_beam_cip_concrete_split"):SOURCE.find("def _render_girder_full_length_sls_diagram")]
 
 
+
+
+def test_deflect_sls1_workspace_is_not_rendered_from_generic_serviceability_expander() -> None:
+    serviceability_block = SOURCE[SOURCE.find("def _render_serviceability_expander"):SOURCE.find("def render_analysis_sls_stress")]
+    assert "_render_girder_deflection_camber_workspace(basis_options=basis_options)" not in serviceability_block
+    assert "current = _serviceability_settings_from_session()" in serviceability_block
+
 def test_deflect_sls1_adds_short_term_deflection_camber_workspace() -> None:
     assert "DEFLECT.SLS1" in SOURCE
     assert "SLS Deflection / Camber" in SOURCE

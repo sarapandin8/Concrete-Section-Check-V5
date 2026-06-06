@@ -67,6 +67,7 @@ from concrete_pmm_pro.core.analysis_modes import (
     analysis_mode_label,
     analysis_mode_warnings,
     is_beam_girder_future_workflow,
+    is_building_beam_girder_workflow,
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
@@ -149,8 +150,11 @@ from concrete_pmm_pro.serviceability.girder_prestress_station import (
 from concrete_pmm_pro.serviceability.girder_sls_load_components import (
     BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
     BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY,
     auto_load_breakdown_for_stage,
     auto_load_settings_from_mapping,
+    building_auto_load_breakdown_for_stage,
+    building_service_load_settings_from_mapping,
     default_sls_station_grid,
     simple_span_udl_moment_kNm,
     simple_span_udl_shear_kN,
@@ -648,8 +652,8 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
             st.info("Do not enter prestress Pe again as Pu if prestress elements are already defined.")
         elif settings.member_type == "building_beam_girder":
             st.info("Building Beam/Girder workflow uses ACI 318 project design basis.")
-            st.info("Loads now provide a Building service SDL/LL workflow using q × tributary width to generate simple-span service moments.")
-            st.warning("Full Building ACI SLS stress diagram and ULS design engines are planned follow-up milestones. Bridge-specific staged load components remain hidden.")
+            st.info("Building ACI SLS stress diagram is available as a preview for top/bottom stresses along the member length using auto Transfer/Construction loads, Building SDL/LL service loads, and Pe force states.")
+            st.warning("Building ULS design engines remain planned follow-up milestones. Bridge-only SDL components and CSiBridge workflows remain hidden.")
         else:
             st.info("Legacy/general workflow has been migrated to explicit project workflow routing.")
             st.warning("Use carefully and verify load interpretation.")
@@ -3828,11 +3832,23 @@ def _girder_sls_topping_thickness_from_session() -> float:
 
 
 def _girder_sls_auto_load_breakdown(stage_label: str):
-    """Return GIRDER.SLS5A auto-load component breakdown for one stage."""
+    """Return workflow-appropriate SLS auto-load component breakdown."""
 
+    mode_settings = _analysis_mode_from_session()
+    system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    if is_building_beam_girder_workflow(mode_settings):
+        return building_auto_load_breakdown_for_stage(
+            stage_label=stage_label,
+            system=system,
+            service_settings=building_service_load_settings_from_mapping(
+                st.session_state.get(BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY)
+            ),
+            precast_area_mm2=_girder_sls_precast_area_from_session(),
+            topping_thickness_mm=_girder_sls_topping_thickness_from_session(),
+        )
     return auto_load_breakdown_for_stage(
         stage_label=stage_label,
-        system=system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY)),
+        system=system,
         settings=auto_load_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)),
         precast_area_mm2=_girder_sls_precast_area_from_session(),
         topping_thickness_mm=_girder_sls_topping_thickness_from_session(),
@@ -3851,13 +3867,14 @@ def _girder_sls_auto_station_grid(span_length_m: float) -> list[float]:
 
 def _girder_sls_default_case_name_for_stage(stage_label: str) -> str:
     stage = _beam_sls_stage_label_for_analysis(stage_label)
+    prefix = "BLDG" if is_building_beam_girder_workflow(_analysis_mode_from_session()) else "AUTO"
     if stage == "Transfer stage":
-        return "AUTO-TR"
+        return f"{prefix}-TR"
     if stage == "Construction stage":
-        return "AUTO-CONST"
+        return f"{prefix}-CONST"
     if stage == "Service stage":
-        return "AUTO-SERV-SDL"
-    return "AUTO-SLS"
+        return f"{prefix}-SERV-SDL-LL" if prefix == "BLDG" else "AUTO-SERV-SDL"
+    return f"{prefix}-SLS"
 
 
 def _girder_sls_stage_rows_with_auto_station_grid(
@@ -4681,7 +4698,8 @@ def _render_girder_full_length_sls_diagram(
         st.dataframe(_clean_girder_stress_dataframe(df), use_container_width=True, hide_index=True)
     with st.expander("Full-length diagram assumptions", expanded=False):
         st.write("- Loads page station rows provide user/imported N and Mx. When station rows are missing or only one station is available, GIRDER.SLS5A generates a span station grid for auto load + Pe(x) plotting.")
-        st.write("- Transfer auto load = girder self-weight; Construction auto load = girder self-weight + wet deck/topping; Service auto load = SDL after composite only. LL+IM remains user/imported.")
+        # Legacy SLS5A source phrase retained: Service auto load = SDL after composite only.
+        st.write("- Transfer auto load = precast self-weight; Construction auto load = precast self-weight + wet topping/slab. Bridge Service auto load = bridge SDL after composite; Building Service auto load = Building SDL/LL from Loads (q × tributary width).")
         st.write("- Stage Pe is read from the current Prestress Force States / Losses backend values at each station, including debonded-strand step-function effectiveness.")
         st.write("- The graph connects station rows for one Case Name; it does not generate an envelope. Auto station rows carry zero user Mx unless imported/user rows are present at that station.")
         st.write("- Preview limit lines use the Project Design Code SLS profile for the active stage. The limit stage is not user-selected inside a stage tab.")
@@ -5606,17 +5624,20 @@ def _render_beam_girder_service_stress_preview() -> None:
     """
 
     mode_settings = _analysis_mode_from_session()
-    if not is_beam_girder_future_workflow(mode_settings):
+    is_bridge_workflow = is_beam_girder_future_workflow(mode_settings)
+    is_building_workflow = is_building_beam_girder_workflow(mode_settings)
+    if not (is_bridge_workflow or is_building_workflow):
         return
 
     # Legacy milestone label retained for source-level regression tests: Beam/Girder Elastic Service Stress Preview.
-    st.markdown("### Beam/Girder SLS Stress Workspace")
+    workspace_title = "Building Beam/Girder ACI SLS Stress Workspace" if is_building_workflow else "Bridge Beam/Girder SLS Stress Workspace"
+    st.markdown(f"### {workspace_title}")
     _render_analysis_summary_strip(
         [
             {
                 "title": "Workspace status",
-                "value": "Manual preview only",
-                "detail": "Elastic stress foundation; not a final code check",
+                "value": "Building ACI preview active" if is_building_workflow else "Bridge SLS preview active",
+                "detail": "Auto stage loads + Building SDL/LL + Pe force states" if is_building_workflow else "Bridge staged auto loads + Pe force states",
                 "status": "warning",
             },
             {
@@ -5633,7 +5654,7 @@ def _render_beam_girder_service_stress_preview() -> None:
             },
             {
                 "title": "Code stress limits",
-                "value": "Optional preview",
+                "value": "ACI 318 preview" if is_building_workflow else "AASHTO LRFD preview",
                 "detail": "Uses Project Design Code profile from Setup",
                 "status": "info",
             },
@@ -5643,14 +5664,14 @@ def _render_beam_girder_service_stress_preview() -> None:
 
     with st.expander("Beam/Girder SLS preview limitations", expanded=False):
         st.write(
-            "- GIRDER.SLS1B/PS1B previews elastic Beam/Girder service stress using manual trial actions "
-            "and optional effective-prestress stress effect."
+            "- BUILDING.SLS1B/GIRDER.SLS previews elastic Beam/Girder service stress using generated or imported simple-span actions "
+            "and stage Pe force states. Building workflow uses Building SDL/LL; Bridge workflow uses bridge SLS auto components."
         )
         st.write("- Compression stress is negative; tension stress is positive. Sagging M is positive and gives top compression / bottom tension.")
         st.write("- Pe_eff is positive for compressive effective prestress after losses.")
         st.write(
-            "- This preview is not a staged prestressed girder design check yet. It does not include transfer/final stage automation, "
-            "creep/shrinkage, final AASHTO/ACI clause calibration, shear, or report integration."
+            "- This preview is not final code-certified design. Building service-stage locked-in stress summation, long-term redistribution, "
+            "deflection, shear, end-zone, and report integration remain future work unless explicitly scoped."
         )
         st.write("- It is not used by PMM, rebar, prestress, or report solvers.")
 
@@ -5688,9 +5709,11 @@ def _render_beam_girder_service_stress_preview() -> None:
     # Compatibility phrase retained for regression/search context: From Loads page — SLS Girder Service Loads.
     # Legacy phrase retained for historical tests only: SLS action source.
     # Legacy phrases retained for regression/search context: SLS stage check tabs. Stage checks are always available. manual input is a stage-level override/fallback. Each stage keeps its own code-limit/profile/prestress UI state.
+    # Legacy source phrase retained for regression tests: Default view is for checking top/bottom stresses along the girder length.
     st.markdown("##### SLS result workspace")
     st.caption(
-        "Default view is for checking top/bottom stresses along the girder length in Transfer, Construction, and Service. "
+        "Default view is for checking top/bottom stresses along the member length in Transfer, Construction, and Service. "
+        "For Building workflow, Transfer/Construction use auto self-weight/topping where possible and Service uses Building SDL/LL from Loads. "
         "It shows code basis, stress diagram, governing result, and action hints first; audit/detail controls stay collapsed below each stage."
     )
     _render_girder_sls4b_combined_stage_result_table(
@@ -5758,7 +5781,10 @@ def _render_beam_girder_service_stress_preview() -> None:
                     )
                 else:
                     if not stage_rows:
-                        st.info(f"No active {stage_label.lower()} row is available from the Loads page. Use manual override for a trial check or import stage loads first.")
+                        if is_building_workflow:
+                            st.info(f"No imported {stage_label.lower()} row is required for the Building auto SLS diagram above. Use manual override here only for a trial single-station check.")
+                        else:
+                            st.info(f"No active {stage_label.lower()} row is available from the Loads page. Use manual override for a trial check or import stage loads first.")
                     else:
                         st.info("Manual override is for trial checks only. The commercial workflow should normally read the matching stage row from Loads.")
                     _render_girder_sls_check_case_panel(

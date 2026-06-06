@@ -359,6 +359,41 @@ def default_sls_station_grid(span_length_m: float, extra_stations_m: Iterable[fl
     return sorted(stations)
 
 
+
+def building_auto_load_breakdown_for_stage(
+    *,
+    stage_label: str,
+    system: BeamGirderSystemSettings,
+    service_settings: BuildingBeamGirderServiceLoadSettings,
+    precast_area_mm2: float,
+    topping_thickness_mm: float,
+) -> SLSAutoLoadBreakdown:
+    """Return Building Beam/Girder ACI stage auto-load components.
+
+    BUILDING.SLS1B intentionally keeps Building SLS load generation separate
+    from Bridge-only SDL components. Transfer and Construction use auto
+    precast/topping self-weight where possible; Service uses building SDL/LL
+    inputs from the Building Loads workflow. This helper only returns simple
+    line-load components for preview moment generation; it does not change any
+    stress formula, prestress force state, PMM, or code-limit logic.
+    """
+
+    stage = str(stage_label or "").casefold()
+    components: list[tuple[str, float]] = []
+    self_weight = girder_self_weight_kN_m(precast_area_mm2, system.concrete_unit_weight_kN_m3)
+    if "transfer" in stage:
+        if self_weight > 0.0:
+            components.append(("Precast girder self-weight", self_weight))
+    elif "construction" in stage:
+        if self_weight > 0.0:
+            components.append(("Precast girder self-weight", self_weight))
+        wet = wet_topping_load_kN_m(topping_thickness_mm, system.effective_tributary_width_m, system.concrete_unit_weight_kN_m3)
+        if wet > 0.0:
+            components.append(("Wet topping/slab", wet))
+    elif "service" in stage:
+        components.extend(building_service_load_components_kN_m(system, service_settings))
+    return SLSAutoLoadBreakdown(stage_label=stage_label, component_loads_kN_m=tuple(components))
+
 def auto_load_breakdown_for_stage(
     *,
     stage_label: str,

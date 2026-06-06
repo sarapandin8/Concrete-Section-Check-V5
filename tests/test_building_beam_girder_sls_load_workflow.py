@@ -104,6 +104,43 @@ def test_building_service_settings_round_trip_project_io() -> None:
     assert normalized.additional_sdl_line_load_kN_m == pytest.approx(0.75)
 
 
+
+def test_building_auto_load_breakdown_uses_building_loads_not_bridge_sdl() -> None:
+    from concrete_pmm_pro.serviceability.girder_sls_load_components import building_auto_load_breakdown_for_stage
+
+    system = BeamGirderSystemSettings(span_length_m=10.0, girder_spacing_m=2.0, use_girder_spacing_as_tributary_width=True)
+    settings = BuildingBeamGirderServiceLoadSettings(service_sdl_kN_m2=1.0, service_ll_kN_m2=2.0)
+
+    transfer = building_auto_load_breakdown_for_stage(
+        stage_label="Transfer stage",
+        system=system,
+        service_settings=settings,
+        precast_area_mm2=500_000.0,
+        topping_thickness_mm=120.0,
+    )
+    construction = building_auto_load_breakdown_for_stage(
+        stage_label="Construction stage",
+        system=system,
+        service_settings=settings,
+        precast_area_mm2=500_000.0,
+        topping_thickness_mm=120.0,
+    )
+    service = building_auto_load_breakdown_for_stage(
+        stage_label="Service stage",
+        system=system,
+        service_settings=settings,
+        precast_area_mm2=500_000.0,
+        topping_thickness_mm=120.0,
+    )
+
+    assert dict(transfer.component_loads_kN_m)["Precast girder self-weight"] == pytest.approx(12.0)
+    assert dict(construction.component_loads_kN_m)["Wet topping/slab"] == pytest.approx(5.76)
+    service_components = dict(service.component_loads_kN_m)
+    assert service_components["Building SDL"] == pytest.approx(2.0)
+    assert service_components["Building LL"] == pytest.approx(4.0)
+    assert "Barrier/Parapet/Sidewalk" not in service_components
+    assert "Wearing surface" not in service_components
+
 def test_building_workflow_ui_hides_bridge_sdl_and_exposes_building_sdl() -> None:
     assert "Building Beam/Girder System Settings" in PROJECT_SOURCE
     assert "Beam / Girder spacing" in PROJECT_SOURCE
@@ -115,4 +152,6 @@ def test_building_workflow_ui_hides_bridge_sdl_and_exposes_building_sdl() -> Non
     assert "SDL (kN/m²)" in LOADS_SOURCE
     assert "LL (kN/m²)" in LOADS_SOURCE
     assert "bridge barrier/parapet/sidewalk, wearing surface" in LOADS_SOURCE
-    assert "Full Building ACI SLS stress diagram" in ANALYSIS_SOURCE
+    assert "Building Beam/Girder ACI SLS Stress Workspace" in ANALYSIS_SOURCE
+    assert "Building ACI preview active" in ANALYSIS_SOURCE
+    assert "Building Service auto load = Building SDL/LL from Loads" in ANALYSIS_SOURCE

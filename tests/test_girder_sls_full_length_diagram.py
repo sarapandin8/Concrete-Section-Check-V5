@@ -124,3 +124,11 @@ def test_sls_limit4_has_reinforcement_aware_tension_limit_guide() -> None:
     assert "Auto from current ordinary rebar layout" in SOURCE
     assert "Verified bonded tension reinforcement" in SOURCE
     assert "Auto rebar detection is a screening aid only" in SOURCE
+
+
+def test_sls_limit4_1_tensile_limit_guide_is_visible_in_full_length_diagram() -> None:
+    assert "CODE.SLS.LIMIT4.1" in SOURCE
+    assert "_render_girder_sls_diagram_tensile_limit_guide" in SOURCE
+    assert "expanded=True" in SOURCE
+    assert "Selected by the visible tensile stress limit guide" in SOURCE
+    assert "graph limit lines and stage PASS/FAIL preview update from this profile" in SOURCE

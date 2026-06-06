@@ -4024,12 +4024,86 @@ def _girder_full_length_sls_stage_rows(
     return pd.DataFrame(rows).sort_values(["Case Name", "Station x (m)"]).reset_index(drop=True)
 
 
+def _girder_sls_diagram_profile_key(stage_label: str) -> str:
+    """Return Streamlit key for the full-length diagram limit profile.
+
+    CODE.SLS.LIMIT4.1 makes the reinforcement-aware tensile limit guide part of
+    the default full-length SLS decision workflow, not only the lower audit
+    Code Limit Summary.  This key stores the guided/manual profile used by the
+    diagram limit lines, stage cards, and PASS/FAIL preview.
+    """
+
+    safe_stage = _beam_sls_stage_label_for_analysis(stage_label).replace(" ", "_").replace("/", "_")
+    return f"girder_sls_diagram_limit_profile_key_{safe_stage}"
+
+
 def _girder_stage_limit_profile_for_diagram(stage_label: str):
     """Return the project-code preview stress-limit profile for a stage diagram."""
 
     code = girder_sls_code_for_project_code(project_design_code_from_session(st.session_state))
     limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
-    return build_girder_sls_limit_profile(code=code, stage=limit_stage, limit_profile_key=None)
+    profile_key = _girder_sls_diagram_profile_key(stage_label)
+    option_keys = {option.key for option in girder_sls_limit_profile_options(code=code, stage=limit_stage)}
+    selected_key = str(st.session_state.get(profile_key) or "")
+    if selected_key not in option_keys:
+        selected_key = None
+    return build_girder_sls_limit_profile(code=code, stage=limit_stage, limit_profile_key=selected_key)
+
+
+def _girder_sls_diagram_stress_limit_rows(df: pd.DataFrame) -> list[StressLimitInputRow]:
+    """Build top/bottom stress rows for full-length diagram limit guidance.
+
+    The guidance needs to know which fiber is in tension.  Full-length SLS
+    diagram rows store top and bottom stresses in separate columns, so convert
+    them to ordinary StressLimitInputRow records without changing any stress
+    calculation.
+    """
+
+    if df.empty:
+        return []
+    rows: list[StressLimitInputRow] = []
+    for _, row in df.iterrows():
+        station = row.get("Station x (m)", "")
+        for fiber, column in (("Top", "Top total (MPa)"), ("Bottom", "Bottom total (MPa)")):
+            if column not in df.columns:
+                continue
+            try:
+                stress = float(row[column])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(stress):
+                rows.append(StressLimitInputRow(fiber=f"{fiber} fiber @ x={station} m", stress_MPa=stress))
+    return rows
+
+
+def _render_girder_sls_diagram_tensile_limit_guide(stage_label: str, df: pd.DataFrame) -> None:
+    """Render visible tensile-limit guidance in the primary full-length SLS view."""
+
+    code = girder_sls_code_for_project_code(project_design_code_from_session(st.session_state))
+    limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
+    profile_options = girder_sls_limit_profile_options(code=code, stage=limit_stage)
+    profile_key = _girder_sls_diagram_profile_key(stage_label)
+    option_keys = {option.key for option in profile_options}
+    if st.session_state.get(profile_key) not in option_keys:
+        st.session_state[profile_key] = profile_options[0].key
+
+    st.markdown("**Tensile stress limit guide**")
+    st.caption(
+        "Visible decision control for the graph limit profile. Select reinforcement/exposure/class assumptions here; "
+        "the graph limit lines and stage PASS/FAIL preview update from this profile. This is guidance only, not a final cracked-section or detailing verification."
+    )
+    with st.expander(f"Tensile stress limit guide — {stage_label}", expanded=True):
+        _, notes = _render_girder_tension_limit_guidance(
+            title=f"{stage_label} full-length diagram",
+            code=code,
+            stage=limit_stage,
+            stresses=_girder_sls_diagram_stress_limit_rows(df),
+            profile_key=profile_key,
+            profile_options=profile_options,
+        )
+        if notes:
+            for note in notes:
+                st.warning(note)
 
 
 def _girder_sls_diagram_limit_summary(stage_label: str) -> tuple[float, float, str]:
@@ -4740,6 +4814,7 @@ def _render_girder_full_length_sls_diagram(
     if df.empty:
         st.info("No valid station rows are available for this diagram case.")
         return
+    _render_girder_sls_diagram_tensile_limit_guide(stage_label, df)
     status, detail, style = _girder_full_length_preview_status(df, stage_label)
     compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     governing_comp_idx = df["Max compression (MPa)"].idxmin()
@@ -4779,7 +4854,7 @@ def _render_girder_full_length_sls_diagram(
             {
                 "title": "Limit profile",
                 "value": profile_label,
-                "detail": "Auto-selected from the active stage tab",
+                "detail": "Selected by the visible tensile stress limit guide",
                 "status": "info",
             },
         ],

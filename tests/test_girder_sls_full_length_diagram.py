@@ -185,3 +185,13 @@ def test_service_comp2_1_hides_service_overview_behind_split_graphs() -> None:
     assert "audit/reference graph only" in SOURCE
     assert "Use the visible Beam and CIP final-service stress checks above" in SOURCE
     assert "service_split_rendered" in SOURCE
+
+
+def test_service_comp3_adds_final_service_beam_cip_code_limit_decision_engine() -> None:
+    assert "SERVICE.COMP3" in SOURCE
+    assert "Final Service Beam/CIP code-limit decision summary" in SOURCE
+    assert "_final_service_component_decision_rows" in SOURCE
+    assert "Precast beam and CIP/topping use separate material limits" in SOURCE
+    assert "Actual stress (MPa)" in SOURCE
+    assert "Limit stress (MPa)" in SOURCE
+    assert "Final service Beam/CIP action hints" in SOURCE

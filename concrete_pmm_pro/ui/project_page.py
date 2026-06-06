@@ -726,6 +726,68 @@ def _render_beam_girder_system_settings() -> None:
             unsafe_allow_html=True,
         )
 
+def _render_building_beam_girder_system_settings() -> None:
+    """Render Building Beam/Girder simple-span load-take-down settings."""
+
+    settings = _ensure_beam_girder_system_settings_defaults()
+    with st.container(border=True):
+        st.markdown("#### Building Beam/Girder System Settings")
+        st.caption(
+            "Single source of truth for Building Beam/Girder span, service-load tributary width, and concrete unit weight. "
+            "Bridge-only inputs such as girder spacing for deck distribution, number of bridge girders, barrier/sidewalk, and wearing surface are not used here."
+        )
+        cols = st.columns(3)
+        with cols[0]:
+            settings["span_length_m"] = st.number_input(
+                "🟨 Span length L (m)",
+                min_value=0.1,
+                step=0.5,
+                value=float(settings.get("span_length_m", DEFAULT_SPAN_LENGTH_M)),
+                format="%.3f",
+                key="building_beam_girder_system_span_length_m_input",
+                help="Single source for simple-span service moment diagrams and prestress/debonding previews.",
+            )
+        with cols[1]:
+            settings["tributary_width_m"] = st.number_input(
+                "🟨 Tributary width for building loads (m)",
+                min_value=0.1,
+                step=0.1,
+                value=float(settings.get("tributary_width_m") or settings.get("girder_spacing_m") or DEFAULT_GIRDER_SPACING_M),
+                format="%.3f",
+                key="building_beam_girder_system_tributary_width_m_input",
+                help="Used to convert building SDL/LL area loads in kN/m² into line loads in kN/m.",
+            )
+        with cols[2]:
+            settings["concrete_unit_weight_kN_m3"] = st.number_input(
+                "Concrete unit weight (kN/m³)",
+                min_value=1.0,
+                step=0.5,
+                value=float(settings.get("concrete_unit_weight_kN_m3", DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3)),
+                format="%.2f",
+                key="building_beam_girder_system_unit_weight_input",
+                help="Default unit weight for precast girder self-weight and wet topping load preview.",
+            )
+        # Preserve hidden defaults for project compatibility, but do not expose them in Building workflow.
+        settings.setdefault("girder_spacing_m", settings.get("tributary_width_m") or DEFAULT_GIRDER_SPACING_M)
+        settings.setdefault("number_of_girders", DEFAULT_NUMBER_OF_GIRDERS)
+        normalized = system_settings_from_mapping(settings).as_metadata()
+        st.session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized
+        _sync_beam_girder_span_to_existing_sources(normalized)
+        summary = system_settings_from_mapping(normalized)
+        st.markdown(
+            _compact_panel_html(
+                [
+                    DashboardCard("Span source", f"{summary.span_length_m:.3f} m", "Used by building SLS station grid and prestress preview", "ready"),
+                    DashboardCard("Load tributary width", f"{summary.effective_tributary_width_m:.3f} m", "q × b_trib → w for SDL/LL", "info"),
+                    DashboardCard("Design context", "ACI 318", "Building Beam/Girder workflow", "ready"),
+                    DashboardCard("Bridge SDL", "Hidden", "No barrier/sidewalk/wearing surface in Building workflow", "warning"),
+                ],
+                columns=2,
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render_project_page() -> None:
     _apply_pending_project_load()
     _ensure_project_defaults()
@@ -758,10 +820,7 @@ def render_project_page() -> None:
     if analysis_mode.member_type == "beam_girder":
         _render_beam_girder_system_settings()
     elif analysis_mode.member_type == "building_beam_girder":
-        st.info(
-            "Building Beam/Girder workflow is guarded. Bridge-specific system settings, staged SLS load components, "
-            "barrier/parapet/sidewalk, wearing surface, CSiBridge LL+IM, and bridge prestress/debonding tools are hidden."
-        )
+        _render_building_beam_girder_system_settings()
 
     project = project_from_session_state(st.session_state)
 

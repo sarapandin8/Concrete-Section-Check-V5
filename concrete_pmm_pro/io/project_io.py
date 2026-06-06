@@ -35,7 +35,9 @@ from concrete_pmm_pro.serviceability.points import stress_check_points_to_datafr
 from concrete_pmm_pro.serviceability.girder_sls_load_components import (
     BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
     BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY,
     auto_load_settings_from_mapping,
+    building_service_load_settings_from_mapping,
     system_settings_from_mapping,
 )
 
@@ -198,6 +200,19 @@ def _beam_girder_sls_auto_load_settings_metadata_from_session(session_state: Any
     return {key: _clean_table_value(value) for key, value in auto_load_settings_from_mapping(settings).as_metadata().items() if not _is_blank(value)}
 
 
+def _building_beam_girder_service_load_settings_metadata_from_session(session_state: Any) -> dict[str, Any]:
+    """Serialize Building Beam/Girder service SDL/LL settings."""
+
+    settings = _get_session_value(session_state, BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY, None)
+    if not isinstance(settings, dict):
+        return {}
+    return {
+        key: _clean_table_value(value)
+        for key, value in building_service_load_settings_from_mapping(settings).as_metadata().items()
+        if not _is_blank(value)
+    }
+
+
 def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     table = _get_session_value(session_state, "prestress_table", None)
     if table is None:
@@ -271,6 +286,9 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     beam_girder_sls_auto_load_settings = _beam_girder_sls_auto_load_settings_metadata_from_session(session_state)
     if beam_girder_sls_auto_load_settings:
         metadata[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = beam_girder_sls_auto_load_settings
+    building_service_load_settings = _building_beam_girder_service_load_settings_metadata_from_session(session_state)
+    if building_service_load_settings:
+        metadata[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY] = building_service_load_settings
 
     concrete_materials_value = _coerce_list(_get_session_value(session_state, "concrete_materials", []))
     preserve_existing_primary = not bool(concrete_materials_value)
@@ -608,6 +626,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     beam_girder_sls_auto_load_settings = project.metadata.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)
     if isinstance(beam_girder_sls_auto_load_settings, dict):
         session_state[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = auto_load_settings_from_mapping(beam_girder_sls_auto_load_settings).as_metadata()
+    building_service_load_settings = project.metadata.get(BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY)
+    if isinstance(building_service_load_settings, dict):
+        session_state[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY] = building_service_load_settings_from_mapping(building_service_load_settings).as_metadata()
     session_state["rebar_table"] = _rebars_to_table(project.rebars)
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,

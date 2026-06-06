@@ -648,7 +648,8 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
             st.info("Do not enter prestress Pe again as Pu if prestress elements are already defined.")
         elif settings.member_type == "building_beam_girder":
             st.info("Building Beam/Girder workflow uses ACI 318 project design basis.")
-            st.warning("Building beam/girder ULS and SLS engines are planned. Bridge-specific staged girder tools are hidden to avoid applying bridge assumptions to building members.")
+            st.info("Loads now provide a Building service SDL/LL workflow using q × tributary width to generate simple-span service moments.")
+            st.warning("Full Building ACI SLS stress diagram and ULS design engines are planned follow-up milestones. Bridge-specific staged load components remain hidden.")
         else:
             st.info("Legacy/general workflow has been migrated to explicit project workflow routing.")
             st.warning("Use carefully and verify load interpretation.")

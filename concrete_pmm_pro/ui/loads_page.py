@@ -22,12 +22,17 @@ from concrete_pmm_pro.core.units import kN_to_N, kNm_to_Nmm, tonf_to_N, tonfm_to
 from concrete_pmm_pro.serviceability.girder_sls_load_components import (
     BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
     BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY,
+    BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY,
     DEFAULT_BARRIER_SIDEWALK_TOTAL_AREA_BOTH_SIDES_M2,
     DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3,
     DEFAULT_WEARING_THICKNESS_MM,
     auto_load_breakdown_for_stage,
     auto_load_settings_from_mapping,
     barrier_sidewalk_load_per_girder_kN_m,
+    building_service_load_components_kN_m,
+    building_service_load_settings_from_mapping,
+    building_service_moment_rows,
+    building_service_total_load_kN_m,
     system_settings_from_mapping,
     wearing_surface_load_per_girder_kN_m,
     other_sdl_load_per_girder_kN_m,
@@ -152,8 +157,8 @@ def _render_load_workflow_notice() -> None:
         )
     elif settings.member_type == "building_beam_girder":
         st.info(
-            "Building Beam/Girder workflow is guarded. Bridge-specific SLS auto-load components, girder spacing, "
-            "number of girders, barrier/parapet/sidewalk, wearing surface, and CSiBridge workflows are hidden."
+            "Building Beam/Girder ACI workflow uses building-style service loads. Transfer and Construction SLS basis is auto-calculated where possible; "
+            "Service inputs use SDL/LL area loads with tributary width. Bridge-specific barrier/sidewalk/wearing surface and CSiBridge workflows are hidden."
         )
 
 
@@ -1638,6 +1643,141 @@ def _ensure_beam_girder_sls_auto_load_settings() -> dict[str, Any]:
     return normalized
 
 
+def _ensure_building_service_load_settings() -> dict[str, Any]:
+    existing = st.session_state.get(BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY)
+    if not isinstance(existing, dict):
+        existing = {}
+    normalized = building_service_load_settings_from_mapping(existing).as_metadata()
+    st.session_state[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY] = normalized
+    return normalized
+
+
+def _render_building_beam_girder_service_load_inputs() -> None:
+    """Render Building Beam/Girder ACI service load inputs.
+
+    BUILDING.SLS1A intentionally avoids bridge-only SDL components.  It
+    generates simple-span service UDL moments from building SDL/LL inputs only;
+    Transfer/Construction auto stresses and Analysis diagram connection remain
+    staged follow-up work.
+    """
+
+    system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    settings_data = _ensure_building_service_load_settings()
+    settings = building_service_load_settings_from_mapping(settings_data)
+    with st.container(border=True):
+        st.markdown("#### Building Beam/Girder ACI Service Load Components")
+        st.caption(
+            "Use building-style area loads. The app converts q (kN/m²) × tributary width into simple-span line load and service bending moment. "
+            "Topping/slab data is taken from Section/Composite metadata; do not re-enter topping here."
+        )
+        basis_cols = st.columns(4)
+        basis_cols[0].metric("Span L", f"{system.span_length_m:.3f} m")
+        basis_cols[1].metric("Tributary width", f"{system.effective_tributary_width_m:.3f} m")
+        basis_cols[2].metric("Code basis", "ACI 318")
+        basis_cols[3].metric("Bridge SDL", "Not used")
+
+        stage_cols = st.columns(3)
+        with stage_cols[0]:
+            st.markdown("**Transfer**")
+            st.info("Auto basis: precast girder self-weight + Pe at transfer. No SLS load table is required by default.")
+        with stage_cols[1]:
+            st.markdown("**Construction**")
+            st.info(
+                f"Auto basis: girder self-weight + wet topping/slab + Pe at construction. Current Tslab = {_active_topping_thickness_mm_from_session():.1f} mm."
+            )
+        with stage_cols[2]:
+            st.markdown("**Service**")
+            st.info("Input Building SDL and LL below. The app generates simple-span service moments; prestress final Pe is handled in Analysis.")
+
+        left, right = st.columns(2)
+        with left:
+            settings_data["include_service_sdl"] = st.checkbox(
+                "Include SDL",
+                value=bool(settings.include_service_sdl),
+                key="building_sls_include_service_sdl",
+            )
+            settings_data["service_sdl_kN_m2"] = st.number_input(
+                "🟨 SDL (kN/m²)",
+                min_value=0.0,
+                step=0.25,
+                value=float(settings.service_sdl_kN_m2),
+                format="%.3f",
+                key="building_sls_service_sdl_kN_m2",
+                help="Building superimposed dead load such as finishes, ceiling/MEP, partition allowance, or other permanent area load.",
+            )
+            settings_data["include_additional_sdl"] = st.checkbox(
+                "Include additional SDL",
+                value=bool(settings.include_additional_sdl),
+                key="building_sls_include_additional_sdl",
+            )
+            mode_options = ["Area load kN/m²", "Direct kN/m"]
+            mode_value = settings.additional_sdl_mode if settings.additional_sdl_mode in mode_options else mode_options[0]
+            settings_data["additional_sdl_mode"] = st.selectbox(
+                "Additional SDL input mode",
+                mode_options,
+                index=mode_options.index(mode_value),
+                key="building_sls_additional_sdl_mode",
+            )
+            settings_data["additional_sdl_kN_m2"] = st.number_input(
+                "Additional SDL area load (kN/m²)",
+                min_value=0.0,
+                step=0.25,
+                value=float(settings.additional_sdl_kN_m2),
+                format="%.3f",
+                key="building_sls_additional_sdl_kN_m2",
+            )
+            settings_data["additional_sdl_line_load_kN_m"] = st.number_input(
+                "Additional SDL line load (kN/m)",
+                min_value=0.0,
+                step=0.25,
+                value=float(settings.additional_sdl_line_load_kN_m),
+                format="%.3f",
+                key="building_sls_additional_sdl_line_load_kN_m",
+            )
+        with right:
+            settings_data["include_service_ll"] = st.checkbox(
+                "Include LL",
+                value=bool(settings.include_service_ll),
+                key="building_sls_include_service_ll",
+            )
+            settings_data["service_ll_kN_m2"] = st.number_input(
+                "🟨 LL (kN/m²)",
+                min_value=0.0,
+                step=0.25,
+                value=float(settings.service_ll_kN_m2),
+                format="%.3f",
+                key="building_sls_service_ll_kN_m2",
+                help="Building live load for service stress preview. Use project-specific service combination factors outside this field where required.",
+            )
+            st.warning(
+                "Do not enter bridge barrier/parapet/sidewalk, wearing surface, or CSiBridge bridge LL+IM here. "
+                "This Building workflow uses ACI 318 context and building-style SDL/LL loads."
+            )
+
+        normalized = building_service_load_settings_from_mapping(settings_data)
+        st.session_state[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY] = normalized.as_metadata()
+        components = building_service_load_components_kN_m(system, normalized)
+        summary = pd.DataFrame(
+            [
+                {
+                    "Component": label,
+                    "Basis": "q × tributary width" if "LL" in label or label == "Building SDL" else normalized.additional_sdl_mode,
+                    "w (kN/m)": value,
+                    "Mmax = wL²/8 (kN-m)": value * system.span_length_m**2 / 8.0,
+                }
+                for label, value in components
+            ]
+            or [{"Component": "No active building service load", "Basis": "Input SDL/LL above", "w (kN/m)": 0.0, "Mmax = wL²/8 (kN-m)": 0.0}]
+        )
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+        total_w = building_service_total_load_kN_m(system, normalized)
+        st.caption(
+            f"Total Building service UDL = {total_w:.3f} kN/m. Simple-span M(x)=w·x·(L-x)/2 and Mmax={total_w * system.span_length_m**2 / 8.0:.3f} kN-m."
+        )
+        with st.expander("Generated service moment preview", expanded=False):
+            st.dataframe(pd.DataFrame(building_service_moment_rows(system, normalized)), use_container_width=True, hide_index=True)
+
+
 def _render_beam_girder_auto_sls_load_component_inputs() -> None:
     """Render practical SLS auto-load component settings for Beam/Girder workflows."""
 
@@ -1985,6 +2125,83 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
         st.write("- Service stage: use auto SDL after composite plus user/imported LL+IM. Do not import total service combo unless auto SDL components are disabled.")
         st.write("- ULS rows and full staged summation are not yet connected to final code-certified girder design.")
 
+def _render_building_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
+    st.markdown("### Building Beam / Girder Loads")
+    st.caption(
+        "ACI 318 Building Beam/Girder load workflow. ULS uses the existing station-based girder table; "
+        "SLS Transfer/Construction are auto-basis previews, while Service is generated from building SDL/LL area loads."
+    )
+    status_cols = st.columns(4)
+    status_cols[0].metric("Workflow", "Building Beam/Girder")
+    status_cols[1].metric("Design code", "ACI 318")
+    status_cols[2].metric("Transfer/Construction SLS", "Auto basis")
+    status_cols[3].metric("Service SLS", "SDL/LL input")
+
+    st.markdown("#### ULS Building Girder Design Loads")
+    st.caption(
+        "Use factored station-based resultants for future ACI flexure, shear, torsion, and prestressed girder strength checks. "
+        "This table is preserved from the existing ULS workflow and is not mixed with SLS service inputs below."
+    )
+    with st.expander("Import Building Beam/Girder ULS station loads from Excel / CSV", expanded=False):
+        _render_workflow_import_tools(
+            title="Building Beam/Girder ULS station-load import",
+            table_name="Building Beam/Girder ULS",
+            columns=BEAM_ULS_LOAD_COLUMNS,
+            numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
+            state_key="beam_uls_loads_table",
+            editor_key="building_beam_uls_loads_editor",
+            key_prefix="building_beam_uls_station_loads",
+            unique_key_columns=["Case Name", "Station x (m)"],
+        )
+    uls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
+    edited_uls = st.data_editor(
+        uls_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Active": st.column_config.CheckboxColumn("Active"),
+            "Station x (m)": st.column_config.TextColumn("Station x (m)", help="Station along building girder length for ULS actions."),
+            "Case Name": st.column_config.TextColumn("Case Name"),
+            "Mux": st.column_config.TextColumn(f"Mux ({moment_unit})", help="Factored main bending about x-axis."),
+            "Vuy": st.column_config.TextColumn(f"Vuy ({force_unit})", help="Factored vertical shear in y-direction."),
+            "Tu": st.column_config.TextColumn(f"Tu ({moment_unit})", help="Factored torsion about member longitudinal axis."),
+            "Muy": st.column_config.TextColumn(f"Muy ({moment_unit})", help="Optional lateral/minor bending about y-axis."),
+            "Vux": st.column_config.TextColumn(f"Vux ({force_unit})", help="Optional lateral shear in x-direction."),
+            "Nu": st.column_config.TextColumn(f"Nu ({force_unit})", help="Optional axial force for frame action."),
+            "Note": st.column_config.TextColumn("Note"),
+        },
+        key="building_beam_uls_loads_editor",
+    )
+    edited_uls = _stringify_table(edited_uls, BEAM_ULS_LOAD_COLUMNS)
+    st.session_state["beam_uls_loads_table"] = edited_uls
+
+    _render_building_beam_girder_service_load_inputs()
+
+    uls_result = _workflow_table_result(
+        edited_uls,
+        table_name="Building Beam/Girder ULS",
+        numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
+        unique_key_columns=["Case Name", "Station x (m)"],
+    )
+    cols = st.columns(3)
+    cols[0].metric("ULS rows", len(uls_result.load_cases))
+    cols[1].metric("ULS errors", len(uls_result.errors))
+    cols[2].metric("SLS load source", "Auto + SDL/LL")
+    for error in uls_result.errors:
+        st.error(error)
+    for warning in uls_result.warnings:
+        st.warning(warning)
+    for info in uls_result.info:
+        st.info(info)
+
+    with st.expander("Building Beam/Girder load table scope", expanded=False):
+        st.write("- Transfer SLS: app basis is precast girder self-weight + Pe_transfer; no SLS load table is required by default.")
+        st.write("- Construction SLS: app basis is girder self-weight + wet topping/slab + Pe_construction when topping metadata is available.")
+        st.write("- Service SLS: use Building SDL/LL area loads with tributary width; topping/slab is not re-entered here.")
+        st.write("- Bridge-only barrier/parapet/sidewalk, wearing surface, and CSiBridge LL+IM are intentionally hidden.")
+
+
 def render_loads_page() -> None:
     st.subheader("Loads")
     st.caption("Workflow-based ULS/SLS load input for PMM and future Beam/Girder design workflows.")
@@ -2014,5 +2231,7 @@ def render_loads_page() -> None:
     settings = _analysis_mode_from_session_state()
     if settings.member_type == "beam_girder":
         _render_beam_girder_load_tables(force_unit, moment_unit)
+    elif settings.member_type == "building_beam_girder":
+        _render_building_beam_girder_load_tables(force_unit, moment_unit)
     else:
         _render_column_load_tables(force_unit, moment_unit)

@@ -19,9 +19,13 @@ DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3 = 24.0
 DEFAULT_BARRIER_SIDEWALK_TOTAL_AREA_BOTH_SIDES_M2 = 1.50
 DEFAULT_WEARING_THICKNESS_MM = 80.0
 DEFAULT_OTHER_SDL_AREA_LOAD_KPA = 0.0
+DEFAULT_BUILDING_SERVICE_SDL_KN_M2 = 0.0
+DEFAULT_BUILDING_SERVICE_LL_KN_M2 = 0.0
+DEFAULT_BUILDING_ADDITIONAL_SDL_KN_M2 = 0.0
 
 BEAM_GIRDER_SYSTEM_SETTINGS_KEY = "beam_girder_system_settings"
 BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY = "beam_girder_sls_auto_load_settings"
+BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY = "building_beam_girder_service_load_settings"
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,37 @@ class BeamGirderSLSAutoLoadSettings:
             "other_sdl_mode": self.other_sdl_mode,
             "other_sdl_area_load_kN_m2": self.other_sdl_area_load_kN_m2,
             "other_sdl_line_load_kN_m_per_girder": self.other_sdl_line_load_kN_m_per_girder,
+        }
+
+
+@dataclass(frozen=True)
+class BuildingBeamGirderServiceLoadSettings:
+    """Building Beam/Girder ACI service load inputs.
+
+    These are building-style area/line loads used to generate simple-span
+    service bending actions. Bridge-only components such as barrier, sidewalk,
+    wearing surface, and CSiBridge LL+IM are intentionally excluded.
+    """
+
+    include_service_sdl: bool = True
+    service_sdl_kN_m2: float = DEFAULT_BUILDING_SERVICE_SDL_KN_M2
+    include_service_ll: bool = True
+    service_ll_kN_m2: float = DEFAULT_BUILDING_SERVICE_LL_KN_M2
+    include_additional_sdl: bool = False
+    additional_sdl_mode: str = "Area load kN/m²"
+    additional_sdl_kN_m2: float = DEFAULT_BUILDING_ADDITIONAL_SDL_KN_M2
+    additional_sdl_line_load_kN_m: float = 0.0
+
+    def as_metadata(self) -> dict[str, Any]:
+        return {
+            "include_service_sdl": self.include_service_sdl,
+            "service_sdl_kN_m2": self.service_sdl_kN_m2,
+            "include_service_ll": self.include_service_ll,
+            "service_ll_kN_m2": self.service_ll_kN_m2,
+            "include_additional_sdl": self.include_additional_sdl,
+            "additional_sdl_mode": self.additional_sdl_mode,
+            "additional_sdl_kN_m2": self.additional_sdl_kN_m2,
+            "additional_sdl_line_load_kN_m": self.additional_sdl_line_load_kN_m,
         }
 
 
@@ -176,6 +211,24 @@ def auto_load_settings_from_mapping(mapping: Mapping[str, Any] | None) -> BeamGi
     )
 
 
+def building_service_load_settings_from_mapping(mapping: Mapping[str, Any] | None) -> BuildingBeamGirderServiceLoadSettings:
+    data = dict(mapping or {})
+    default = BuildingBeamGirderServiceLoadSettings()
+    return BuildingBeamGirderServiceLoadSettings(
+        include_service_sdl=bool(data.get("include_service_sdl", default.include_service_sdl)),
+        service_sdl_kN_m2=_nonnegative_float(data.get("service_sdl_kN_m2"), default.service_sdl_kN_m2),
+        include_service_ll=bool(data.get("include_service_ll", default.include_service_ll)),
+        service_ll_kN_m2=_nonnegative_float(data.get("service_ll_kN_m2"), default.service_ll_kN_m2),
+        include_additional_sdl=bool(data.get("include_additional_sdl", default.include_additional_sdl)),
+        additional_sdl_mode=str(data.get("additional_sdl_mode") or default.additional_sdl_mode),
+        additional_sdl_kN_m2=_nonnegative_float(data.get("additional_sdl_kN_m2"), default.additional_sdl_kN_m2),
+        additional_sdl_line_load_kN_m=_nonnegative_float(
+            data.get("additional_sdl_line_load_kN_m"),
+            default.additional_sdl_line_load_kN_m,
+        ),
+    )
+
+
 def girder_self_weight_kN_m(precast_area_mm2: float, concrete_unit_weight_kN_m3: float) -> float:
     """Return precast girder self-weight as kN/m from gross area in mm²."""
 
@@ -213,6 +266,60 @@ def other_sdl_load_per_girder_kN_m(
     if "direct" in mode or "kN/m".casefold() in mode and "m²" not in mode:
         return max(settings.other_sdl_line_load_kN_m_per_girder, 0.0)
     return max(settings.other_sdl_area_load_kN_m2, 0.0) * system.effective_tributary_width_m
+
+
+def building_service_load_components_kN_m(
+    system: BeamGirderSystemSettings,
+    settings: BuildingBeamGirderServiceLoadSettings,
+) -> tuple[tuple[str, float], ...]:
+    """Return Building service UDL components as kN/m along the member."""
+
+    components: list[tuple[str, float]] = []
+    tributary = system.effective_tributary_width_m
+    if settings.include_service_sdl:
+        value = max(settings.service_sdl_kN_m2, 0.0) * tributary
+        if value > 0.0:
+            components.append(("Building SDL", value))
+    if settings.include_additional_sdl:
+        mode = str(settings.additional_sdl_mode or "").casefold()
+        if "direct" in mode or ("kn/m" in mode and "m²" not in mode):
+            value = max(settings.additional_sdl_line_load_kN_m, 0.0)
+        else:
+            value = max(settings.additional_sdl_kN_m2, 0.0) * tributary
+        if value > 0.0:
+            components.append(("Additional SDL", value))
+    if settings.include_service_ll:
+        value = max(settings.service_ll_kN_m2, 0.0) * tributary
+        if value > 0.0:
+            components.append(("Building LL", value))
+    return tuple(components)
+
+
+def building_service_total_load_kN_m(
+    system: BeamGirderSystemSettings,
+    settings: BuildingBeamGirderServiceLoadSettings,
+) -> float:
+    return sum(value for _label, value in building_service_load_components_kN_m(system, settings))
+
+
+def building_service_moment_rows(
+    system: BeamGirderSystemSettings,
+    settings: BuildingBeamGirderServiceLoadSettings,
+    stations_m: Iterable[float] | None = None,
+) -> list[dict[str, Any]]:
+    """Return preview station rows for Building service UDL moments."""
+
+    stations = list(stations_m or default_sls_station_grid(system.span_length_m, divisions=20))
+    total_w = building_service_total_load_kN_m(system, settings)
+    return [
+        {
+            "Station x (m)": x,
+            "w service (kN/m)": total_w,
+            "Mx service (kN-m)": simple_span_udl_moment_kNm(total_w, x, system.span_length_m),
+            "Vy service (kN)": simple_span_udl_shear_kN(total_w, x, system.span_length_m),
+        }
+        for x in stations
+    ]
 
 
 def simple_span_udl_moment_kNm(w_kN_m: float, x_m: float, span_length_m: float) -> float:

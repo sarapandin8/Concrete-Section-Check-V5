@@ -137,7 +137,9 @@ from concrete_pmm_pro.serviceability import (
     run_girder_service_stage_stress,
     run_girder_service_stress_limit_check,
     run_basic_girder_service_stress,
+    girder_service_stress_at_y,
     run_girder_prestress_stress_effect,
+    girder_prestress_stress_at_y,
     summarize_girder_prestress_elements,
     run_elastic_sls_stress_check,
     service_stress_limits,
@@ -4799,6 +4801,266 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
     )
     return fig
 
+
+
+def _final_service_deck_fc_from_session() -> float:
+    """Return deck/topping concrete f'c for SERVICE.COMP1 final-service CIP preview."""
+
+    params = st.session_state.get("section_parameters") or {}
+    fc = _analysis_float_or_zero(params.get("deck_fc_MPa")) if isinstance(params, dict) else 0.0
+    if fc <= 0.0:
+        # Conservative UI fallback: if deck material metadata is missing, use the
+        # primary concrete strength so the preview remains visible with REVIEW wording.
+        fc = _girder_fc_for_sls_limit_preview()
+    return float(fc)
+
+
+def _service_comp1_preview_limit_summary(*, deck_fc_MPa: float) -> tuple[float, float]:
+    """Return CIP/topping material preview limits for final-service split graphs.
+
+    SERVICE.COMP1 intentionally keeps this as a material-preview check for the
+    cast-in-place topping concrete: compression 0.60 f'c and tension fr=0.62√f'c.
+    It is not a final code-certified composite service design engine.
+    """
+
+    fc = max(float(deck_fc_MPa), 0.0)
+    return 0.60 * fc, 0.62 * math.sqrt(fc) if fc > 0.0 else 0.0
+
+
+def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object) -> pd.DataFrame:
+    """Build SERVICE.COMP1 final-service beam/CIP concrete stress split rows.
+
+    The current full-length SLS dataframe is still the source of station actions
+    and Pe(x).  This helper only samples the existing composite transformed
+    section at additional y-locations: bottom/top of precast beam and bottom/top
+    of CIP/topping.  CIP stresses are converted from the transformed-section
+    primary-concrete basis to actual topping stress by multiplying by n=Edeck/Ebeam.
+    """
+
+    if df.empty:
+        return pd.DataFrame()
+    bases = getattr(basis_options, "bases", {}) or {}
+    composite_basis = bases.get("composite_transformed")
+    precast_basis = bases.get("precast_gross")
+    if composite_basis is None or precast_basis is None:
+        return pd.DataFrame()
+    precast_top_y = float(precast_basis.top_fiber_y_from_bottom_mm)
+    composite_top_y = float(composite_basis.top_fiber_y_from_bottom_mm)
+    if composite_top_y <= precast_top_y + 1.0e-6:
+        return pd.DataFrame()
+    params = st.session_state.get("section_parameters") or {}
+    modular_ratio_value = _analysis_float_or_zero(params.get("n_Edeck_over_Ebeam")) if isinstance(params, dict) else 0.0
+    if modular_ratio_value <= 0.0:
+        ebeam = _analysis_float_or_zero(params.get("Ebeam_MPa")) if isinstance(params, dict) else 0.0
+        edeck = _analysis_float_or_zero(params.get("Edeck_MPa")) if isinstance(params, dict) else 0.0
+        modular_ratio_value = edeck / ebeam if ebeam > 0.0 and edeck > 0.0 else 1.0
+    n_ratio = modular_ratio_value if modular_ratio_value > 0.0 else 1.0
+    fiber_specs = [
+        ("Precast beam", "Bottom of beam", float(precast_basis.bottom_fiber_y_from_bottom_mm), 1.0),
+        ("Precast beam", "Top of beam", precast_top_y, 1.0),
+        ("CIP / topping", "Bottom of CIP/topping", precast_top_y, n_ratio),
+        ("CIP / topping", "Top of CIP/topping", composite_top_y, n_ratio),
+    ]
+    rows: list[dict[str, object]] = []
+    for _, source in df.iterrows():
+        station = _analysis_float_or_zero(source.get("Station x (m)"))
+        n_kN = _analysis_float_or_zero(source.get("N (kN)"))
+        m_kNm = _analysis_float_or_zero(source.get("Mx (kN-m)"))
+        pe_kN = _analysis_float_or_zero(source.get("Pe stage (kN)"))
+        yps_raw = source.get("yps eff (mm)")
+        try:
+            yps = float(yps_raw)
+        except (TypeError, ValueError):
+            yps = math.nan
+        for component, fiber, y_mm, stress_scale in fiber_specs:
+            service = girder_service_stress_at_y(composite_basis, N_kN=n_kN, M_kNm=m_kNm, y_from_bottom_mm=y_mm)
+            ps_total = 0.0
+            if pe_kN > 0.0 and math.isfinite(yps):
+                try:
+                    ps = girder_prestress_stress_at_y(
+                        composite_basis,
+                        Pe_eff_kN=pe_kN,
+                        tendon_y_from_bottom_mm=yps,
+                        y_from_bottom_mm=y_mm,
+                    )
+                    ps_total = float(ps.total_stress_MPa)
+                except (TypeError, ValueError):
+                    ps_total = 0.0
+            service_actual = float(service.total_stress_MPa) * stress_scale
+            ps_actual = float(ps_total) * stress_scale
+            rows.append(
+                {
+                    "Station x (m)": station,
+                    "Concrete component": component,
+                    "Fiber": fiber,
+                    "y from bottom (mm)": y_mm,
+                    "Stress scale": stress_scale,
+                    "Service action stress (MPa)": service_actual,
+                    "Prestress stress (MPa)": ps_actual,
+                    "Total stress (MPa)": service_actual + ps_actual,
+                    "Case Name": str(source.get("Case Name") or "Unnamed"),
+                    "Basis note": (
+                        "Composite transformed section sampled at beam/topping fibers; "
+                        "CIP stress scaled by n=Edeck/Ebeam" if component == "CIP / topping" else
+                        "Composite transformed section sampled at precast beam fiber"
+                    ),
+                }
+            )
+    return pd.DataFrame(rows).sort_values(["Concrete component", "Fiber", "Station x (m)"]).reset_index(drop=True)
+
+
+def _component_stress_limits(component_df: pd.DataFrame, component: str, *, beam_limits: tuple[float, float], deck_fc_MPa: float) -> tuple[float, float, str]:
+    if component == "CIP / topping":
+        comp, tens = _service_comp1_preview_limit_summary(deck_fc_MPa=deck_fc_MPa)
+        return comp, tens, f"CIP/topping preview: compression 0.60f'c, tension fr=0.62√f'c with f'c={deck_fc_MPa:g} MPa"
+    comp, tens = beam_limits
+    return comp, tens, "Precast beam concrete: uses active Service-stage code limit profile selected above"
+
+
+def _component_governing_cards(component_df: pd.DataFrame, component: str, *, beam_limits: tuple[float, float], deck_fc_MPa: float) -> list[dict[str, object]]:
+    if component_df.empty:
+        return []
+    comp_limit, tens_limit, basis = _component_stress_limits(component_df, component, beam_limits=beam_limits, deck_fc_MPa=deck_fc_MPa)
+    comp_idx = component_df["Total stress (MPa)"].idxmin()
+    tens_idx = component_df["Total stress (MPa)"].idxmax()
+    comp_actual = float(component_df.loc[comp_idx, "Total stress (MPa)"])
+    tens_actual = float(component_df.loc[tens_idx, "Total stress (MPa)"])
+    comp_util = _girder_sls_demand_utilization(comp_actual, comp_limit, demand_type="compression")
+    tens_util = _girder_sls_demand_utilization(tens_actual, tens_limit, demand_type="tension")
+    fail = False
+    try:
+        fail = bool(
+            (comp_util is not None and (not math.isfinite(comp_util) or comp_util > 1.0))
+            or (tens_util is not None and (not math.isfinite(tens_util) or tens_util > 1.0))
+        )
+    except TypeError:
+        fail = True
+    return [
+        {
+            "title": f"{component} preview",
+            "value": "Preview FAIL" if fail else "Preview PASS",
+            "detail": basis,
+            "status": "danger" if fail else "ready",
+        },
+        {
+            "title": "Governing compression",
+            "value": _format_girder_stress_mpa(comp_actual),
+            "detail": f"{component_df.loc[comp_idx, 'Fiber']} @ x={float(component_df.loc[comp_idx, 'Station x (m)']):.3f} m · limit -{comp_limit:.3f} MPa",
+            "status": "danger" if comp_util is not None and (not math.isfinite(comp_util) or comp_util > 1.0) else "ready",
+        },
+        {
+            "title": "Governing tension",
+            "value": _format_girder_stress_mpa(tens_actual),
+            "detail": f"{component_df.loc[tens_idx, 'Fiber']} @ x={float(component_df.loc[tens_idx, 'Station x (m)']):.3f} m · limit {tens_limit:.3f} MPa",
+            "status": "danger" if tens_util is not None and (not math.isfinite(tens_util) or tens_util > 1.0) else "ready",
+        },
+    ]
+
+
+def _make_final_service_component_stress_figure(component_df: pd.DataFrame, component: str, *, beam_limits: tuple[float, float], deck_fc_MPa: float) -> go.Figure:
+    fig = go.Figure()
+    if component_df.empty:
+        return fig
+    for fiber, group in component_df.groupby("Fiber"):
+        fig.add_trace(
+            go.Scatter(
+                x=group["Station x (m)"],
+                y=group["Total stress (MPa)"],
+                mode="lines+markers",
+                name=str(fiber),
+                hovertemplate="x=%{x:.3f} m<br>stress=%{y:.3f} MPa<extra></extra>",
+            )
+        )
+    comp_limit, tens_limit, basis = _component_stress_limits(component_df, component, beam_limits=beam_limits, deck_fc_MPa=deck_fc_MPa)
+    x_min = float(component_df["Station x (m)"].min())
+    x_max = float(component_df["Station x (m)"].max())
+    if abs(x_max - x_min) <= 1.0e-9:
+        x_min -= 0.5
+        x_max += 0.5
+    fig.add_trace(go.Scatter(x=[x_min, x_max], y=[-comp_limit, -comp_limit], mode="lines", name="Compression limit", line={"dash": "dash"}))
+    fig.add_trace(go.Scatter(x=[x_min, x_max], y=[tens_limit, tens_limit], mode="lines", name="Tension limit", line={"dash": "dash"}))
+    fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 MPa", annotation_position="top left")
+    fig.update_layout(
+        height=430,
+        margin={"l": 28, "r": 28, "t": 76, "b": 95},
+        title={"text": f"<b>Concrete Stress ({escape(component.lower())}) — Final Service</b><br><sup>{escape(basis)} · compression negative / tension positive</sup>", "x": 0.5, "xanchor": "center"},
+        xaxis_title="Distance from left end of member (m)",
+        yaxis_title="Stress (MPa)",
+        legend={"orientation": "h", "yanchor": "top", "y": -0.22, "xanchor": "center", "x": 0.5},
+        plot_bgcolor="white",
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(0,0,0,0.14)", ticks="outside")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.14)", zeroline=True, zerolinecolor="rgba(0,0,0,0.28)", ticks="outside")
+    return fig
+
+
+def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_options: object, stage_label: str) -> None:
+    """Render SERVICE.COMP1 Final Service split for precast beam and CIP concrete.
+
+    Source-visible labels retained for tests and roadmap traceability:
+    Concrete Stress (beam) — Final Service; Concrete Stress (CIP) — Final Service.
+    """
+
+    if _beam_sls_stage_label_for_analysis(stage_label) != "Service stage":
+        return
+    bases = getattr(basis_options, "bases", {}) or {}
+    if "composite_transformed" not in bases or "precast_gross" not in bases:
+        return
+    split_df = _final_service_composite_split_rows(df, basis_options)
+    if split_df.empty:
+        return
+    beam_compression, beam_tension, beam_profile = _girder_sls_diagram_limit_summary(stage_label)
+    deck_fc = _final_service_deck_fc_from_session()
+    st.markdown("##### Final Service concrete stress split")
+    st.caption(
+        "SERVICE.COMP1 separates the final-service composite preview into precast beam concrete and CIP/topping concrete, similar to commercial composite-girder output. "
+        "This samples the existing composite transformed section; locked-in staged stress history and final code-certified composite service design remain future work."
+    )
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Precast beam concrete",
+                "value": "Top/bottom of beam",
+                "detail": f"Uses active Service profile: {beam_profile}",
+                "status": "info",
+            },
+            {
+                "title": "CIP / topping concrete",
+                "value": f"f'c={deck_fc:g} MPa",
+                "detail": "Preview limits: 0.60f'c compression, fr=0.62√f'c tension",
+                "status": "info",
+            },
+            {
+                "title": "Composite basis",
+                "value": "Transformed section",
+                "detail": "CIP stress is scaled by n=Edeck/Ebeam from the transformed-section result",
+                "status": "warning",
+            },
+        ],
+        columns=3,
+    )
+    for component in ("Precast beam", "CIP / topping"):
+        component_df = split_df[split_df["Concrete component"] == component].copy()
+        if component_df.empty:
+            continue
+        st.markdown(f"**Concrete Stress ({'beam' if component == 'Precast beam' else 'CIP'}) — Final Service**")
+        _render_analysis_summary_strip(
+            _component_governing_cards(component_df, component, beam_limits=(beam_compression, beam_tension), deck_fc_MPa=deck_fc),
+            columns=3,
+        )
+        st.plotly_chart(
+            _make_final_service_component_stress_figure(
+                component_df,
+                component,
+                beam_limits=(beam_compression, beam_tension),
+                deck_fc_MPa=deck_fc,
+            ),
+            use_container_width=True,
+        )
+    with st.expander("Final Service beam/CIP split stress table", expanded=False):
+        st.dataframe(_clean_girder_stress_dataframe(split_df), use_container_width=True, hide_index=True)
+
 def _render_girder_full_length_sls_diagram(
     *,
     stage_label: str,
@@ -4902,6 +5164,7 @@ def _render_girder_full_length_sls_diagram(
         demand_rows=_girder_sls4b_governing_demand_rows(df, stage_label),
     )
     st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
+    _render_final_service_beam_cip_concrete_split(df, basis_options, stage_label)
     with st.expander(f"Full-length stress table — {stage_label}", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(df), use_container_width=True, hide_index=True)
     with st.expander("Full-length diagram assumptions", expanded=False):

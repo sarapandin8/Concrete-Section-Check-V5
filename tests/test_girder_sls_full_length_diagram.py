@@ -156,3 +156,14 @@ def test_sls_limit5_2_aci_end_zone_controls_render_once_to_avoid_duplicate_keys(
     assert "show_end_zone_controls: bool = True" in SOURCE
     assert "show_end_zone_controls=False" in SOURCE
     assert "End-zone length controls are shown in the visible full-length diagram guide" in SOURCE
+
+
+def test_service_comp1_splits_final_service_beam_and_cip_concrete_stress() -> None:
+    assert "SERVICE.COMP1" in SOURCE
+    assert "Final Service concrete stress split" in SOURCE
+    assert "Concrete Stress (beam) — Final Service" in SOURCE
+    assert "Concrete Stress (CIP) — Final Service" in SOURCE
+    assert "_render_final_service_beam_cip_concrete_split" in SOURCE
+    assert "CIP stress is scaled by n=Edeck/Ebeam" in SOURCE
+    assert "0.60f'c compression, fr=0.62√f'c tension" in SOURCE
+    assert "locked-in staged stress history and final code-certified composite service design remain future work" in SOURCE

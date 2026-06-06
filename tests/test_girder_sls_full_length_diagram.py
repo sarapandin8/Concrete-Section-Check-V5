@@ -177,3 +177,11 @@ def test_service_comp2_adds_staged_composite_final_service_engine() -> None:
     assert "CIP/topping receives composite-stage increments only" in SOURCE
     assert "CIP receives no direct prestress stress" in SOURCE
     assert "long-term redistribution, shrinkage compatibility, deflection, shear, and detailing checks remain future milestones" in SOURCE
+
+
+def test_service_comp2_1_hides_service_overview_behind_split_graphs() -> None:
+    assert "SERVICE.COMP2.1" in SOURCE
+    assert "Overall transformed-section stress overview — Service" in SOURCE
+    assert "audit/reference graph only" in SOURCE
+    assert "Use the visible Beam and CIP final-service stress checks above" in SOURCE
+    assert "service_split_rendered" in SOURCE

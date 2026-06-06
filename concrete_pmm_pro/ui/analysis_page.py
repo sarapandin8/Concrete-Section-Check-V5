@@ -5032,7 +5032,7 @@ def _make_final_service_component_stress_figure(component_df: pd.DataFrame, comp
     return fig
 
 
-def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_options: object, stage_label: str) -> None:
+def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_options: object, stage_label: str) -> bool:
     """Render SERVICE.COMP1 Final Service split for precast beam and CIP concrete.
 
     Source-visible labels retained for tests and roadmap traceability:
@@ -5040,13 +5040,13 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
     """
 
     if _beam_sls_stage_label_for_analysis(stage_label) != "Service stage":
-        return
+        return False
     bases = getattr(basis_options, "bases", {}) or {}
     if "composite_transformed" not in bases or "precast_gross" not in bases:
-        return
+        return False
     split_df = _final_service_composite_split_rows(df, basis_options)
     if split_df.empty:
-        return
+        return False
     beam_compression, beam_tension, beam_profile = _girder_sls_diagram_limit_summary(stage_label)
     deck_fc = _final_service_deck_fc_from_session()
     st.markdown("##### Final Service concrete stress split")
@@ -5098,6 +5098,7 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
         )
     with st.expander("Final Service beam/CIP split stress table", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(split_df), use_container_width=True, hide_index=True)
+    return True
 
 def _render_girder_full_length_sls_diagram(
     *,
@@ -5201,8 +5202,25 @@ def _render_girder_full_length_sls_diagram(
         status=status,
         demand_rows=_girder_sls4b_governing_demand_rows(df, stage_label),
     )
-    st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
-    _render_final_service_beam_cip_concrete_split(df, basis_options, stage_label)
+    is_service_stage = _beam_sls_stage_label_for_analysis(stage_label) == "Service stage"
+    service_split_rendered = False
+    if is_service_stage:
+        service_split_rendered = _render_final_service_beam_cip_concrete_split(df, basis_options, stage_label)
+
+    if service_split_rendered:
+        with st.expander("Overall transformed-section stress overview — Service", expanded=False):
+            st.caption(
+                "SERVICE.COMP2.1 keeps this overall transformed-section overview as an audit/reference graph only. "
+                "Use the visible Beam and CIP final-service stress checks above for composite service design decisions."
+            )
+            st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
+    else:
+        st.plotly_chart(_make_girder_full_length_sls_figure(df, stage_label=stage_label), use_container_width=True)
+        if is_service_stage:
+            st.caption(
+                "Composite Beam/CIP split graphs are not available for this section basis, so the overall service overview remains visible."
+            )
+
     with st.expander(f"Full-length stress table — {stage_label}", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(df), use_container_width=True, hide_index=True)
     with st.expander("Full-length diagram assumptions", expanded=False):

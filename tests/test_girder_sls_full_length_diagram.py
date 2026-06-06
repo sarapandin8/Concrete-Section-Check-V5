@@ -150,3 +150,9 @@ def test_sls_limit5_adds_aci_transfer_end_zone_piecewise_limit() -> None:
     assert "0.25√f'ci" in SOURCE
     assert "Transfer length 60db" in SOURCE
     assert "Building precast prestressed girder Transfer preview" in SOURCE
+
+
+def test_sls_limit5_2_aci_end_zone_controls_render_once_to_avoid_duplicate_keys() -> None:
+    assert "show_end_zone_controls: bool = True" in SOURCE
+    assert "show_end_zone_controls=False" in SOURCE
+    assert "End-zone length controls are shown in the visible full-length diagram guide" in SOURCE

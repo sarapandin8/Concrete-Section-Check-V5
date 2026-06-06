@@ -5674,6 +5674,7 @@ def _render_girder_tension_limit_guidance(
     stresses: list[StressLimitInputRow],
     profile_key: str,
     profile_options: tuple,
+    show_end_zone_controls: bool = True,
 ) -> tuple[str, list[str]]:
     """Render CODE.SLS.LIMIT4 guided tensile-limit selection and return profile key."""
 
@@ -5822,29 +5823,32 @@ def _render_girder_tension_limit_guidance(
         basis_options = ["Transfer length 60db", "Member depth h", "User-defined length", "Conservative end face only"]
         if st.session_state.get(basis_key) not in basis_options:
             st.session_state[basis_key] = basis_options[0]
-        ez_cols = st.columns([1.05, 0.85, 0.85])
-        with ez_cols[0]:
-            st.selectbox("ACI transfer end-zone length basis", basis_options, key=basis_key)
-        with ez_cols[1]:
-            st.number_input(
-                "Strand db for 60db (mm)",
-                min_value=1.0,
-                value=float(st.session_state.get(diameter_key, default_diameter) or default_diameter),
-                step=0.1,
-                format="%.1f",
-                key=diameter_key,
-                help="Used only when end-zone length basis is Transfer length 60db. Default comes from active strand layout when available.",
-            )
-        with ez_cols[2]:
-            st.number_input(
-                "User end-zone length (m)",
-                min_value=0.0,
-                value=float(st.session_state.get(user_key, 0.0) or 0.0),
-                step=0.05,
-                format="%.3f",
-                key=user_key,
-                help="Used only when end-zone length basis is User-defined length.",
-            )
+        if show_end_zone_controls:
+            ez_cols = st.columns([1.05, 0.85, 0.85])
+            with ez_cols[0]:
+                st.selectbox("ACI transfer end-zone length basis", basis_options, key=basis_key)
+            with ez_cols[1]:
+                st.number_input(
+                    "Strand db for 60db (mm)",
+                    min_value=1.0,
+                    value=float(st.session_state.get(diameter_key, default_diameter) or default_diameter),
+                    step=0.1,
+                    format="%.1f",
+                    key=diameter_key,
+                    help="Used only when end-zone length basis is Transfer length 60db. Default comes from active strand layout when available.",
+                )
+            with ez_cols[2]:
+                st.number_input(
+                    "User end-zone length (m)",
+                    min_value=0.0,
+                    value=float(st.session_state.get(user_key, 0.0) or 0.0),
+                    step=0.05,
+                    format="%.3f",
+                    key=user_key,
+                    help="Used only when end-zone length basis is User-defined length.",
+                )
+        else:
+            st.caption("End-zone length controls are shown in the visible full-length diagram guide to avoid duplicate Streamlit widget keys.")
         span_for_trace = _girder_sls_span_length_from_session([])
         end_length, _end_basis, end_detail = _aci_transfer_end_zone_length_state(stage)
         trace = aci_transfer_tension_limit_trace(
@@ -5983,6 +5987,7 @@ def _render_girder_code_limit_preview(
             stresses=stresses,
             profile_key=profile_key,
             profile_options=profile_options,
+            show_end_zone_controls=False,
         )
 
     with controls[2]:

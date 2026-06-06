@@ -125,6 +125,7 @@ from concrete_pmm_pro.serviceability import (
     girder_sls_limit_profile_options,
     girder_sls_stage_basis_consistency_warnings,
     normalize_girder_sls_stage,
+    recommend_girder_tension_limit_profile,
     girder_service_stage_result_rows,
     girder_service_stress_result_rows,
     prestress_service_contribution_to_dataframe,
@@ -5293,6 +5294,214 @@ def _girder_stress_vs_limit_cards(
     return [compression_card, tension_card]
 
 
+
+def _girder_section_y_bounds_from_session() -> tuple[float, float] | None:
+    """Return current section y-bounds in mm for reinforcement guidance."""
+
+    geometry = st.session_state.get("section_geometry")
+    polygon = getattr(geometry, "outer_polygon", None)
+    if not polygon:
+        return None
+    y_values: list[float] = []
+    for point in polygon:
+        y = getattr(point, "y", None)
+        if y is None and isinstance(point, Mapping):
+            y = point.get("y")
+        try:
+            y_values.append(float(y))
+        except (TypeError, ValueError):
+            continue
+    if not y_values:
+        return None
+    return min(y_values), max(y_values)
+
+
+def _rebar_y_value_mm(rebar) -> float | None:
+    y = getattr(rebar, "y_mm", None)
+    if y is None and isinstance(rebar, Mapping):
+        y = rebar.get("y_mm")
+    try:
+        return float(y)
+    except (TypeError, ValueError):
+        return None
+
+
+def _girder_tension_fibers_from_stresses(stresses: list[StressLimitInputRow]) -> set[str]:
+    """Return Top/Bottom fibers with positive tensile stress under the app convention."""
+
+    fibers: set[str] = set()
+    for row in stresses:
+        if float(getattr(row, "stress_MPa", 0.0) or 0.0) <= _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+            continue
+        fiber = str(getattr(row, "fiber", "")).strip().lower()
+        if "top" in fiber:
+            fibers.add("Top")
+        elif "bottom" in fiber or "bot" in fiber:
+            fibers.add("Bottom")
+    return fibers
+
+
+def _girder_ordinary_rebar_tension_face_summary(stresses: list[StressLimitInputRow]) -> dict[str, object]:
+    """Conservatively identify ordinary rebar near the currently tensile face.
+
+    CODE.SLS.LIMIT4 uses this only as guidance.  It does not prove code-required
+    reinforcement adequacy and it never upgrades tensile limits silently without
+    a visible REVIEW/verification context.
+    """
+
+    tension_fibers = _girder_tension_fibers_from_stresses(stresses)
+    if not tension_fibers:
+        return {
+            "tension_fibers": "No positive tension in supplied stress rows",
+            "bars_near_tension_face": 0,
+            "auto_verified": None,
+            "detail": "No tensile fiber controls this stress row set.",
+        }
+    if not ordinary_rebar_enabled(st.session_state, default=True):
+        return {
+            "tension_fibers": ", ".join(sorted(tension_fibers)),
+            "bars_near_tension_face": 0,
+            "auto_verified": False,
+            "detail": "Ordinary rebar system is disabled.",
+        }
+    bounds = _girder_section_y_bounds_from_session()
+    rebars = list(st.session_state.get("rebars", []) or [])
+    if bounds is None or not rebars:
+        return {
+            "tension_fibers": ", ".join(sorted(tension_fibers)),
+            "bars_near_tension_face": 0,
+            "auto_verified": None,
+            "detail": "Section bounds or ordinary rebar layout unavailable; reinforcement condition is not auto-verified.",
+        }
+    y_min, y_max = bounds
+    depth = max(y_max - y_min, 1.0)
+    bottom_zone = y_min + 0.35 * depth
+    top_zone = y_max - 0.35 * depth
+    bars_near = 0
+    for rebar in rebars:
+        y = _rebar_y_value_mm(rebar)
+        if y is None:
+            continue
+        if "Bottom" in tension_fibers and y <= bottom_zone:
+            bars_near += 1
+        if "Top" in tension_fibers and y >= top_zone:
+            bars_near += 1
+    auto_verified = True if bars_near > 0 else False
+    return {
+        "tension_fibers": ", ".join(sorted(tension_fibers)),
+        "bars_near_tension_face": bars_near,
+        "auto_verified": auto_verified,
+        "detail": f"Ordinary bars near tensile face by broad 35% depth-zone check: {bars_near}.",
+    }
+
+
+def _render_girder_tension_limit_guidance(
+    *,
+    title: str,
+    code: str,
+    stage: str,
+    stresses: list[StressLimitInputRow],
+    profile_key: str,
+    profile_options: tuple,
+) -> tuple[str, list[str]]:
+    """Render CODE.SLS.LIMIT4 guided tensile-limit selection and return profile key."""
+
+    # CODE.SLS.LIMIT4: reinforcement-aware tensile stress limit selection aid only.
+    option_keys = {option.key for option in profile_options}
+    guide_enabled_key = f"girder_tension_limit_guide_enabled_{title}"
+    guide_method_key = f"girder_tension_limit_guide_method_{title}"
+    exposure_key = f"girder_tension_limit_exposure_{title}"
+    aci_class_key = f"girder_tension_limit_aci_class_{title}"
+    duration_key = f"girder_tension_limit_duration_{title}"
+    summary = _girder_ordinary_rebar_tension_face_summary(stresses)
+    method_options = [
+        "Auto from current ordinary rebar layout",
+        "Verified bonded tension reinforcement",
+        "Not verified / use conservative preview",
+        "No bonded reinforcement / no-tension condition",
+    ]
+    if st.session_state.get(guide_method_key) not in method_options:
+        st.session_state[guide_method_key] = method_options[0]
+    guide_enabled = st.checkbox(
+        "Use guided tensile limit profile",
+        value=bool(st.session_state.get(guide_enabled_key, True)),
+        key=guide_enabled_key,
+        help="When enabled, the limit profile is selected from code/stage, exposure/class, and reinforcement-condition inputs. Turn off for manual profile selection.",
+    )
+    cols = st.columns([1.2, 1.1, 1.1, 1.1])
+    with cols[0]:
+        method = st.selectbox(
+            "Tension reinforcement condition",
+            method_options,
+            key=guide_method_key,
+            help="Auto detection is only a screening aid. Use verified/manual selections when project reinforcement conditions control tensile stress limits.",
+        )
+    with cols[1]:
+        if code == "AASHTO LRFD Bridge":
+            exposure_options = ["Moderate exposure / bonded", "Severe exposure / bonded", "Unbonded or no tension"]
+            if st.session_state.get(exposure_key) not in exposure_options:
+                st.session_state[exposure_key] = exposure_options[0]
+            exposure = st.selectbox("Exposure / tendon condition", exposure_options, key=exposure_key)
+            aci_service_class = "Class U"
+        else:
+            aci_options = ["Class U", "Class T", "No tension"]
+            if st.session_state.get(aci_class_key) not in aci_options:
+                st.session_state[aci_class_key] = aci_options[0]
+            aci_service_class = st.selectbox("ACI service class", aci_options, key=aci_class_key)
+            exposure = "moderate"
+    with cols[2]:
+        duration_options = ["Full service / total", "Sustained or permanent only"]
+        if st.session_state.get(duration_key) not in duration_options:
+            st.session_state[duration_key] = duration_options[0]
+        duration = st.selectbox("Effect duration", duration_options, key=duration_key)
+    if method == "Auto from current ordinary rebar layout":
+        verified = summary.get("auto_verified")
+    elif method == "Verified bonded tension reinforcement":
+        verified = True
+    elif method == "No bonded reinforcement / no-tension condition":
+        verified = False
+        exposure = "no tension"
+        aci_service_class = "No tension"
+    else:
+        verified = None
+    guidance = recommend_girder_tension_limit_profile(
+        code=code,
+        stage=stage,
+        bonded_tension_reinforcement_verified=verified,
+        exposure_condition=exposure,
+        aci_service_class=aci_service_class,
+        effect_duration=duration,
+    )
+    recommended_key = guidance.recommended_profile_key if guidance.recommended_profile_key in option_keys else profile_key
+    if guide_enabled:
+        st.session_state[profile_key] = recommended_key
+    with cols[3]:
+        st.markdown("**Guided profile**")
+        st.caption(recommended_key.replace("_", " "))
+    status = "ready" if guidance.status == "OK" else "warning"
+    _render_analysis_summary_strip(
+        [
+            {
+                "title": "Tensile limit guide",
+                "value": guidance.status,
+                "detail": guidance.basis,
+                "status": status,
+            },
+            {
+                "title": "Detected tensile fiber",
+                "value": str(summary.get("tension_fibers")),
+                "detail": str(summary.get("detail")),
+                "status": "info" if summary.get("auto_verified") else "warning",
+            },
+        ],
+        columns=2,
+    )
+    notes = list(guidance.warnings)
+    if method == "Auto from current ordinary rebar layout":
+        notes.append("Auto rebar detection is a screening aid only; it does not verify code-required bonded reinforcement area, detailing, development, or crack-control requirements.")
+    return (recommended_key if guide_enabled else str(st.session_state.get(profile_key, profile_key)), notes)
+
+
 def _render_girder_code_limit_preview(
     *,
     title: str,
@@ -5378,13 +5587,29 @@ def _render_girder_code_limit_preview(
     profile_key = f"girder_code_limit_profile_key_{title}"
     if st.session_state.get(profile_key) not in profile_option_labels:
         st.session_state[profile_key] = profile_options[0].key
+
+    guide_notes: list[str] = []
+    with st.expander(f"Tensile stress limit guide — {title}", expanded=False):
+        st.caption(
+            "CODE.SLS.LIMIT4 selection aid: choose the tensile limit profile from code stage, exposure/class, "
+            "and bonded reinforcement condition. This does not prove cracked-section design or final code compliance."
+        )
+        _, guide_notes = _render_girder_tension_limit_guidance(
+            title=title,
+            code=code,
+            stage=stage,
+            stresses=stresses,
+            profile_key=profile_key,
+            profile_options=profile_options,
+        )
+
     with controls[2]:
         limit_profile_key = st.selectbox(
             "Limit profile",
             list(profile_option_labels),
             format_func=lambda key: profile_option_labels.get(str(key), str(key)),
             key=profile_key,
-            help="Select a code/stage default profile before applying any engineer-controlled overrides.",
+            help="Select a code/stage default profile before applying any engineer-controlled overrides. Guided selection can pre-select this value.",
         )
     default_profile = build_girder_sls_limit_profile(code=code, stage=stage, limit_profile_key=limit_profile_key)
     with controls[3]:
@@ -5562,7 +5787,7 @@ def _render_girder_code_limit_preview(
     compression_limit = profile.compression_limit_MPa(float(fc))
     tension_allowable = profile.tension_allowable_MPa(float(fc))
     formula_summary = girder_sls_limit_formula_summary(profile=profile, fc_MPa=float(fc))
-    context_warnings = girder_sls_stage_basis_consistency_warnings(
+    context_warnings = tuple(guide_notes) + girder_sls_stage_basis_consistency_warnings(
         profile_stage=profile.stage,
         section_basis_label=section_basis_label,
         load_stage=load_stage,

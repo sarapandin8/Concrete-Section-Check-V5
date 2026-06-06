@@ -221,3 +221,46 @@ def test_transfer_stage_warns_when_pe_eff_after_losses_is_used_as_release_force(
 
     assert any("Pe_transfer" in warning for warning in warnings)
     assert any("final Pe_eff after losses" in warning for warning in warnings)
+
+
+def test_tension_limit_guidance_selects_aashto_transfer_aux_when_verified() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    guidance = recommend_girder_tension_limit_profile(
+        code="AASHTO LRFD Bridge",
+        stage="Transfer / Release",
+        bonded_tension_reinforcement_verified=True,
+    )
+
+    assert guidance.recommended_profile_key == "aashto_transfer_bonded_aux"
+    assert guidance.status == "OK"
+
+
+def test_tension_limit_guidance_keeps_review_for_unverified_aashto_moderate_service() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    guidance = recommend_girder_tension_limit_profile(
+        code="AASHTO LRFD Bridge",
+        stage="Final service / Composite",
+        bonded_tension_reinforcement_verified=None,
+        exposure_condition="Moderate exposure / bonded",
+    )
+
+    assert guidance.recommended_profile_key == "aashto_service_bonded_moderate_full"
+    assert guidance.status == "REVIEW"
+    assert any("assumes bonded" in warning for warning in guidance.warnings)
+
+
+def test_tension_limit_guidance_selects_aci_class_t_but_requires_review_when_not_verified() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    guidance = recommend_girder_tension_limit_profile(
+        code="ACI 318",
+        stage="Final service / Composite",
+        bonded_tension_reinforcement_verified=False,
+        aci_service_class="Class T",
+    )
+
+    assert guidance.recommended_profile_key == "aci_service_class_t_upper"
+    assert guidance.status == "REVIEW"
+    assert any("Class T" in warning for warning in guidance.warnings)

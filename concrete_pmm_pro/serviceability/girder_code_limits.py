@@ -72,6 +72,21 @@ class GirderStressLimitProfileOption:
 
 
 @dataclass(frozen=True)
+class GirderTensionLimitGuidance:
+    """Guided tensile stress-limit profile recommendation for CODE.SLS.LIMIT4.
+
+    The recommendation is a selection aid only.  It does not change stress
+    values, code formulas, reinforcement design, cracked-section analysis, or
+    final code compliance.
+    """
+
+    recommended_profile_key: str
+    status: Literal["OK", "REVIEW"]
+    basis: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class GirderServiceStressLimitProfile:
     """Concrete service-stress limit profile for one Beam/Girder preview check."""
 
@@ -440,6 +455,155 @@ def _profile_option_by_key(
             if option.key == str(limit_profile_key):
                 return option
     return options[0]
+
+
+
+def recommend_girder_tension_limit_profile(
+    *,
+    code: GirderSLSCode,
+    stage: GirderSLSStage,
+    bonded_tension_reinforcement_verified: bool | None = None,
+    exposure_condition: str | None = None,
+    aci_service_class: str | None = None,
+    effect_duration: str | None = None,
+) -> GirderTensionLimitGuidance:
+    """Recommend a preview tensile stress-limit profile from user-visible conditions.
+
+    CODE.SLS.LIMIT4 deliberately separates *profile selection guidance* from
+    the stress solver.  The caller may use the returned key to pre-select one
+    of ``girder_sls_limit_profile_options``; it must still show the basis and
+    warnings because reinforcement-aware tension limits require engineering
+    confirmation.
+    """
+
+    if code not in DEFAULT_GIRDER_SLS_CODES:
+        raise ValueError(f"Unsupported girder SLS code profile: {code!r}")
+    stage = normalize_girder_sls_stage(stage)
+    if stage not in DEFAULT_GIRDER_SLS_STAGES:
+        raise ValueError(f"Unsupported girder SLS stage: {stage!r}")
+
+    exposure = str(exposure_condition or "moderate").strip().casefold()
+    aci_class = str(aci_service_class or "class u").strip().casefold()
+    duration = str(effect_duration or "full service").strip().casefold()
+    verified = bonded_tension_reinforcement_verified
+    warnings: list[str] = []
+
+    def status() -> Literal["OK", "REVIEW"]:
+        return "REVIEW" if warnings else "OK"
+
+    if code == "AASHTO LRFD Bridge":
+        if stage == STAGE_TRANSFER:
+            if verified is True:
+                key = "aashto_transfer_bonded_aux"
+                basis = "Transfer tension reinforcement condition verified; auxiliary bonded-reinforcement profile selected."
+            elif verified is False:
+                key = "aashto_transfer_no_aux"
+                basis = "No verified auxiliary bonded tension reinforcement; conservative capped release-tension profile selected."
+                warnings.append("Do not use the higher transfer tensile limit unless bonded auxiliary reinforcement condition is verified at the tensile face.")
+            else:
+                key = "aashto_transfer_no_aux"
+                basis = "Auxiliary bonded tension reinforcement not verified; conservative capped release-tension profile selected."
+                warnings.append("Reinforcement condition is not verified; keep REVIEW before final transfer/release acceptance.")
+            return GirderTensionLimitGuidance(key, status(), basis, tuple(warnings))
+
+        if stage == STAGE_DECK_CASTING:
+            if "no" in exposure:
+                key = "aashto_deck_no_tension"
+                basis = "Pre-composite construction selected as no-tension preview."
+            else:
+                key = "aashto_deck_precomp_user"
+                basis = "Pre-composite construction uses engineer-controlled temporary tension profile."
+                warnings.append("Construction-stage tensile limit is project/sequence dependent; confirm temporary stress criteria and reinforcement condition.")
+            return GirderTensionLimitGuidance(key, status(), basis, tuple(warnings))
+
+        if stage == STAGE_FINAL_SERVICE:
+            if "unbond" in exposure or "no" in exposure:
+                key = "aashto_service_unbonded_no_tension"
+                basis = "Unbonded/no-tension service condition selected."
+            elif "sust" in duration or "perm" in duration:
+                key = "aashto_service_sustained_bonded_moderate"
+                basis = "Sustained/permanent service stress effect selected."
+                if verified is not True:
+                    warnings.append("Sustained bonded profile assumes bonded tendon/reinforcement condition; verify before final design.")
+            elif "severe" in exposure:
+                key = "aashto_service_bonded_severe_full"
+                basis = "Severe-exposure bonded service condition selected."
+                if verified is not True:
+                    warnings.append("Severe bonded profile still assumes bonded tendon/reinforcement condition; verify before final design.")
+            else:
+                key = "aashto_service_bonded_moderate_full"
+                basis = "Moderate-exposure bonded service condition selected."
+                if verified is not True:
+                    warnings.append("Moderate-exposure tensile profile assumes bonded tendon/reinforcement condition; verify before final design.")
+            return GirderTensionLimitGuidance(key, status(), basis, tuple(warnings))
+
+        return GirderTensionLimitGuidance(
+            "aashto_user_defined",
+            "REVIEW",
+            "User-defined AASHTO stage; select project-specific tensile stress limit.",
+            ("User-defined stage cannot be classified automatically.",),
+        )
+
+    # ACI 318 preview profiles.
+    if stage == STAGE_TRANSFER:
+        if exposure and "no" in exposure:
+            return GirderTensionLimitGuidance(
+                "aci_transfer_no_tension",
+                "OK",
+                "Initial transfer selected as no-tension preview.",
+            )
+        if verified is None:
+            warnings.append("Transfer tensile stress limit is a conservative preview; verify end-region reinforcement and project criteria.")
+        return GirderTensionLimitGuidance(
+            "aci_transfer_basic",
+            status(),
+            "Initial-transfer basic prestressed-member preview selected.",
+            tuple(warnings),
+        )
+
+    if stage == STAGE_DECK_CASTING:
+        warnings.append("ACI construction-stage tensile limit is project-specific; current profile is engineer-controlled preview.")
+        return GirderTensionLimitGuidance(
+            "aci_deck_precomp_user",
+            "REVIEW",
+            "Pre-composite construction-stage engineer-controlled profile selected.",
+            tuple(warnings),
+        )
+
+    if stage == STAGE_FINAL_SERVICE:
+        if "no" in aci_class:
+            return GirderTensionLimitGuidance(
+                "aci_service_no_tension",
+                "OK",
+                "ACI service no-tension preview selected.",
+            )
+        if "sust" in duration or "perm" in duration:
+            return GirderTensionLimitGuidance(
+                "aci_service_sustained_class_u",
+                "OK",
+                "ACI sustained/permanent service Class U threshold selected.",
+            )
+        if "class t" in aci_class or aci_class.endswith("t"):
+            if verified is not True:
+                warnings.append("Class T selection requires engineering confirmation of bonded reinforcement/cracked-section implications; app does not certify Class T design.")
+            return GirderTensionLimitGuidance(
+                "aci_service_class_t_upper",
+                status(),
+                "ACI service Class T upper threshold selected for classification/review.",
+                tuple(warnings),
+            )
+        return GirderTensionLimitGuidance(
+            "aci_service_class_u_one_way",
+            "OK",
+            "ACI service Class U threshold selected for one-way prestressed flexural member preview.",
+        )
+
+    return GirderTensionLimitGuidance(
+        "aci_user_defined",
+        "REVIEW",
+        "User-defined ACI stage; select project-specific tensile stress limit.",
+        ("User-defined stage cannot be classified automatically.",),
+    )
 
 
 def default_girder_sls_limit_profile(

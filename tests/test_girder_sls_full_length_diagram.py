@@ -115,3 +115,12 @@ def test_sls_graph1_preserves_internal_sign_convention() -> None:
     assert "compression is negative and tension is positive" in SOURCE
     assert "display-only" in SOURCE
     assert "no stress solver, Pe(x), load, section-basis, or code-limit formula changes" in SOURCE
+
+
+def test_sls_limit4_has_reinforcement_aware_tension_limit_guide() -> None:
+    assert "CODE.SLS.LIMIT4" in SOURCE
+    assert "Tensile stress limit guide" in SOURCE
+    assert "Use guided tensile limit profile" in SOURCE
+    assert "Auto from current ordinary rebar layout" in SOURCE
+    assert "Verified bonded tension reinforcement" in SOURCE
+    assert "Auto rebar detection is a screening aid only" in SOURCE

@@ -12,6 +12,8 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     calculate_aci_pci_approximate_prestress_loss,
     calculate_approximate_prestress_loss,
     calculate_elastic_shortening_iterative,
+    aci_pci_kcr_from_density,
+    estimate_aci_pci_guided_loss_inputs,
     estimate_kdf,
     estimate_kid,
     estimate_refined_aashto_coefficients,
@@ -285,3 +287,46 @@ def test_refined_kid_kdf_reduce_with_prestress_interaction() -> None:
     assert 0.0 < kid < 1.0
     assert 0.0 < kdf < 1.0
     assert estimate_volume_surface_ratio_mm(350000.0, 2600.0) > 0.0
+
+
+def test_aci_pci_guided_inputs_compute_vs_in_from_mm_geometry_and_select_normal_weight_kcr() -> None:
+    guided = estimate_aci_pci_guided_loss_inputs(
+        section_area_mm2=450000.0,
+        exposed_perimeter_mm=4000.0,
+        section_preset_key="parametric_i_girder",
+        section_category="Precast Composite Girder",
+        concrete_density_kg_m3=2400.0,
+    )
+    assert round(guided.volume_surface_ratio_mm, 3) == 112.5
+    assert round(guided.volume_surface_ratio_in, 3) == round(112.5 / 25.4, 3)
+    assert guided.kcir == 0.90
+    assert guided.kcr == 2.0
+    assert guided.ksh == 1.0
+    assert guided.volume_surface_status in {"OK", "REVIEW"}
+    audit = guided.audit_dataframe()
+    assert set(["V/S", "Kcir", "Kcr", "Ksh"]).issubset(set(audit["Item"]))
+    assert "in." in str(audit.loc[audit["Item"] == "V/S", "Value"].iloc[0])
+    assert "mm" in str(audit.loc[audit["Item"] == "V/S", "Value"].iloc[0])
+
+
+def test_aci_pci_guided_inputs_use_family_fallback_when_geometry_missing() -> None:
+    guided = estimate_aci_pci_guided_loss_inputs(
+        section_area_mm2=None,
+        exposed_perimeter_mm=None,
+        section_preset_key="precast_box_beam_exterior",
+        concrete_density_kg_m3=2400.0,
+    )
+    assert guided.volume_surface_ratio_in > 0.0
+    assert guided.volume_surface_source == "Preset by section family"
+    assert guided.volume_surface_status == "REVIEW"
+    assert guided.messages
+
+
+def test_aci_pci_kcr_from_density_flags_lightweight_review() -> None:
+    kcr_normal, source_normal, status_normal = aci_pci_kcr_from_density(2400.0)
+    assert kcr_normal == 2.0
+    assert status_normal == "OK"
+    assert "density" in source_normal
+    kcr_light, _source_light, status_light = aci_pci_kcr_from_density(2000.0)
+    assert kcr_light == 1.6
+    assert status_light == "REVIEW"

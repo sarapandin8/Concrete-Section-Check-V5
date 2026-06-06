@@ -52,6 +52,7 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     calculate_approximate_prestress_loss,
     calculate_refined_aashto_time_dependent_loss,
     estimate_refined_aashto_coefficients,
+    estimate_aci_pci_guided_loss_inputs,
     estimate_volume_surface_ratio_mm,
     loss_result_dataframe_to_force_state_table,
 )
@@ -167,6 +168,15 @@ GIRDER_LOSS_CODE_BASIS_OPTIONS = [
     GIRDER_LOSS_BASIS_MANUAL,
 ]
 DEFAULT_CODE_LOSS_FPJ_RATIO = 0.75
+ACI_PCI_INPUT_SOURCE_AUTO = "Auto from current section / material"
+ACI_PCI_INPUT_SOURCE_MANUAL = "Manual override"
+ACI_PCI_INPUT_SOURCE_OPTIONS = [ACI_PCI_INPUT_SOURCE_AUTO, ACI_PCI_INPUT_SOURCE_MANUAL]
+ACI_PCI_RH_PRESETS = {
+    "Thailand Central / Bangkok typical (75%)": 75.0,
+    "Thailand North typical (72%)": 72.0,
+    "Thailand South / coastal typical (80%)": 80.0,
+    "Manual project RH": None,
+}
 
 REFINED_COEFFICIENT_USER_DEFINED = "User-defined / project-specific"
 REFINED_COEFFICIENT_PRESETS: dict[str, dict[str, float]] = {
@@ -2483,16 +2493,46 @@ def _render_girder_code_based_loss_estimate(
             st.success("Refined coefficient check: values are within the LOSS3B advisory range.")
         st.session_state["girder_prestress_code_loss_settings"] = settings
     else:
-        with common_cols[2]:
-            humidity = st.number_input(
-                "🟨 Relative humidity H (%)",
-                min_value=20.0,
-                max_value=100.0,
-                step=5.0,
-                value=float(settings.get("humidity_percent", 70.0)),
-                format="%.0f",
-                key="girder_code_loss_humidity_percent",
-            )
+        aci_pci_mode = effective_loss_basis == PROJECT_CODE_ACI318
+        if aci_pci_mode:
+            rh_previous = str(settings.get("aci_pci_rh_source", "Thailand Central / Bangkok typical (75%)"))
+            if rh_previous not in ACI_PCI_RH_PRESETS:
+                rh_previous = "Thailand Central / Bangkok typical (75%)"
+            with common_cols[2]:
+                rh_source = st.selectbox(
+                    "🟨 Relative humidity source",
+                    list(ACI_PCI_RH_PRESETS.keys()),
+                    index=list(ACI_PCI_RH_PRESETS.keys()).index(rh_previous),
+                    key="girder_aci_pci_rh_source",
+                    help="Use project/site mean relative humidity. Presets are starter values for Thai climate regions; use Manual project RH for project-specific data.",
+                )
+            preset_rh = ACI_PCI_RH_PRESETS.get(str(rh_source))
+            if preset_rh is None:
+                humidity = st.number_input(
+                    "🟨 Manual project RH (%)",
+                    min_value=20.0,
+                    max_value=100.0,
+                    step=5.0,
+                    value=float(settings.get("humidity_percent", 75.0)),
+                    format="%.0f",
+                    key="girder_aci_pci_manual_humidity_percent",
+                    help="Use project/site mean annual relative humidity, not maximum daily RH.",
+                )
+            else:
+                humidity = float(preset_rh)
+                st.caption(f"ACI/PCI RH basis: {rh_source} → H = {humidity:.0f}%.")
+            settings["aci_pci_rh_source"] = str(rh_source)
+        else:
+            with common_cols[2]:
+                humidity = st.number_input(
+                    "🟨 Relative humidity H (%)",
+                    min_value=20.0,
+                    max_value=100.0,
+                    step=5.0,
+                    value=float(settings.get("humidity_percent", 70.0)),
+                    format="%.0f",
+                    key="girder_code_loss_humidity_percent",
+                )
         with common_cols[3]:
             relaxation = st.selectbox(
                 "🟨 Strand relaxation class",
@@ -2501,31 +2541,78 @@ def _render_girder_code_based_loss_estimate(
                 key="girder_code_loss_relaxation_class",
             )
         settings.update({"fci_MPa": float(fci), "fpj_ratio": float(fpj_ratio), "humidity_percent": float(humidity), "relaxation_class": str(relaxation)})
-        if effective_loss_basis == PROJECT_CODE_ACI318:
-            aci_cols = st.columns(4)
-            auto_vs_mm = 88.9
+        if aci_pci_mode:
+            st.markdown("###### ACI/PCI loss input assistant")
+            source_previous = str(settings.get("aci_pci_input_source", ACI_PCI_INPUT_SOURCE_AUTO))
+            if source_previous not in ACI_PCI_INPUT_SOURCE_OPTIONS:
+                source_previous = ACI_PCI_INPUT_SOURCE_AUTO
+            input_source = st.selectbox(
+                "🟨 ACI/PCI input source",
+                ACI_PCI_INPUT_SOURCE_OPTIONS,
+                index=ACI_PCI_INPUT_SOURCE_OPTIONS.index(source_previous),
+                key="girder_aci_pci_input_source",
+                help="Default lets the app calculate V/S and select Kcir, Kcr, and Ksh from section/material assumptions. Manual override is available for project-specific PCI/ACI criteria.",
+            )
+            settings["aci_pci_input_source"] = str(input_source)
+            props_preview = None
+            perimeter_preview = 0.0
             try:
                 props_preview = compute_gross_section_properties(geometry) if geometry is not None else None
-                if props_preview is not None:
-                    auto_vs_mm = estimate_volume_surface_ratio_mm(float(props_preview.area_mm2), _section_exposed_outer_perimeter_mm(geometry))
+                perimeter_preview = _section_exposed_outer_perimeter_mm(geometry)
             except Exception:
-                auto_vs_mm = 88.9
-            with aci_cols[0]:
-                vs_in = st.number_input(
-                    "🟨 V/S for PCI shrinkage (in.)",
-                    min_value=0.1,
-                    step=0.1,
-                    value=float(settings.get("aci_pci_vs_in", auto_vs_mm / 25.4)),
-                    format="%.2f",
-                    key="girder_aci_pci_vs_in",
-                    help=f"Auto-estimated gross-section V/S is about {auto_vs_mm / 25.4:.2f} in. Review void/exposed perimeter assumptions before final use.",
-                )
-            with aci_cols[1]:
-                kcir = st.number_input("Kcir", min_value=0.0, max_value=1.5, step=0.05, value=float(settings.get("aci_pci_kcir", 0.90)), format="%.2f", key="girder_aci_pci_kcir")
-            with aci_cols[2]:
-                kcr = st.number_input("Kcr", min_value=0.0, max_value=4.0, step=0.10, value=float(settings.get("aci_pci_kcr", 2.00)), format="%.2f", key="girder_aci_pci_kcr")
-            with aci_cols[3]:
-                ksh = st.number_input("Ksh", min_value=0.0, max_value=2.0, step=0.05, value=float(settings.get("aci_pci_ksh", 1.00)), format="%.2f", key="girder_aci_pci_ksh")
+                props_preview = None
+                perimeter_preview = 0.0
+            concrete_density = float(getattr(concrete, "density_kg_m3", 2400.0) or 2400.0)
+            guided = estimate_aci_pci_guided_loss_inputs(
+                section_area_mm2=float(props_preview.area_mm2) if props_preview is not None else None,
+                exposed_perimeter_mm=float(perimeter_preview) if perimeter_preview else None,
+                section_preset_key=st.session_state.get("section_preset_key"),
+                section_category=st.session_state.get("section_category"),
+                concrete_density_kg_m3=concrete_density,
+            )
+            if input_source == ACI_PCI_INPUT_SOURCE_AUTO:
+                vs_in = guided.volume_surface_ratio_in
+                kcir = guided.kcir
+                kcr = guided.kcr
+                ksh = guided.ksh
+                st.dataframe(_loss_display_dataframe(guided.audit_dataframe()), use_container_width=True, hide_index=True)
+                if guided.messages:
+                    st.warning("ACI/PCI input REVIEW: " + " ".join(guided.messages))
+                else:
+                    st.success("ACI/PCI input assistant: V/S and coefficients are auto-selected from current section/material assumptions.")
+            else:
+                st.warning("Manual ACI/PCI input override is active. Verify V/S units: enter inches; the app stores the value internally in mm.")
+                aci_cols = st.columns(4)
+                with aci_cols[0]:
+                    vs_in = st.number_input(
+                        "🟨 V/S for PCI shrinkage (in.)",
+                        min_value=0.1,
+                        step=0.1,
+                        value=float(settings.get("aci_pci_vs_in", guided.volume_surface_ratio_in)),
+                        format="%.2f",
+                        key="girder_aci_pci_vs_in",
+                        help=(
+                            f"Auto V/S from gross section outer perimeter is about {guided.volume_surface_ratio_in:.2f} in. "
+                            "The app computes A/P in mm and converts to inches using 25.4 mm = 1 in."
+                        ),
+                    )
+                with aci_cols[1]:
+                    kcir = st.number_input("Kcir", min_value=0.0, max_value=1.5, step=0.05, value=float(settings.get("aci_pci_kcir", guided.kcir)), format="%.2f", key="girder_aci_pci_kcir")
+                with aci_cols[2]:
+                    kcr = st.number_input("Kcr", min_value=0.0, max_value=4.0, step=0.10, value=float(settings.get("aci_pci_kcr", guided.kcr)), format="%.2f", key="girder_aci_pci_kcr")
+                with aci_cols[3]:
+                    ksh = st.number_input("Ksh", min_value=0.0, max_value=2.0, step=0.05, value=float(settings.get("aci_pci_ksh", guided.ksh)), format="%.2f", key="girder_aci_pci_ksh")
+                manual_audit = guided.audit_dataframe().copy()
+                manual_audit.loc[manual_audit["Item"] == "V/S", ["Value", "Source", "Status", "Engineering note"]] = [
+                    f"{float(vs_in):.2f} in. ({float(vs_in) * 25.4:.1f} mm)",
+                    "Manual override",
+                    "REVIEW",
+                    "Manual V/S entered in inches; confirm exposed drying surface and section-family range.",
+                ]
+                manual_audit.loc[manual_audit["Item"] == "Kcir", ["Value", "Source", "Status"]] = [f"{float(kcir):.2f}", "Manual override", "REVIEW"]
+                manual_audit.loc[manual_audit["Item"] == "Kcr", ["Value", "Source", "Status"]] = [f"{float(kcr):.2f}", "Manual override", "REVIEW"]
+                manual_audit.loc[manual_audit["Item"] == "Ksh", ["Value", "Source", "Status"]] = [f"{float(ksh):.2f}", "Manual override", "REVIEW"]
+                st.dataframe(_loss_display_dataframe(manual_audit), use_container_width=True, hide_index=True)
             settings.update({
                 "aci_pci_vs_in": float(vs_in),
                 "aci_pci_volume_surface_ratio_mm": float(vs_in) * 25.4,
@@ -2534,9 +2621,10 @@ def _render_girder_code_based_loss_estimate(
                 "aci_pci_ksh": float(ksh),
                 "aci_pci_fcds_MPa": float(settings.get("aci_pci_fcds_MPa", 0.0) or 0.0),
             })
-            st.caption("ACI/PCI-style approximate loss uses ES + CR + SH + RE. Self-weight relief in fcir uses the Beam/Girder span and concrete unit weight from Setup where available.")
-        st.session_state["girder_prestress_code_loss_settings"] = settings
-
+            st.caption(
+                "ACI/PCI-style approximate loss uses ES + CR + SH + RE. The assistant computes V/S from section geometry where possible, "
+                "selects Kcr from concrete density/type assumption, and keeps all values auditable/overridable."
+            )
     audit = _girder_code_loss_input_audit_dataframe(
         geometry=geometry,
         strand_table=strand_table,

@@ -45,6 +45,22 @@ LOSS_INPUT_AUDIT_COLUMNS = [
     "Engineering note",
 ]
 
+ACI_PCI_VS_TYPICAL_RANGES_IN: dict[str, tuple[float, float]] = {
+    "i_girder": (3.0, 4.5),
+    "box_beam": (3.5, 5.0),
+    "plank_girder": (2.5, 4.0),
+    "u_girder": (3.0, 5.0),
+    "generic_girder": (2.0, 6.0),
+}
+
+ACI_PCI_VS_FALLBACK_IN: dict[str, float] = {
+    "i_girder": 3.5,
+    "box_beam": 4.0,
+    "plank_girder": 3.0,
+    "u_girder": 4.0,
+    "generic_girder": 3.5,
+}
+
 
 @dataclass(frozen=True)
 class GirderLossStrandGroupInput:
@@ -163,6 +179,159 @@ class GirderApproximateLossResult:
                 {"Metric": "ES iterations", "Value": str(self.es_iterations), "Status": "INFO"},
             ]
         )
+
+
+@dataclass(frozen=True)
+class AciPciGuidedLossInputSelection:
+    """Auditable assistant-selected inputs for ACI/PCI-style approximate loss.
+
+    Values are intentionally advisory defaults. They reduce manual data entry but
+    remain visible so the engineer can review or override project-specific
+    assumptions. V/S is stored in mm internally and shown in inches because the
+    PCI-style shrinkage expression in this app expects inches.
+    """
+
+    section_family: str
+    volume_surface_ratio_mm: float
+    volume_surface_source: str
+    volume_surface_status: str
+    volume_surface_note: str
+    kcir: float = 0.90
+    kcr: float = 2.00
+    ksh: float = 1.00
+    kcir_source: str = "PCI shortcut"
+    kcr_source: str = "Assumed normal-weight concrete"
+    ksh_source: str = "Typical pretensioned final estimate"
+    kcr_status: str = "OK"
+    ksh_status: str = "OK"
+    messages: tuple[str, ...] = ()
+
+    @property
+    def volume_surface_ratio_in(self) -> float:
+        return max(float(self.volume_surface_ratio_mm), 0.0) / MM_PER_INCH
+
+    def audit_dataframe(self) -> pd.DataFrame:
+        rows = [
+            {
+                "Item": "V/S",
+                "Value": f"{self.volume_surface_ratio_in:.2f} in. ({self.volume_surface_ratio_mm:.1f} mm)",
+                "Source": self.volume_surface_source,
+                "Status": self.volume_surface_status,
+                "Engineering note": self.volume_surface_note,
+            },
+            {
+                "Item": "Kcir",
+                "Value": f"{self.kcir:.2f}",
+                "Source": self.kcir_source,
+                "Status": "OK",
+                "Engineering note": "Elastic-shortening shortcut coefficient for the PCI-style approximate method.",
+            },
+            {
+                "Item": "Kcr",
+                "Value": f"{self.kcr:.2f}",
+                "Source": self.kcr_source,
+                "Status": self.kcr_status,
+                "Engineering note": "Creep coefficient selection based on concrete density/type assumption; override if project criteria differ.",
+            },
+            {
+                "Item": "Ksh",
+                "Value": f"{self.ksh:.2f}",
+                "Source": self.ksh_source,
+                "Status": self.ksh_status,
+                "Engineering note": "Shrinkage time-basis coefficient for a typical pretensioned final estimate.",
+            },
+        ]
+        return pd.DataFrame(rows, columns=LOSS_INPUT_AUDIT_COLUMNS)
+
+
+def normalize_aci_pci_section_family(section_preset_key: str | None = None, section_category: str | None = None) -> str:
+    """Map app section preset metadata to a broad ACI/PCI V/S advisory family."""
+
+    key = str(section_preset_key or "").strip().casefold()
+    category = str(section_category or "").strip().casefold()
+    if "i_girder" in key or "i-girder" in key or "i girder" in key:
+        return "i_girder"
+    if "box" in key or "box" in category:
+        return "box_beam"
+    if "plank" in key or "plank" in category:
+        return "plank_girder"
+    if "u_girder" in key or "u-girder" in key or "u girder" in key:
+        return "u_girder"
+    return "generic_girder"
+
+
+def aci_pci_vs_typical_range_in(section_family: str) -> tuple[float, float]:
+    return ACI_PCI_VS_TYPICAL_RANGES_IN.get(str(section_family), ACI_PCI_VS_TYPICAL_RANGES_IN["generic_girder"])
+
+
+def aci_pci_vs_fallback_mm(section_family: str) -> float:
+    return ACI_PCI_VS_FALLBACK_IN.get(str(section_family), ACI_PCI_VS_FALLBACK_IN["generic_girder"]) * MM_PER_INCH
+
+
+def aci_pci_kcr_from_density(density_kg_m3: float | None) -> tuple[float, str, str]:
+    """Return a practical Kcr default from concrete density/type assumption."""
+
+    density = 2400.0 if density_kg_m3 is None else float(density_kg_m3)
+    if density >= 2200.0:
+        return 2.0, "Auto from concrete density ≥ 2200 kg/m³", "OK"
+    if density >= 1850.0:
+        return 1.6, "Auto assumed sand-lightweight from concrete density", "REVIEW"
+    return 1.6, "Auto assumed lightweight from low concrete density", "REVIEW"
+
+
+def estimate_aci_pci_guided_loss_inputs(
+    *,
+    section_area_mm2: float | None,
+    exposed_perimeter_mm: float | None,
+    section_preset_key: str | None = None,
+    section_category: str | None = None,
+    concrete_density_kg_m3: float | None = None,
+) -> AciPciGuidedLossInputSelection:
+    """Select auditable ACI/PCI approximate-loss inputs from current project data."""
+
+    family = normalize_aci_pci_section_family(section_preset_key, section_category)
+    messages: list[str] = []
+    source = "Auto from current section geometry"
+    status = "OK"
+    note = "Computed as A/Pexposed from gross section area and outer exposed perimeter, then converted from mm to inch for PCI-style shrinkage."
+    area = 0.0 if section_area_mm2 is None else float(section_area_mm2)
+    perimeter = 0.0 if exposed_perimeter_mm is None else float(exposed_perimeter_mm)
+    if area > 0.0 and perimeter > 0.0:
+        vs_mm = estimate_volume_surface_ratio_mm(area, perimeter)
+    else:
+        vs_mm = aci_pci_vs_fallback_mm(family)
+        source = "Preset by section family"
+        status = "REVIEW"
+        note = "Section geometry/perimeter is incomplete; using a family starter V/S. Verify before final design."
+        messages.append("V/S was not calculated from geometry because section area or exposed perimeter is missing.")
+    low, high = aci_pci_vs_typical_range_in(family)
+    vs_in = vs_mm / MM_PER_INCH if vs_mm > 0.0 else 0.0
+    if vs_in <= 0.0:
+        status = "REVIEW"
+        note = "V/S is non-positive; review section geometry and exposed perimeter."
+        messages.append("V/S is non-positive.")
+    elif not (low <= vs_in <= high):
+        status = "REVIEW"
+        note += f" Typical advisory range for {family.replace('_', ' ')} is about {low:.1f}–{high:.1f} in.; review exposed-surface assumptions."
+        messages.append(f"Auto V/S {vs_in:.2f} in. is outside the advisory {family} range {low:.1f}–{high:.1f} in.")
+    else:
+        note += f" Within advisory {family.replace('_', ' ')} range {low:.1f}–{high:.1f} in."
+    kcr, kcr_source, kcr_status = aci_pci_kcr_from_density(concrete_density_kg_m3)
+    if kcr_status == "REVIEW":
+        messages.append("Kcr was selected from a lightweight-concrete density assumption; verify concrete type/project criteria.")
+    return AciPciGuidedLossInputSelection(
+        section_family=family,
+        volume_surface_ratio_mm=vs_mm,
+        volume_surface_source=source,
+        volume_surface_status=status,
+        volume_surface_note=note,
+        kcir=0.90,
+        kcr=kcr,
+        ksh=1.00,
+        kcr_source=kcr_source,
+        kcr_status=kcr_status,
+        messages=tuple(messages),
+    )
 
 
 def ksi_to_mpa(value_ksi: float) -> float:

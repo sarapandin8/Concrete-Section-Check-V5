@@ -166,4 +166,14 @@ def test_service_comp1_splits_final_service_beam_and_cip_concrete_stress() -> No
     assert "_render_final_service_beam_cip_concrete_split" in SOURCE
     assert "CIP stress is scaled by n=Edeck/Ebeam" in SOURCE
     assert "0.60f'c compression, fr=0.62√f'c tension" in SOURCE
-    assert "locked-in staged stress history and final code-certified composite service design remain future work" in SOURCE
+
+
+def test_service_comp2_adds_staged_composite_final_service_engine() -> None:
+    assert "SERVICE.COMP2" in SOURCE
+    assert "staged composite final-service stress engine" in SOURCE
+    assert "Locked-in pre-composite stress (MPa)" in SOURCE
+    assert "Final prestress stress (MPa)" in SOURCE
+    assert "Composite increment stress (MPa)" in SOURCE
+    assert "CIP/topping receives composite-stage increments only" in SOURCE
+    assert "CIP receives no direct prestress stress" in SOURCE
+    assert "long-term redistribution, shrinkage compatibility, deflection, shear, and detailing checks remain future milestones" in SOURCE

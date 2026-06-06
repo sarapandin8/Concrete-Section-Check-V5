@@ -4828,13 +4828,24 @@ def _service_comp1_preview_limit_summary(*, deck_fc_MPa: float) -> tuple[float, 
 
 
 def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object) -> pd.DataFrame:
-    """Build SERVICE.COMP1 final-service beam/CIP concrete stress split rows.
+    """Build SERVICE.COMP2 staged final-service beam/CIP concrete stress rows.
 
-    The current full-length SLS dataframe is still the source of station actions
-    and Pe(x).  This helper only samples the existing composite transformed
-    section at additional y-locations: bottom/top of precast beam and bottom/top
-    of CIP/topping.  CIP stresses are converted from the transformed-section
-    primary-concrete basis to actual topping stress by multiplying by n=Edeck/Ebeam.
+    SERVICE.COMP2 upgrades the SERVICE.COMP1 split from a simple transformed-
+    section sampling preview into a staged composite final-service stress engine:
+
+    * pre-composite locked-in dead load stress from girder self-weight + wet
+      topping is calculated on the precast gross section and applied to the
+      precast beam concrete only;
+    * final effective prestress is applied to the precast beam concrete on the
+      precast gross section;
+    * service loads after composite action are applied to the transformed
+      composite section;
+    * CIP/topping concrete receives only the composite-stage incremental stress,
+      scaled from transformed primary-concrete stress by n=Edeck/Ebeam.
+
+    This is still a design-check preview engine, not a validated report-certified
+    workflow; locked-in long-term redistribution, shrinkage compatibility, shear,
+    deflection, and report certification remain separately scoped.
     """
 
     if df.empty:
@@ -4855,6 +4866,10 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
         edeck = _analysis_float_or_zero(params.get("Edeck_MPa")) if isinstance(params, dict) else 0.0
         modular_ratio_value = edeck / ebeam if ebeam > 0.0 and edeck > 0.0 else 1.0
     n_ratio = modular_ratio_value if modular_ratio_value > 0.0 else 1.0
+    span = _girder_sls_span_length_from_session([])
+    locked_breakdown = _girder_sls_auto_load_breakdown("Construction stage")
+    locked_w_kN_m = max(float(getattr(locked_breakdown, "total_kN_m", 0.0) or 0.0), 0.0)
+    locked_component_label = str(getattr(locked_breakdown, "component_label", "Pre-composite dead load"))
     fiber_specs = [
         ("Precast beam", "Bottom of beam", float(precast_basis.bottom_fiber_y_from_bottom_mm), 1.0),
         ("Precast beam", "Top of beam", precast_top_y, 1.0),
@@ -4866,6 +4881,7 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
         station = _analysis_float_or_zero(source.get("Station x (m)"))
         n_kN = _analysis_float_or_zero(source.get("N (kN)"))
         m_kNm = _analysis_float_or_zero(source.get("Mx (kN-m)"))
+        locked_m_kNm = simple_span_udl_moment_kNm(locked_w_kN_m, station, span)
         pe_kN = _analysis_float_or_zero(source.get("Pe stage (kN)"))
         yps_raw = source.get("yps eff (mm)")
         try:
@@ -4873,21 +4889,35 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
         except (TypeError, ValueError):
             yps = math.nan
         for component, fiber, y_mm, stress_scale in fiber_specs:
-            service = girder_service_stress_at_y(composite_basis, N_kN=n_kN, M_kNm=m_kNm, y_from_bottom_mm=y_mm)
-            ps_total = 0.0
-            if pe_kN > 0.0 and math.isfinite(yps):
-                try:
-                    ps = girder_prestress_stress_at_y(
-                        composite_basis,
-                        Pe_eff_kN=pe_kN,
-                        tendon_y_from_bottom_mm=yps,
-                        y_from_bottom_mm=y_mm,
-                    )
-                    ps_total = float(ps.total_stress_MPa)
-                except (TypeError, ValueError):
-                    ps_total = 0.0
-            service_actual = float(service.total_stress_MPa) * stress_scale
-            ps_actual = float(ps_total) * stress_scale
+            composite_increment = girder_service_stress_at_y(
+                composite_basis,
+                N_kN=n_kN,
+                M_kNm=m_kNm,
+                y_from_bottom_mm=y_mm,
+            )
+            composite_increment_actual = float(composite_increment.total_stress_MPa) * stress_scale
+            locked_actual = 0.0
+            prestress_actual = 0.0
+            if component == "Precast beam":
+                locked = girder_service_stress_at_y(
+                    precast_basis,
+                    N_kN=0.0,
+                    M_kNm=locked_m_kNm,
+                    y_from_bottom_mm=y_mm,
+                )
+                locked_actual = float(locked.total_stress_MPa)
+                if pe_kN > 0.0 and math.isfinite(yps):
+                    try:
+                        ps = girder_prestress_stress_at_y(
+                            precast_basis,
+                            Pe_eff_kN=pe_kN,
+                            tendon_y_from_bottom_mm=yps,
+                            y_from_bottom_mm=y_mm,
+                        )
+                        prestress_actual = float(ps.total_stress_MPa)
+                    except (TypeError, ValueError):
+                        prestress_actual = 0.0
+            total = locked_actual + prestress_actual + composite_increment_actual
             rows.append(
                 {
                     "Station x (m)": station,
@@ -4895,15 +4925,21 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
                     "Fiber": fiber,
                     "y from bottom (mm)": y_mm,
                     "Stress scale": stress_scale,
-                    "Service action stress (MPa)": service_actual,
-                    "Prestress stress (MPa)": ps_actual,
-                    "Total stress (MPa)": service_actual + ps_actual,
+                    "Locked-in pre-composite stress (MPa)": locked_actual,
+                    "Final prestress stress (MPa)": prestress_actual,
+                    "Composite increment stress (MPa)": composite_increment_actual,
+                    "Service action stress (MPa)": composite_increment_actual,
+                    "Prestress stress (MPa)": prestress_actual,
+                    "Total stress (MPa)": total,
+                    "Locked-in Mx (kN-m)": locked_m_kNm,
+                    "Composite Mx (kN-m)": m_kNm,
                     "Case Name": str(source.get("Case Name") or "Unnamed"),
                     "Basis note": (
-                        "Composite transformed section sampled at beam/topping fibers; "
-                        "CIP stress scaled by n=Edeck/Ebeam" if component == "CIP / topping" else
-                        "Composite transformed section sampled at precast beam fiber"
+                        "SERVICE.COMP2 staged basis: pre-composite locked-in dead load + final Pe on precast section, plus composite-stage increments"
+                        if component == "Precast beam" else
+                        "SERVICE.COMP2 staged basis: CIP/topping receives composite-stage increments only; stress scaled by n=Edeck/Ebeam"
                     ),
+                    "Locked-in components": locked_component_label,
                 }
             )
     return pd.DataFrame(rows).sort_values(["Concrete component", "Fiber", "Station x (m)"]).reset_index(drop=True)
@@ -4912,9 +4948,9 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
 def _component_stress_limits(component_df: pd.DataFrame, component: str, *, beam_limits: tuple[float, float], deck_fc_MPa: float) -> tuple[float, float, str]:
     if component == "CIP / topping":
         comp, tens = _service_comp1_preview_limit_summary(deck_fc_MPa=deck_fc_MPa)
-        return comp, tens, f"CIP/topping preview: compression 0.60f'c, tension fr=0.62√f'c with f'c={deck_fc_MPa:g} MPa"
+        return comp, tens, f"CIP/topping material limit: compression 0.60f'c, tension fr=0.62√f'c with f'c={deck_fc_MPa:g} MPa"
     comp, tens = beam_limits
-    return comp, tens, "Precast beam concrete: uses active Service-stage code limit profile selected above"
+    return comp, tens, "Precast beam concrete: active Service-stage code limit profile selected above"
 
 
 def _component_governing_cards(component_df: pd.DataFrame, component: str, *, beam_limits: tuple[float, float], deck_fc_MPa: float) -> list[dict[str, object]]:
@@ -4937,7 +4973,7 @@ def _component_governing_cards(component_df: pd.DataFrame, component: str, *, be
         fail = True
     return [
         {
-            "title": f"{component} preview",
+            "title": f"{component} design-check preview",
             "value": "Preview FAIL" if fail else "Preview PASS",
             "detail": basis,
             "status": "danger" if fail else "ready",
@@ -4980,10 +5016,11 @@ def _make_final_service_component_stress_figure(component_df: pd.DataFrame, comp
     fig.add_trace(go.Scatter(x=[x_min, x_max], y=[-comp_limit, -comp_limit], mode="lines", name="Compression limit", line={"dash": "dash"}))
     fig.add_trace(go.Scatter(x=[x_min, x_max], y=[tens_limit, tens_limit], mode="lines", name="Tension limit", line={"dash": "dash"}))
     fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 MPa", annotation_position="top left")
+    component_title = "beam" if component == "Precast beam" else "CIP"
     fig.update_layout(
         height=430,
         margin={"l": 28, "r": 28, "t": 76, "b": 95},
-        title={"text": f"<b>Concrete Stress ({escape(component.lower())}) — Final Service</b><br><sup>{escape(basis)} · compression negative / tension positive</sup>", "x": 0.5, "xanchor": "center"},
+        title={"text": f"<b>Concrete Stress ({escape(component_title)}) — Final Service</b><br><sup>{escape(basis)} · compression negative / tension positive</sup>", "x": 0.5, "xanchor": "center"},
         xaxis_title="Distance from left end of member (m)",
         yaxis_title="Stress (MPa)",
         legend={"orientation": "h", "yanchor": "top", "y": -0.22, "xanchor": "center", "x": 0.5},
@@ -5014,28 +5051,29 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
     deck_fc = _final_service_deck_fc_from_session()
     st.markdown("##### Final Service concrete stress split")
     st.caption(
-        "SERVICE.COMP1 separates the final-service composite preview into precast beam concrete and CIP/topping concrete, similar to commercial composite-girder output. "
-        "This samples the existing composite transformed section; locked-in staged stress history and final code-certified composite service design remain future work."
+        "SERVICE.COMP2 separates final-service concrete stress into precast beam concrete and CIP/topping concrete using staged composite stress summation. "
+        "Pre-composite self-weight/wet topping stress is locked into the precast beam, final Pe is applied to the precast beam, and service SDL/LL increments are applied to the composite transformed section. "
+        "This is a design-check preview engine; final report certification, long-term redistribution, shrinkage compatibility, deflection, shear, and detailing checks remain future milestones."
     )
     _render_analysis_summary_strip(
         [
             {
                 "title": "Precast beam concrete",
                 "value": "Top/bottom of beam",
-                "detail": f"Uses active Service profile: {beam_profile}",
+                "detail": f"Locked-in dead load + final Pe + composite increments; profile: {beam_profile}",
                 "status": "info",
             },
             {
                 "title": "CIP / topping concrete",
                 "value": f"f'c={deck_fc:g} MPa",
-                "detail": "Preview limits: 0.60f'c compression, fr=0.62√f'c tension",
+                "detail": "Composite-stage increments only; limits: 0.60f'c compression, fr=0.62√f'c tension",
                 "status": "info",
             },
             {
-                "title": "Composite basis",
-                "value": "Transformed section",
-                "detail": "CIP stress is scaled by n=Edeck/Ebeam from the transformed-section result",
-                "status": "warning",
+                "title": "Staged summation",
+                "value": "Locked-in + composite",
+                "detail": "CIP stress is scaled by n=Edeck/Ebeam; CIP receives no direct prestress stress",
+                "status": "info",
             },
         ],
         columns=3,

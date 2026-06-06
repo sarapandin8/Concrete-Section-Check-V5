@@ -205,3 +205,18 @@ def test_service_comp4_finalizes_service_stress_check_workflow_without_certified
     assert "Final Service stress component audit" in SOURCE
     assert "Long-term redistribution, shrinkage compatibility, deflection, shear, detailing, and report output remain separate checks" in SOURCE
     assert "code-certified" not in SOURCE[SOURCE.find("def _render_final_service_beam_cip_concrete_split"):SOURCE.find("def _render_girder_full_length_sls_diagram")]
+
+
+def test_deflect_sls1_adds_short_term_deflection_camber_workspace() -> None:
+    assert "DEFLECT.SLS1" in SOURCE
+    assert "SLS Deflection / Camber" in SOURCE
+    assert "Deflection decision summary" in SOURCE
+    assert "Deflection —" in SOURCE
+    assert "positive = upward camber / negative = downward deflection" in SOURCE
+    assert "Deflection @ Transfer" in SOURCE
+    assert "Deflection on Completion" in SOURCE
+    assert "Final Service Sust. + LL Deflection" in SOURCE
+    assert "Deflection component audit" in SOURCE
+    assert "Prestress camber uses a simplified constant equivalent moment Pe·e at midspan" in SOURCE
+    assert "not change the SLS stress solver" in SOURCE
+    assert "Pe(x) station engine" in SOURCE

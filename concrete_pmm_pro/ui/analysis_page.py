@@ -5287,6 +5287,429 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
         st.dataframe(_clean_girder_stress_dataframe(split_df), use_container_width=True, hide_index=True)
     return True
 
+# DEFLECT.SLS1 — short-term deflection / camber preview helpers.
+# This workspace is intentionally separate from stress-result equations. It does
+# not change the SLS stress solver, Pe(x) station engine, prestress losses,
+# code-limit formulas, or PMM solver. Sign convention for display: positive =
+# upward camber, negative = downward deflection.
+
+def _deflect_sls_positive_float(value: object, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(numeric) or numeric <= 0.0:
+        return default
+    return numeric
+
+
+def _girder_deflection_Ebeam_MPa_from_session() -> float:
+    params = st.session_state.get("section_parameters") or {}
+    if isinstance(params, dict):
+        for key in ("Ebeam_MPa", "Ec_MPa", "concrete_Ec_MPa"):
+            value = _deflect_sls_positive_float(params.get(key), 0.0)
+            if value > 0.0:
+                return value
+    return 30_000.0
+
+
+def _girder_deflection_limit_mm(span_length_m: float) -> tuple[str, float | None]:
+    """Return the selected DEFLECT.SLS1 allowable downward deflection limit."""
+
+    basis = str(st.session_state.get("girder_deflection_allowable_limit_basis") or "L/360")
+    if basis == "Custom":
+        custom = st.number_input(
+            "Custom allowable downward deflection (mm)",
+            min_value=0.0,
+            value=float(st.session_state.get("girder_deflection_custom_limit_mm", max(span_length_m * 1000.0 / 360.0, 0.0)) or 0.0),
+            step=1.0,
+            key="girder_deflection_custom_limit_mm",
+        )
+        return "Custom", float(custom) if custom > 0.0 else None
+    if basis == "Review only":
+        return basis, None
+    try:
+        denominator = float(basis.split("/")[-1])
+    except (TypeError, ValueError):
+        denominator = 360.0
+    return basis, span_length_m * 1000.0 / denominator if denominator > 0.0 else None
+
+
+def _girder_deflection_udl_curve_mm(
+    *,
+    w_kN_m: float,
+    basis: object,
+    E_MPa: float,
+    span_length_m: float,
+    stations_m: list[float],
+) -> list[float]:
+    """Return downward UDL elastic deflection curve in mm (negative downward)."""
+
+    w_N_mm = max(float(w_kN_m), 0.0)  # 1 kN/m = 1 N/mm
+    L = max(float(span_length_m), 0.0) * 1000.0
+    I = _deflect_sls_positive_float(getattr(basis, "ix_mm4", 0.0), 0.0)
+    E = _deflect_sls_positive_float(E_MPa, 0.0)
+    if w_N_mm <= 0.0 or L <= 0.0 or I <= 0.0 or E <= 0.0:
+        return [0.0 for _ in stations_m]
+    values: list[float] = []
+    for x_m in stations_m:
+        x = min(max(float(x_m), 0.0), float(span_length_m)) * 1000.0
+        downward = w_N_mm * x * (L**3 - 2.0 * L * x**2 + x**3) / (24.0 * E * I)
+        values.append(-float(downward))
+    return values
+
+
+def _girder_deflection_constant_moment_curve_mm(
+    *,
+    M_kNm: float,
+    basis: object,
+    E_MPa: float,
+    span_length_m: float,
+    stations_m: list[float],
+) -> list[float]:
+    """Return elastic curve from constant equivalent moment; positive is upward camber."""
+
+    M_Nmm = float(M_kNm) * 1_000_000.0
+    L = max(float(span_length_m), 0.0) * 1000.0
+    I = _deflect_sls_positive_float(getattr(basis, "ix_mm4", 0.0), 0.0)
+    E = _deflect_sls_positive_float(E_MPa, 0.0)
+    if abs(M_Nmm) <= 1.0e-9 or L <= 0.0 or I <= 0.0 or E <= 0.0:
+        return [0.0 for _ in stations_m]
+    values: list[float] = []
+    for x_m in stations_m:
+        x = min(max(float(x_m), 0.0), float(span_length_m)) * 1000.0
+        # Positive sagging moment produces downward deflection. A bottom tendon
+        # normally creates negative equivalent moment and therefore positive camber.
+        value = -M_Nmm * x * (L - x) / (2.0 * E * I)
+        values.append(float(value))
+    return values
+
+
+def _sum_deflection_curves(*curves: list[float]) -> list[float]:
+    if not curves:
+        return []
+    n = max(len(curve) for curve in curves)
+    result = [0.0] * n
+    for curve in curves:
+        for idx, value in enumerate(curve):
+            result[idx] += float(value)
+    return result
+
+
+def _girder_deflection_midspan_pe(stage_label: str, *, span_length_m: float, basis: object) -> tuple[float, float | None, float]:
+    """Return Pe, yps, and equivalent moment for a stage at midspan."""
+
+    strand_table = st.session_state.get("girder_strand_layout_table")
+    if strand_table is None:
+        return 0.0, None, 0.0
+    try:
+        station = evaluate_girder_prestress_station(
+            strand_table,
+            x_m=float(span_length_m) / 2.0,
+            span_length_m=float(span_length_m),
+        )
+        pe_kN = _girder_sls_stage_pe_value_from_station(station, stage_label)
+        yps = station.yps_eff_mm_from_bottom
+        if pe_kN > 0.0 and yps is not None:
+            eccentricity_mm = float(yps) - float(getattr(basis, "centroid_y_from_bottom_mm", 0.0))
+            return float(pe_kN), float(yps), float(pe_kN) * eccentricity_mm / 1000.0
+    except (TypeError, ValueError, KeyError):
+        return 0.0, None, 0.0
+    return 0.0, None, 0.0
+
+
+def _girder_deflection_service_load_split(service_breakdown: object) -> tuple[float, float]:
+    """Split Service UDL into sustained and LL components for DEFLECT.SLS1."""
+
+    sustained = 0.0
+    live = 0.0
+    for label, value in getattr(service_breakdown, "component_loads_kN_m", ()):
+        if "ll" in str(label).casefold() or "live" in str(label).casefold():
+            live += float(value)
+        else:
+            sustained += float(value)
+    return sustained, live
+
+
+def _girder_deflection_curve_rows(*, basis_options: object) -> pd.DataFrame:
+    """Build DEFLECT.SLS1 short-term deflection/camber preview curves."""
+
+    bases = getattr(basis_options, "bases", {}) or {}
+    precast_basis = bases.get("precast_gross")
+    if precast_basis is None:
+        return pd.DataFrame()
+    composite_basis = bases.get("composite_transformed") or precast_basis
+    span = _girder_sls_span_length_from_session([])
+    stations = _girder_sls_auto_station_grid(span)
+    Ebeam = _girder_deflection_Ebeam_MPa_from_session()
+
+    transfer_breakdown = _girder_sls_auto_load_breakdown("Transfer stage")
+    construction_breakdown = _girder_sls_auto_load_breakdown("Construction stage")
+    service_breakdown = _girder_sls_auto_load_breakdown("Service stage")
+    service_sustained_w, service_ll_w = _girder_deflection_service_load_split(service_breakdown)
+
+    pe_tr, yps_tr, mpe_tr = _girder_deflection_midspan_pe("Transfer stage", span_length_m=span, basis=precast_basis)
+    pe_const, yps_const, mpe_const = _girder_deflection_midspan_pe("Construction stage", span_length_m=span, basis=precast_basis)
+    pe_final, yps_final, mpe_final = _girder_deflection_midspan_pe("Service stage", span_length_m=span, basis=precast_basis)
+
+    transfer_cam = _girder_deflection_constant_moment_curve_mm(M_kNm=mpe_tr, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    transfer_dl = _girder_deflection_udl_curve_mm(w_kN_m=transfer_breakdown.total_kN_m, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    transfer_net = _sum_deflection_curves(transfer_cam, transfer_dl)
+
+    construction_cam = _girder_deflection_constant_moment_curve_mm(M_kNm=mpe_const, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    construction_load = _girder_deflection_udl_curve_mm(w_kN_m=construction_breakdown.total_kN_m, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    construction_net = _sum_deflection_curves(construction_cam, construction_load)
+
+    final_cam = _girder_deflection_constant_moment_curve_mm(M_kNm=mpe_final, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    locked_load = _girder_deflection_udl_curve_mm(w_kN_m=construction_breakdown.total_kN_m, basis=precast_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    sustained_load = _girder_deflection_udl_curve_mm(w_kN_m=service_sustained_w, basis=composite_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    live_load = _girder_deflection_udl_curve_mm(w_kN_m=service_ll_w, basis=composite_basis, E_MPa=Ebeam, span_length_m=span, stations_m=stations)
+    service_completion = _sum_deflection_curves(final_cam, locked_load, sustained_load)
+    service_sustained_ll = _sum_deflection_curves(service_completion, live_load)
+
+    curve_specs = [
+        ("Transfer stage", "Deflection @ Transfer", transfer_net, "Pe_transfer camber + self-weight"),
+        ("Construction stage", "Deflection @ Erection / CIP pour", construction_net, "Pe_construction camber + girder self-weight + wet topping"),
+        ("Service stage", "Deflection on Completion", service_completion, "Final Pe + locked-in pre-composite dead load + sustained service load"),
+        ("Service stage", "Final Service Sustained Deflection", service_completion, "Short-term sustained-load estimate; long-term multiplier not included"),
+        ("Service stage", "Final Service Sust. + LL Deflection", service_sustained_ll, "Sustained service deflection plus building LL component where available"),
+    ]
+    rows: list[dict[str, object]] = []
+    pe_notes = {
+        "Transfer stage": f"Pe={pe_tr:.1f} kN, yps={yps_tr:.1f} mm" if yps_tr is not None else "Pe unavailable",
+        "Construction stage": f"Pe={pe_const:.1f} kN, yps={yps_const:.1f} mm" if yps_const is not None else "Pe unavailable",
+        "Service stage": f"Pe={pe_final:.1f} kN, yps={yps_final:.1f} mm" if yps_final is not None else "Pe unavailable",
+    }
+    for stage, curve_name, values, basis_note in curve_specs:
+        for x_m, deflection in zip(stations, values, strict=False):
+            rows.append(
+                {
+                    "Stage": stage,
+                    "Curve": curve_name,
+                    "Station x (m)": float(x_m),
+                    "Deflection (mm)": float(deflection),
+                    "Basis note": basis_note,
+                    "Prestress basis": pe_notes.get(stage, ""),
+                    "E used (MPa)": Ebeam,
+                    "Precast Ix (mm^4)": getattr(precast_basis, "ix_mm4", 0.0),
+                    "Composite Ix (mm^4)": getattr(composite_basis, "ix_mm4", 0.0),
+                    "Transfer auto w (kN/m)": transfer_breakdown.total_kN_m,
+                    "Construction auto w (kN/m)": construction_breakdown.total_kN_m,
+                    "Service sustained w (kN/m)": service_sustained_w,
+                    "Service LL w (kN/m)": service_ll_w,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _girder_deflection_summary_rows(curve_df: pd.DataFrame, *, limit_mm: float | None) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if curve_df.empty:
+        return pd.DataFrame(rows)
+    for (stage, curve), group in curve_df.groupby(["Stage", "Curve"], sort=False):
+        up_idx = group["Deflection (mm)"].idxmax()
+        down_idx = group["Deflection (mm)"].idxmin()
+        max_up = float(group.loc[up_idx, "Deflection (mm)"])
+        max_down = float(group.loc[down_idx, "Deflection (mm)"])
+        down_mag = abs(min(max_down, 0.0))
+        utilization = None if limit_mm is None or limit_mm <= 0.0 else down_mag / limit_mm
+        if stage != "Service stage" or limit_mm is None:
+            status = "REVIEW"
+        else:
+            status = "FAIL" if utilization is not None and utilization > 1.0 else "PASS"
+        rows.append(
+            {
+                "Stage": stage,
+                "Case": curve,
+                "Check status": status,
+                "Max upward camber (mm)": max_up,
+                "x up (m)": float(group.loc[up_idx, "Station x (m)"]),
+                "Max downward deflection (mm)": max_down,
+                "x down (m)": float(group.loc[down_idx, "Station x (m)"]),
+                "Limit (mm)": "Review only" if limit_mm is None else limit_mm,
+                "Utilization": "—" if utilization is None else utilization,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _girder_deflection_overall_cards(summary_df: pd.DataFrame) -> list[dict[str, object]]:
+    if summary_df.empty:
+        return [
+            {"title": "Deflection check", "value": "No data", "detail": "Build a valid girder section and Pe/load basis first", "status": "warning"}
+        ]
+    fail_count = int((summary_df["Check status"] == "FAIL").sum())
+    service_rows = summary_df[summary_df["Stage"] == "Service stage"].copy()
+    governing = service_rows if not service_rows.empty else summary_df.copy()
+    util_numeric = pd.to_numeric(governing["Utilization"].replace("—", math.nan), errors="coerce")
+    if util_numeric.notna().any():
+        gov_idx = util_numeric.idxmax()
+    else:
+        gov_idx = governing["Max downward deflection (mm)"].abs().idxmax()
+    row = governing.loc[gov_idx]
+    status = "FAIL" if fail_count else "PASS" if str(row.get("Check status")) == "PASS" else "REVIEW"
+    limit_value = row.get("Limit (mm)")
+    util_value = row.get("Utilization")
+    return [
+        {
+            "title": "Overall deflection check",
+            "value": status,
+            "detail": "Short-term elastic preview; positive camber / negative downward deflection",
+            "status": "danger" if status == "FAIL" else "ready" if status == "PASS" else "warning",
+        },
+        {
+            "title": "Governing case",
+            "value": str(row.get("Case", "—")),
+            "detail": f"{row.get('Stage', '—')} @ x={float(row.get('x down (m)', 0.0) or 0.0):.3f} m",
+            "status": "info",
+        },
+        {
+            "title": "Max downward deflection",
+            "value": f"{float(row.get('Max downward deflection (mm)', 0.0) or 0.0):.2f} mm",
+            "detail": f"Max upward camber {float(row.get('Max upward camber (mm)', 0.0) or 0.0):.2f} mm",
+            "status": "info",
+        },
+        {
+            "title": "Limit / utilization",
+            "value": "Review only" if isinstance(limit_value, str) else f"{float(limit_value):.2f} mm",
+            "detail": "Utilization —" if util_value == "—" else f"Utilization {float(util_value):.3f}",
+            "status": "danger" if status == "FAIL" else "ready" if status == "PASS" else "warning",
+        },
+    ]
+
+
+def _make_girder_deflection_figure(curve_df: pd.DataFrame, *, stage_label: str) -> go.Figure:
+    """Build a Concise-Beam-inspired DEFLECT.SLS1 plot without copying styling."""
+
+    fig = go.Figure()
+    if curve_df.empty:
+        return fig
+    stage_df = curve_df[curve_df["Stage"] == stage_label].copy()
+    if stage_df.empty:
+        return fig
+    for curve_name, group in stage_df.groupby("Curve", sort=False):
+        fig.add_trace(
+            go.Scatter(
+                x=group["Station x (m)"],
+                y=group["Deflection (mm)"],
+                mode="lines+markers",
+                name=str(curve_name),
+                hovertemplate="x=%{x:.3f} m<br>deflection=%{y:.3f} mm<extra></extra>",
+            )
+        )
+    code_edition = project_code_edition_from_session(st.session_state)
+    fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 mm", annotation_position="top left")
+    title_stage = stage_label.replace(" stage", "")
+    fig.update_layout(
+        height=470,
+        margin={"l": 32, "r": 28, "t": 78, "b": 98},
+        title={
+            "text": f"<b>Deflection — {escape(title_stage)}</b><br><sup>{escape(code_edition)} · positive = upward camber / negative = downward deflection</sup>",
+            "x": 0.5,
+            "xanchor": "center",
+        },
+        xaxis_title="Distance from left end of member (m)",
+        yaxis_title="Deflection (mm)",
+        legend={"orientation": "h", "yanchor": "top", "y": -0.22, "xanchor": "center", "x": 0.5},
+        plot_bgcolor="white",
+        hovermode="x unified",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(0,0,0,0.14)", ticks="outside")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.14)", zeroline=True, zerolinecolor="rgba(0,0,0,0.28)", ticks="outside")
+    return fig
+
+
+def _deflection_action_hints(summary_df: pd.DataFrame) -> list[str]:
+    if summary_df.empty:
+        return []
+    hints: list[str] = []
+    if (summary_df["Check status"] == "FAIL").any():
+        hints.append("Downward deflection exceeds the selected limit: review span/depth, composite stiffness, SDL/LL, and service load assumptions.")
+    max_up = float(pd.to_numeric(summary_df["Max upward camber (mm)"], errors="coerce").max(skipna=True) or 0.0)
+    if max_up > 0.0:
+        hints.append("Upward camber is controlled by Pe and eccentricity; review strand layout/loss basis together with stress limits if camber is excessive.")
+    hints.append("DEFLECT.SLS1 is short-term elastic only; creep, shrinkage, cracked-section stiffness, and camber growth remain separate future checks.")
+    return hints[:4]
+
+
+def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None:
+    """Render DEFLECT.SLS1 short-term deflection / camber preview workspace."""
+
+    st.markdown("### SLS Deflection / Camber")
+    st.caption(
+        "DEFLECT.SLS1 provides a short-term elastic deflection/camber preview for simple-span Beam/Girder workflows. "
+        "Positive values are upward camber and negative values are downward deflection. Long-term creep/shrinkage and cracked-section deflection are not included."
+    )
+    bases = getattr(basis_options, "bases", {}) or {}
+    if "precast_gross" not in bases:
+        st.info("Build a valid Beam/Girder section before running the deflection/camber preview.")
+        return
+    span = _girder_sls_span_length_from_session([])
+    with st.expander("Deflection check settings", expanded=True):
+        cols = st.columns([1.0, 1.0, 2.0])
+        limit_options = ["L/240", "L/360", "L/480", "Custom", "Review only"]
+        key = "girder_deflection_allowable_limit_basis"
+        if st.session_state.get(key) not in limit_options:
+            st.session_state[key] = "L/360"
+        with cols[0]:
+            st.selectbox("Allowable downward deflection", limit_options, key=key)
+        with cols[1]:
+            st.metric("Span L", f"{span:.3f} m")
+        with cols[2]:
+            st.caption("Use project-specific criteria for final deliverables. Transfer and Construction camber are shown as REVIEW unless a project limit is specified.")
+    _limit_label, limit_mm = _girder_deflection_limit_mm(span)
+    curve_df = _girder_deflection_curve_rows(basis_options=basis_options)
+    if curve_df.empty:
+        st.info("Deflection/camber curves are not available for the current section basis.")
+        return
+    summary_df = _girder_deflection_summary_rows(curve_df, limit_mm=limit_mm)
+    st.markdown("**Deflection decision summary**")
+    _render_analysis_summary_strip(_girder_deflection_overall_cards(summary_df), columns=4)
+    if not summary_df.empty:
+        display_df = summary_df.copy()
+        for col in ("Max upward camber (mm)", "Max downward deflection (mm)", "Limit (mm)", "Utilization"):
+            if col in display_df.columns:
+                display_df[col] = display_df[col].map(lambda v: v if isinstance(v, str) else round(float(v), 3))
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    hints = _deflection_action_hints(summary_df)
+    if hints:
+        items = "".join(f"<li>{escape(hint)}</li>" for hint in hints)
+        st.markdown(
+            '<div class="cpmm-sls-action-panel"><div class="cpmm-sls-action-title">Deflection / camber action hints</div>'
+            f"<ul>{items}</ul></div>",
+            unsafe_allow_html=True,
+        )
+    tab_specs = [
+        ("Transfer stage", "Transfer camber/deflection from Pe_transfer and self-weight"),
+        ("Construction stage", "Construction / CIP pour camber/deflection from Pe_construction, self-weight, and wet topping"),
+        ("Service stage", "Final service short-term deflection from locked-in components plus sustained/LL service increments"),
+    ]
+    tabs = st.tabs([label for label, _note in tab_specs])
+    for tab, (stage_label, note) in zip(tabs, tab_specs, strict=False):
+        with tab:
+            st.caption(note)
+            st.plotly_chart(_make_girder_deflection_figure(curve_df, stage_label=stage_label), use_container_width=True)
+    with st.expander("Deflection component audit", expanded=False):
+        audit_cols = [
+            "Stage",
+            "Curve",
+            "Station x (m)",
+            "Deflection (mm)",
+            "Basis note",
+            "Prestress basis",
+            "E used (MPa)",
+            "Precast Ix (mm^4)",
+            "Composite Ix (mm^4)",
+            "Transfer auto w (kN/m)",
+            "Construction auto w (kN/m)",
+            "Service sustained w (kN/m)",
+            "Service LL w (kN/m)",
+        ]
+        st.dataframe(curve_df[[col for col in audit_cols if col in curve_df.columns]], use_container_width=True, hide_index=True)
+        st.write("- UDL deflection uses simple-span elastic formula 5wL⁴/(384EI) shape along x.")
+        st.write("- Prestress camber uses a simplified constant equivalent moment Pe·e at midspan. Debonding is represented through the active midspan Pe/yps only in this first milestone.")
+        st.write("- Service increments use the composite transformed section when available; otherwise the precast gross basis is used as fallback.")
+
 def _render_girder_full_length_sls_diagram(
     *,
     stage_label: str,
@@ -7032,6 +7455,8 @@ def _render_beam_girder_service_stress_preview() -> None:
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()
+    _render_girder_deflection_camber_workspace(basis_options=basis_options)
+
     with st.expander("Advanced Serviceability / SLS Foundation settings", expanded=False):
         st.info(
             "Advanced foundation settings for legacy/manual serviceability workflows. "

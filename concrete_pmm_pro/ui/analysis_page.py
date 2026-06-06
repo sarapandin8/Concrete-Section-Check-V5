@@ -5628,7 +5628,7 @@ def _deflection_action_hints(summary_df: pd.DataFrame) -> list[str]:
     max_up = float(pd.to_numeric(summary_df["Max upward camber (mm)"], errors="coerce").max(skipna=True) or 0.0)
     if max_up > 0.0:
         hints.append("Upward camber is controlled by Pe and eccentricity; review strand layout/loss basis together with stress limits if camber is excessive.")
-    hints.append("DEFLECT.SLS1 is short-term elastic only; creep, shrinkage, cracked-section stiffness, and camber growth remain separate future checks.")
+    hints.append("Short-term elastic check only; creep, shrinkage, cracked-section stiffness, and camber growth remain separate future checks.")
     return hints[:4]
 
 
@@ -5637,8 +5637,9 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
 
     st.markdown("### SLS Deflection / Camber")
     st.caption(
-        "DEFLECT.SLS1 provides a short-term elastic deflection/camber preview for simple-span Beam/Girder workflows. "
-        "Positive values are upward camber and negative values are downward deflection. Long-term creep/shrinkage and cracked-section deflection are not included."
+        "Short-term elastic deflection/camber check for simple-span Beam/Girder workflows. "
+        "Positive values are upward camber and negative values are downward deflection. "
+        "Long-term creep/shrinkage and cracked-section deflection are not included."
     )
     bases = getattr(basis_options, "bases", {}) or {}
     if "precast_gross" not in bases:
@@ -5647,7 +5648,7 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
     span = _girder_sls_span_length_from_session([])
     with st.expander("Deflection check settings", expanded=True):
         cols = st.columns([1.0, 1.0, 2.0])
-        limit_options = ["L/240", "L/360", "L/480", "Custom", "Review only"]
+        limit_options = ["L/240", "L/360", "L/480", "L/1000", "Custom", "Review only"]
         key = "girder_deflection_allowable_limit_basis"
         if st.session_state.get(key) not in limit_options:
             st.session_state[key] = "L/360"
@@ -5656,14 +5657,14 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
         with cols[1]:
             st.metric("Span L", f"{span:.3f} m")
         with cols[2]:
-            st.caption("Use project-specific criteria for final deliverables. Transfer and Construction camber are shown as REVIEW unless a project limit is specified.")
+            st.caption("Select project-specific downward-deflection criteria. Transfer and Construction camber remain REVIEW-only unless a project limit is specified.")
     _limit_label, limit_mm = _girder_deflection_limit_mm(span)
     curve_df = _girder_deflection_curve_rows(basis_options=basis_options)
     if curve_df.empty:
         st.info("Deflection/camber curves are not available for the current section basis.")
         return
     summary_df = _girder_deflection_summary_rows(curve_df, limit_mm=limit_mm)
-    st.markdown("**Deflection decision summary**")
+    st.markdown("**Deflection / Camber decision summary**")
     _render_analysis_summary_strip(_girder_deflection_overall_cards(summary_df), columns=4)
     if not summary_df.empty:
         display_df = summary_df.copy()

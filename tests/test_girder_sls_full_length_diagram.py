@@ -226,13 +226,14 @@ def test_deflect_sls1_2_adds_dedicated_analysis_deflection_tab() -> None:
 def test_deflect_sls1_adds_short_term_deflection_camber_workspace() -> None:
     assert "DEFLECT.SLS1" in SOURCE
     assert "SLS Deflection / Camber" in SOURCE
-    assert "Deflection decision summary" in SOURCE
+    assert "Deflection / Camber decision summary" in SOURCE
     assert "Deflection —" in SOURCE
     assert "positive = upward camber / negative = downward deflection" in SOURCE
     assert "Deflection @ Transfer" in SOURCE
     assert "Deflection on Completion" in SOURCE
     assert "Final Service Sust. + LL Deflection" in SOURCE
     assert "Deflection component audit" in SOURCE
+    assert "L/1000" in SOURCE
     assert "Prestress camber uses a simplified constant equivalent moment Pe·e at midspan" in SOURCE
     assert "not change the SLS stress solver" in SOURCE
     assert "Pe(x) station engine" in SOURCE

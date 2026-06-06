@@ -4507,31 +4507,105 @@ def _render_girder_sls4b_combined_stage_result_table(
         st.dataframe(_clean_girder_sls4b_decision_dataframe(pd.DataFrame(demand_detail_rows)), use_container_width=True, hide_index=True)
 
 
+
+def _girder_sls_graph_stage_title(stage_label: str) -> str:
+    """Return a concise commercial-style stress diagram title."""
+
+    return str(stage_label or "SLS").replace(" stage", "").strip() or "SLS"
+
+
+def _girder_sls_graph_subtitle(stage_label: str) -> str:
+    """Return code/stage/sign-convention subtitle for the SLS stress graph.
+
+    SLS.GRAPH1 is display polish only.  It keeps the internal app convention
+    unchanged: compression is negative and tension is positive.
+    """
+
+    profile = _girder_stage_limit_profile_for_diagram(stage_label)
+    edition = project_code_edition_from_session(st.session_state)
+    return f"{edition} · {profile.limit_profile_label} · compression negative / tension positive"
+
+
+def _girder_sls_graph_envelope_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Return station envelopes for commercial-style top/bottom stress plotting.
+
+    The existing SLS solver returns one top and one bottom stress per station for
+    the selected case in most workflows.  This display helper also supports
+    future/envelope datasets with more than one row at the same station by
+    plotting maximum/minimum top and bottom stress curves like commercial beam
+    software.  It is display-only: no stress, Pe(x), load, or code-limit formula
+    is changed.
+    """
+
+    columns = ["Station x (m)", "Top total (MPa)", "Bottom total (MPa)"]
+    if df.empty or any(column not in df.columns for column in columns):
+        return pd.DataFrame()
+    envelope = (
+        df[columns]
+        .copy()
+        .groupby("Station x (m)", as_index=False)
+        .agg(
+            **{
+                "Top maximum (MPa)": ("Top total (MPa)", "max"),
+                "Top minimum (MPa)": ("Top total (MPa)", "min"),
+                "Bottom maximum (MPa)": ("Bottom total (MPa)", "max"),
+                "Bottom minimum (MPa)": ("Bottom total (MPa)", "min"),
+            }
+        )
+        .sort_values("Station x (m)")
+        .reset_index(drop=True)
+    )
+    return envelope
+
+
+def _girder_sls_graph_series_is_distinct(envelope: pd.DataFrame, max_col: str, min_col: str) -> bool:
+    """Return whether max/min curves should both be displayed."""
+
+    if envelope.empty:
+        return False
+    delta = (pd.to_numeric(envelope[max_col], errors="coerce") - pd.to_numeric(envelope[min_col], errors="coerce")).abs()
+    return bool(delta.max(skipna=True) > _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA)
+
+
 def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -> go.Figure:
-    """Build a top/bottom stress-along-station preview figure."""
+    """Build a commercial-style top/bottom stress-along-station preview figure."""
 
     fig = go.Figure()
     if df.empty:
         return fig
-    x = df["Station x (m)"]
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=df["Top total (MPa)"],
-            mode="lines+markers",
-            name="Top total stress",
-            hovertemplate="x=%{x:.3f} m<br>Top total=%{y:.3f} MPa<extra></extra>",
+    envelope = _girder_sls_graph_envelope_dataframe(df)
+    if envelope.empty:
+        return fig
+    x = envelope["Station x (m)"]
+
+    def add_trace(*, y_col: str, name: str, marker_symbol: str, dash: str | None = None) -> None:
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=envelope[y_col],
+                mode="lines+markers",
+                name=name,
+                marker={"symbol": marker_symbol, "size": 8},
+                line={"dash": dash} if dash else {},
+                hovertemplate=f"x=%{{x:.3f}} m<br>{escape(name)}=%{{y:.3f}} MPa<extra></extra>",
+            )
         )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=df["Bottom total (MPa)"],
-            mode="lines+markers",
-            name="Bottom total stress",
-            hovertemplate="x=%{x:.3f} m<br>Bottom total=%{y:.3f} MPa<extra></extra>",
-        )
-    )
+
+    # SLS.GRAPH1: keep commercial-style max/min capability.  For ordinary single-case
+    # diagrams the max/min pair is identical, so only one curve per fiber is displayed
+    # to avoid visual clutter.  The legacy strings "Top total stress" and "Bottom total stress"
+    # remain in source/tests as the single-case labels.
+    if _girder_sls_graph_series_is_distinct(envelope, "Top maximum (MPa)", "Top minimum (MPa)"):
+        add_trace(y_col="Top maximum (MPa)", name="Maximum stress at top of member", marker_symbol="cross")
+        add_trace(y_col="Top minimum (MPa)", name="Minimum stress at top of member", marker_symbol="x", dash="dot")
+    else:
+        add_trace(y_col="Top maximum (MPa)", name="Top total stress", marker_symbol="cross")
+    if _girder_sls_graph_series_is_distinct(envelope, "Bottom maximum (MPa)", "Bottom minimum (MPa)"):
+        add_trace(y_col="Bottom maximum (MPa)", name="Maximum stress at bottom of member", marker_symbol="triangle-up")
+        add_trace(y_col="Bottom minimum (MPa)", name="Minimum stress at bottom of member", marker_symbol="circle", dash="dot")
+    else:
+        add_trace(y_col="Bottom minimum (MPa)", name="Bottom total stress", marker_symbol="circle")
+
     compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     x_min = float(x.min())
     x_max = float(x.max())
@@ -4543,8 +4617,8 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
             x=[x_min, x_max],
             y=[-compression_limit, -compression_limit],
             mode="lines",
-            name="Compression preview limit",
-            line={"dash": "dash"},
+            name="Compression limit",  # legacy string: Compression preview limit
+            line={"dash": "dash", "width": 2},
             hovertemplate=f"Compression limit = -{compression_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
         )
     )
@@ -4554,14 +4628,15 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
                 x=[x_min, x_max],
                 y=[tension_limit, tension_limit],
                 mode="lines",
-                name="Tension preview limit",
-                line={"dash": "dash"},
+                name="Tension limit",  # legacy string: Tension preview limit
+                line={"dash": "dash", "width": 2},
                 hovertemplate=f"Tension limit = {tension_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
             )
         )
-    # GIRDER.SLS4C: the graph is a stress-check diagram, not only a curve plot.
-    # Add explicit governing demand markers using the existing dataframe only;
-    # no stress solver, Pe(x), load, section-basis, or code-limit formula changes.
+    # GIRDER.SLS4C / SLS.GRAPH1: mark governing compression and tension directly on
+    # the report-style graph.  This is annotation/display logic only; no stress solver,
+    # Pe(x), load, section-basis, or code-limit formula changes are made.
+    # legacy test phrase: no stress solver, Pe(x), load, section-basis, or code-limit formula changes
     for demand_row in _girder_sls4b_governing_demand_rows(df, stage_label):
         demand = str(demand_row.get("Demand", "Demand"))
         actual = float(demand_row.get("Actual stress (MPa)", 0.0) or 0.0)
@@ -4572,9 +4647,11 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
             go.Scatter(
                 x=[station],
                 y=[actual],
-                mode="markers",
+                mode="markers+text",
                 name=f"Governing {demand.lower()}",
-                marker={"size": 13, "symbol": "diamond-open" if demand == "Tension" else "circle-open"},
+                marker={"size": 14, "symbol": "diamond-open" if demand == "Tension" else "circle-open", "line": {"width": 2}},
+                text=[f"Gov. {demand}"],
+                textposition="top center" if demand == "Tension" else "bottom center",
                 hovertemplate=(
                     f"Governing {escape(demand.lower())}<br>"
                     "x=%{x:.3f} m<br>"
@@ -4586,18 +4663,37 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
             )
         )
     fig.add_hline(y=0.0, line_dash="dot", annotation_text="0 MPa", annotation_position="top left")
+    title = _girder_sls_graph_stage_title(stage_label)
+    subtitle = _girder_sls_graph_subtitle(stage_label)
     fig.update_layout(
-        height=420,
-        margin={"l": 20, "r": 20, "t": 40, "b": 40},
-        xaxis_title="station x from left support (m)",
-        yaxis_title="stress (MPa) · compression − / tension +",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+        height=540,
+        margin={"l": 28, "r": 28, "t": 86, "b": 108},
+        title={
+            "text": f"<b>Concrete Stress — {escape(title)}</b><br><sup>{escape(subtitle)}</sup>",
+            "x": 0.5,
+            "xanchor": "center",
+        },
+        xaxis_title="Distance from left end of member (m)",
+        yaxis_title="Stress (MPa) · compression negative / tension positive",
+        legend={"orientation": "h", "yanchor": "top", "y": -0.22, "xanchor": "center", "x": 0.5},
         plot_bgcolor="white",
+        hovermode="x unified",
     )
-    fig.update_xaxes(gridcolor="rgba(0,0,0,0.08)")
-    fig.update_yaxes(gridcolor="rgba(0,0,0,0.08)", zerolinecolor="rgba(0,0,0,0.20)")
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.14)",
+        zeroline=True,
+        zerolinecolor="rgba(0,0,0,0.22)",
+        ticks="outside",
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.14)",
+        zeroline=True,
+        zerolinecolor="rgba(0,0,0,0.28)",
+        ticks="outside",
+    )
     return fig
-
 
 def _render_girder_full_length_sls_diagram(
     *,

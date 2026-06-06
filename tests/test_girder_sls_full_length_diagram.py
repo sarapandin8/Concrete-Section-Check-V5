@@ -94,3 +94,24 @@ def test_sls4c_graph_marks_governing_demands_without_solver_changes() -> None:
     assert "Governing tension" in SOURCE
     assert "Governing {demand.lower()}" in SOURCE
     assert "no stress solver, Pe(x), load, section-basis, or code-limit formula changes" in SOURCE
+
+
+
+def test_sls_graph1_has_commercial_style_stress_diagram_polish() -> None:
+    assert "SLS.GRAPH1" in SOURCE
+    assert "Concrete Stress —" in SOURCE
+    assert "Distance from left end of member (m)" in SOURCE
+    assert "Stress (MPa) · compression negative / tension positive" in SOURCE
+    assert "Maximum stress at top of member" in SOURCE
+    assert "Minimum stress at bottom of member" in SOURCE
+    assert "Compression limit" in SOURCE
+    assert "Tension limit" in SOURCE
+    assert "Gov. {demand}" in SOURCE
+    assert "legend={\"orientation\": \"h\"" in SOURCE
+
+
+def test_sls_graph1_preserves_internal_sign_convention() -> None:
+    assert "keeps the internal app convention" in SOURCE
+    assert "compression is negative and tension is positive" in SOURCE
+    assert "display-only" in SOURCE
+    assert "no stress solver, Pe(x), load, section-basis, or code-limit formula changes" in SOURCE

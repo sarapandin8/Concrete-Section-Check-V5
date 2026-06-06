@@ -641,6 +641,7 @@ def _ensure_beam_girder_system_settings_defaults() -> dict[str, Any]:
     existing.setdefault("number_of_girders", DEFAULT_NUMBER_OF_GIRDERS)
     existing.setdefault("concrete_unit_weight_kN_m3", DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3)
     existing.setdefault("tributary_width_m", existing.get("girder_spacing_m", DEFAULT_GIRDER_SPACING_M))
+    existing.setdefault("use_girder_spacing_as_tributary_width", False)
     normalized = system_settings_from_mapping(existing).as_metadata()
     st.session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized
     _sync_beam_girder_span_to_existing_sources(normalized)
@@ -733,8 +734,8 @@ def _render_building_beam_girder_system_settings() -> None:
     with st.container(border=True):
         st.markdown("#### Building Beam/Girder System Settings")
         st.caption(
-            "Single source of truth for Building Beam/Girder span, service-load tributary width, and concrete unit weight. "
-            "Bridge-only inputs such as girder spacing for deck distribution, number of bridge girders, barrier/sidewalk, and wearing surface are not used here."
+            "Single source of truth for Building Beam/Girder span, beam/girder spacing, service-load tributary width, and concrete unit weight. "
+            "Bridge-only inputs such as number of bridge girders, barrier/sidewalk, and wearing surface are not used here."
         )
         cols = st.columns(3)
         with cols[0]:
@@ -748,14 +749,14 @@ def _render_building_beam_girder_system_settings() -> None:
                 help="Single source for simple-span service moment diagrams and prestress/debonding previews.",
             )
         with cols[1]:
-            settings["tributary_width_m"] = st.number_input(
-                "🟨 Tributary width for building loads (m)",
+            settings["girder_spacing_m"] = st.number_input(
+                "🟨 Beam / Girder spacing (m)",
                 min_value=0.1,
                 step=0.1,
-                value=float(settings.get("tributary_width_m") or settings.get("girder_spacing_m") or DEFAULT_GIRDER_SPACING_M),
+                value=float(settings.get("girder_spacing_m") or settings.get("tributary_width_m") or DEFAULT_GIRDER_SPACING_M),
                 format="%.3f",
-                key="building_beam_girder_system_tributary_width_m_input",
-                help="Used to convert building SDL/LL area loads in kN/m² into line loads in kN/m.",
+                key="building_beam_girder_system_spacing_m_input",
+                help="Typical member spacing for building floor/roof load take-down. Use it as tributary width for ordinary interior beams/girders.",
             )
         with cols[2]:
             settings["concrete_unit_weight_kN_m3"] = st.number_input(
@@ -767,8 +768,30 @@ def _render_building_beam_girder_system_settings() -> None:
                 key="building_beam_girder_system_unit_weight_input",
                 help="Default unit weight for precast girder self-weight and wet topping load preview.",
             )
-        # Preserve hidden defaults for project compatibility, but do not expose them in Building workflow.
-        settings.setdefault("girder_spacing_m", settings.get("tributary_width_m") or DEFAULT_GIRDER_SPACING_M)
+
+        use_spacing_default = bool(settings.get("use_girder_spacing_as_tributary_width", True))
+        settings["use_girder_spacing_as_tributary_width"] = st.checkbox(
+            "Use beam/girder spacing as tributary width",
+            value=use_spacing_default,
+            key="building_beam_girder_system_use_spacing_as_tributary_width",
+            help="Recommended default for ordinary interior building beams/girders. Disable only for edge beams, openings, one-way/two-way distribution, or special load paths.",
+        )
+        if settings["use_girder_spacing_as_tributary_width"]:
+            settings["tributary_width_m"] = settings["girder_spacing_m"]
+            st.caption(
+                f"Tributary width for SDL/LL load take-down is locked to Beam/Girder spacing = {float(settings['girder_spacing_m']):.3f} m."
+            )
+        else:
+            settings["tributary_width_m"] = st.number_input(
+                "🟨 Tributary width for SDL/LL load take-down (m)",
+                min_value=0.1,
+                step=0.1,
+                value=float(settings.get("tributary_width_m") or settings.get("girder_spacing_m") or DEFAULT_GIRDER_SPACING_M),
+                format="%.3f",
+                key="building_beam_girder_system_tributary_width_m_input",
+                help="Override only when tributary width differs from member spacing, such as edge beams, openings, or special load distribution.",
+            )
+        # Preserve hidden defaults for project compatibility, but do not expose bridge-girder count in Building workflow.
         settings.setdefault("number_of_girders", DEFAULT_NUMBER_OF_GIRDERS)
         normalized = system_settings_from_mapping(settings).as_metadata()
         st.session_state[BEAM_GIRDER_SYSTEM_SETTINGS_KEY] = normalized
@@ -778,6 +801,7 @@ def _render_building_beam_girder_system_settings() -> None:
             _compact_panel_html(
                 [
                     DashboardCard("Span source", f"{summary.span_length_m:.3f} m", "Used by building SLS station grid and prestress preview", "ready"),
+                    DashboardCard("Beam/Girder spacing", f"{summary.girder_spacing_m:.3f} m", "Primary building member spacing", "info"),
                     DashboardCard("Load tributary width", f"{summary.effective_tributary_width_m:.3f} m", "q × b_trib → w for SDL/LL", "info"),
                     DashboardCard("Design context", "ACI 318", "Building Beam/Girder workflow", "ready"),
                     DashboardCard("Bridge SDL", "Hidden", "No barrier/sidewalk/wearing surface in Building workflow", "warning"),

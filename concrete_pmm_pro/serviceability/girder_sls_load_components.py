@@ -37,9 +37,12 @@ class BeamGirderSystemSettings:
     number_of_girders: int = DEFAULT_NUMBER_OF_GIRDERS
     concrete_unit_weight_kN_m3: float = DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3
     tributary_width_m: float | None = None
+    use_girder_spacing_as_tributary_width: bool = False
 
     @property
     def effective_tributary_width_m(self) -> float:
+        if self.use_girder_spacing_as_tributary_width:
+            return self.girder_spacing_m
         if _positive_float(self.tributary_width_m) is not None:
             return float(self.tributary_width_m)
         return self.girder_spacing_m
@@ -51,6 +54,7 @@ class BeamGirderSystemSettings:
             "number_of_girders": self.number_of_girders,
             "concrete_unit_weight_kN_m3": self.concrete_unit_weight_kN_m3,
             "tributary_width_m": self.tributary_width_m,
+            "use_girder_spacing_as_tributary_width": self.use_girder_spacing_as_tributary_width,
         }
 
 
@@ -185,6 +189,7 @@ def system_settings_from_mapping(mapping: Mapping[str, Any] | None) -> BeamGirde
         number_of_girders=_positive_int(data.get("number_of_girders"), DEFAULT_NUMBER_OF_GIRDERS),
         concrete_unit_weight_kN_m3=_positive_float(data.get("concrete_unit_weight_kN_m3")) or DEFAULT_CONCRETE_UNIT_WEIGHT_KN_M3,
         tributary_width_m=_positive_float(data.get("tributary_width_m")),
+        use_girder_spacing_as_tributary_width=bool(data.get("use_girder_spacing_as_tributary_width", False)),
     )
 
 

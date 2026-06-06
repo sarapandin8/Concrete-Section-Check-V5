@@ -1670,11 +1670,13 @@ def _render_building_beam_girder_service_load_inputs() -> None:
             "Use building-style area loads. The app converts q (kN/m²) × tributary width into simple-span line load and service bending moment. "
             "Topping/slab data is taken from Section/Composite metadata; do not re-enter topping here."
         )
-        basis_cols = st.columns(4)
+        basis_cols = st.columns(5)
         basis_cols[0].metric("Span L", f"{system.span_length_m:.3f} m")
-        basis_cols[1].metric("Tributary width", f"{system.effective_tributary_width_m:.3f} m")
-        basis_cols[2].metric("Code basis", "ACI 318")
-        basis_cols[3].metric("Bridge SDL", "Not used")
+        basis_cols[1].metric("Beam/Girder spacing", f"{system.girder_spacing_m:.3f} m")
+        basis_cols[2].metric("Tributary width", f"{system.effective_tributary_width_m:.3f} m")
+        basis_cols[3].metric("Code basis", "ACI 318")
+        basis_cols[4].metric("Bridge SDL", "Not used")
+        st.caption("Spacing and tributary width come from Setup → Building Beam/Girder System Settings. Change them in Setup, not in this Loads panel.")
 
         stage_cols = st.columns(3)
         with stage_cols[0]:

@@ -26,7 +26,7 @@ ANALYSIS_SOURCE = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "analysis_page.py").r
 
 
 def test_building_service_area_loads_convert_to_line_load_and_moment() -> None:
-    system = BeamGirderSystemSettings(span_length_m=8.0, tributary_width_m=2.5)
+    system = BeamGirderSystemSettings(span_length_m=8.0, girder_spacing_m=2.5, use_girder_spacing_as_tributary_width=True)
     settings = BuildingBeamGirderServiceLoadSettings(
         service_sdl_kN_m2=2.0,
         service_ll_kN_m2=3.0,
@@ -47,6 +47,15 @@ def test_building_service_area_loads_convert_to_line_load_and_moment() -> None:
     assert rows[2]["Mx service (kN-m)"] == pytest.approx(0.0)
 
 
+def test_building_system_can_use_spacing_as_tributary_width() -> None:
+    system = BeamGirderSystemSettings(
+        girder_spacing_m=3.2,
+        tributary_width_m=1.1,
+        use_girder_spacing_as_tributary_width=True,
+    )
+    assert system.effective_tributary_width_m == pytest.approx(3.2)
+    assert system.as_metadata()["use_girder_spacing_as_tributary_width"] is True
+
 def test_building_service_direct_line_load_mode_is_supported() -> None:
     system = BeamGirderSystemSettings(span_length_m=10.0, tributary_width_m=3.0)
     settings = BuildingBeamGirderServiceLoadSettings(
@@ -64,7 +73,9 @@ def test_building_service_settings_round_trip_project_io() -> None:
     session: dict[str, object] = {
         BEAM_GIRDER_SYSTEM_SETTINGS_KEY: {
             "span_length_m": 9.0,
+            "girder_spacing_m": 2.4,
             "tributary_width_m": 2.2,
+            "use_girder_spacing_as_tributary_width": False,
             "concrete_unit_weight_kN_m3": 24.0,
         },
         BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY: {
@@ -86,6 +97,8 @@ def test_building_service_settings_round_trip_project_io() -> None:
 
     restored: dict[str, object] = {}
     apply_project_to_session_state(ProjectModel.model_validate(raw), restored)
+    assert restored[BEAM_GIRDER_SYSTEM_SETTINGS_KEY]["girder_spacing_m"] == pytest.approx(2.4)
+    assert restored[BEAM_GIRDER_SYSTEM_SETTINGS_KEY]["use_girder_spacing_as_tributary_width"] is False
     normalized = building_service_load_settings_from_mapping(restored[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY])
     assert normalized.service_ll_kN_m2 == pytest.approx(2.5)
     assert normalized.additional_sdl_line_load_kN_m == pytest.approx(0.75)
@@ -93,7 +106,10 @@ def test_building_service_settings_round_trip_project_io() -> None:
 
 def test_building_workflow_ui_hides_bridge_sdl_and_exposes_building_sdl() -> None:
     assert "Building Beam/Girder System Settings" in PROJECT_SOURCE
-    assert "Tributary width for building loads" in PROJECT_SOURCE
+    assert "Beam / Girder spacing" in PROJECT_SOURCE
+    assert "Use beam/girder spacing as tributary width" in PROJECT_SOURCE
+    assert "Tributary width for SDL/LL load take-down" in PROJECT_SOURCE
+    assert "Beam/Girder spacing" in LOADS_SOURCE
     assert "Bridge SDL" in PROJECT_SOURCE
     assert "Building Beam/Girder ACI Service Load Components" in LOADS_SOURCE
     assert "SDL (kN/m²)" in LOADS_SOURCE

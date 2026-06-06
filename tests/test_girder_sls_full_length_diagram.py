@@ -140,3 +140,13 @@ def test_sls_limit4_2_visible_guide_shows_formula_and_non_service_aci_note() -> 
     assert "Tension formula substitution" in SOURCE
     assert "ACI Class U / Class T service classification changes the Service-stage tensile limit only" in SOURCE
     assert "Not applied to Transfer/Construction" in SOURCE
+
+
+def test_sls_limit5_adds_aci_transfer_end_zone_piecewise_limit() -> None:
+    assert "CODE.SLS.LIMIT5" in SOURCE
+    assert "aci_transfer_end_zone_verified" in SOURCE
+    assert "ACI transfer end-zone limit" in SOURCE
+    assert "0.50√f'ci" in SOURCE
+    assert "0.25√f'ci" in SOURCE
+    assert "Transfer length 60db" in SOURCE
+    assert "Building precast prestressed girder Transfer preview" in SOURCE

@@ -120,6 +120,8 @@ from concrete_pmm_pro.serviceability import (
     GirderServiceStressLimitCheckResult,
     GirderStressLimitPointResult,
     StressLimitInputRow,
+    aci_transfer_end_zone_length_m,
+    aci_transfer_tension_limit_trace,
     build_girder_sls_limit_profile,
     default_girder_service_stage_templates,
     girder_prestress_stress_result_rows,
@@ -4124,11 +4126,18 @@ def _girder_full_length_preview_status(df: pd.DataFrame, stage_label: str) -> tu
 
     if df.empty:
         return "REVIEW", "No station rows", "warning"
-    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    compression_limit, _tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     min_stress = float(df[["Top total (MPa)", "Bottom total (MPa)"]].min().min())
-    max_stress = float(df[["Top total (MPa)", "Bottom total (MPa)"]].max().max())
     compression_ok = min_stress >= -compression_limit - _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA
-    tension_ok = max_stress <= tension_limit + _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA
+    span = float(pd.to_numeric(df.get("Station x (m)", pd.Series([0.0])), errors="coerce").max(skipna=True) or 0.0)
+    tension_ok = True
+    for _, row in df.iterrows():
+        station = float(row.get("Station x (m)", 0.0) or 0.0)
+        limit_at_x, _ = _girder_sls_tension_limit_at_station(stage_label, station, span_length_m=span)
+        max_tension = max(float(row.get("Top total (MPa)", 0.0) or 0.0), float(row.get("Bottom total (MPa)", 0.0) or 0.0))
+        if max_tension > limit_at_x + _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+            tension_ok = False
+            break
     if compression_ok and tension_ok:
         return "Preview PASS", profile_label, "ready"
     return "Preview FAIL", f"{profile_label}; check compression/tension exceedance", "danger"
@@ -4205,16 +4214,28 @@ def _girder_sls4b_governing_demand_rows(df: pd.DataFrame, stage_label: str) -> l
         return []
     compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     comp_idx = df["Max compression (MPa)"].idxmin()
-    tens_idx = df["Max tension (MPa)"].idxmax()
+    span = float(pd.to_numeric(df.get("Station x (m)", pd.Series([0.0])), errors="coerce").max(skipna=True) or 0.0)
+    tension_utilizations: list[tuple[float, object, float]] = []
+    for idx, row in df.iterrows():
+        station = float(row.get("Station x (m)", 0.0) or 0.0)
+        limit_at_x, _ = _girder_sls_tension_limit_at_station(stage_label, station, span_length_m=span)
+        actual_tension = float(row.get("Max tension (MPa)", 0.0) or 0.0)
+        util = _girder_sls_demand_utilization(actual_tension, limit_at_x, demand_type="tension")
+        try:
+            util_value = -math.inf if util is None else float(util)
+        except (TypeError, ValueError):
+            util_value = -math.inf
+        tension_utilizations.append((util_value, idx, limit_at_x))
+    _tens_util, tens_idx, tension_limit_at_idx = max(tension_utilizations, key=lambda item: item[0])
     demand_specs = [
         ("Compression", "compression", comp_idx, "Max compression (MPa)", -compression_limit),
-        ("Tension", "tension", tens_idx, "Max tension (MPa)", tension_limit),
+        ("Tension", "tension", tens_idx, "Max tension (MPa)", tension_limit_at_idx),
     ]
     rows: list[dict[str, object]] = []
     for label, demand_type, idx, value_column, signed_limit in demand_specs:
         row = df.loc[idx]
         actual = float(row[value_column])
-        limit_magnitude = compression_limit if demand_type == "compression" else tension_limit
+        limit_magnitude = compression_limit if demand_type == "compression" else abs(float(signed_limit))
         utilization = _girder_sls_demand_utilization(actual, limit_magnitude, demand_type=demand_type)
         status = "Preview PASS"
         if utilization is None:
@@ -4700,15 +4721,20 @@ def _make_girder_full_length_sls_figure(df: pd.DataFrame, *, stage_label: str) -
             hovertemplate=f"Compression limit = -{compression_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
         )
     )
-    if tension_limit > _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
+    tension_x, tension_y, tension_profile_label = _girder_sls_tension_limit_trace_for_graph(stage_label, df)
+    if max(tension_y) > _GIRDER_DISPLAY_ZERO_TOLERANCE_MPA:
         fig.add_trace(
             go.Scatter(
-                x=[x_min, x_max],
-                y=[tension_limit, tension_limit],
+                x=tension_x,
+                y=tension_y,
                 mode="lines",
                 name="Tension limit",  # legacy string: Tension preview limit
                 line={"dash": "dash", "width": 2},
-                hovertemplate=f"Tension limit = {tension_limit:.3f} MPa<br>{escape(profile_label)}<extra></extra>",
+                hovertemplate=(
+                    "x=%{x:.3f} m<br>"
+                    "Tension limit=%{y:.3f} MPa<br>"
+                    f"{escape(tension_profile_label)}<extra></extra>"
+                ),
             )
         )
     # GIRDER.SLS4C / SLS.GRAPH1: mark governing compression and tension directly on
@@ -4821,7 +4847,14 @@ def _render_girder_full_length_sls_diagram(
     status, detail, style = _girder_full_length_preview_status(df, stage_label)
     compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
     governing_comp_idx = df["Max compression (MPa)"].idxmin()
-    governing_tens_idx = df["Max tension (MPa)"].idxmax()
+    tension_demand_rows_for_stage = [row for row in _girder_sls4b_governing_demand_rows(df, stage_label) if str(row.get("Demand")) == "Tension"]
+    if tension_demand_rows_for_stage:
+        governing_tens_station = float(tension_demand_rows_for_stage[0].get("Station x (m)", 0.0) or 0.0)
+        governing_tens_limit = abs(float(tension_demand_rows_for_stage[0].get("Limit stress (MPa)", tension_limit) or tension_limit))
+        governing_tens_idx = (df["Station x (m)"] - governing_tens_station).abs().idxmin()
+    else:
+        governing_tens_idx = df["Max tension (MPa)"].idxmax()
+        governing_tens_limit = tension_limit
     st.markdown("**SLS check basis**")
     _render_analysis_summary_strip(
         _girder_sls4c_stage_basis_cards(
@@ -4851,8 +4884,8 @@ def _render_girder_full_length_sls_diagram(
             {
                 "title": "Governing tension",
                 "value": _format_girder_stress_mpa(df.loc[governing_tens_idx, "Max tension (MPa)"]),
-                "detail": f"x={float(df.loc[governing_tens_idx, 'Station x (m)']):.3f} m · limit {tension_limit:.3f} MPa",
-                "status": "ready" if float(df.loc[governing_tens_idx, "Max tension (MPa)"]) <= tension_limit else "danger",
+                "detail": f"x={float(df.loc[governing_tens_idx, 'Station x (m)']):.3f} m · limit {governing_tens_limit:.3f} MPa",
+                "status": "ready" if float(df.loc[governing_tens_idx, "Max tension (MPa)"]) <= governing_tens_limit else "danger",
             },
             {
                 "title": "Limit profile",
@@ -5473,6 +5506,166 @@ def _girder_ordinary_rebar_tension_face_summary(stresses: list[StressLimitInputR
     }
 
 
+
+
+def _active_strand_diameter_for_transfer_length_mm() -> tuple[float, str]:
+    """Return the active strand diameter used for ACI 60db end-zone length.
+
+    Uses the maximum active strand diameter found in the girder strand layout;
+    falls back to 12.7 mm so the UI can still produce an auditable preview.
+    """
+
+    table = st.session_state.get("girder_strand_layout_table")
+    diameters: list[float] = []
+    try:
+        df = pd.DataFrame(table)
+    except Exception:
+        df = pd.DataFrame()
+    if not df.empty:
+        for _, row in df.iterrows():
+            active_value = row.get("Active", True)
+            active = bool(active_value)
+            if isinstance(active_value, str):
+                active = active_value.strip().casefold() not in {"false", "0", "no", "off", "inactive"}
+            if not active:
+                continue
+            for key in ("Diameter_mm", "Strand Diameter_mm", "diameter_mm"):
+                if key not in row:
+                    continue
+                try:
+                    value = float(row.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value) and value > 0.0:
+                    diameters.append(value)
+                    break
+    if diameters:
+        diameter = max(diameters)
+        return diameter, f"max active strand diameter from layout = {diameter:.1f} mm"
+    return 12.7, "fallback default strand diameter = 12.7 mm"
+
+
+def _section_depth_mm_from_session() -> float | None:
+    bounds = _girder_section_y_bounds_from_session()
+    if bounds is None:
+        return None
+    y_min, y_max = bounds
+    depth = float(y_max) - float(y_min)
+    return depth if math.isfinite(depth) and depth > 0.0 else None
+
+
+def _is_building_aci_transfer_end_zone_applicable(stage_label: str) -> bool:
+    """Return True when ACI transfer end-zone limit may apply to this diagram.
+
+    CODE.SLS.LIMIT5 intentionally scopes this to Building Beam/Girder shared
+    precast prestressed girder workflow only.  It must not leak into Bridge
+    AASHTO diagrams.
+    """
+
+    mode = _analysis_mode_from_session()
+    if not is_building_beam_girder_workflow(mode):
+        return False
+    if girder_sls_code_for_project_code(project_design_code_from_session(st.session_state)) != "ACI 318":
+        return False
+    limit_stage = stage_label if stage_label in DEFAULT_GIRDER_SLS_STAGES else _beam_sls_stage_default_code_limit_stage(stage_label)
+    if limit_stage != STAGE_TRANSFER:
+        return False
+    preset = str(st.session_state.get("section_preset_key") or "").strip().casefold()
+    if preset != "parametric_i_girder":
+        return False
+    return prestressing_steel_enabled(st.session_state, default=True)
+
+
+def _aci_transfer_end_zone_length_state(stage_label: str) -> tuple[float, str, str]:
+    """Return end-zone length and display basis for the visible guide/graph."""
+
+    safe_stage = _beam_sls_stage_label_for_analysis(stage_label).replace(" ", "_").replace("/", "_")
+    basis_key = f"aci_transfer_end_zone_length_basis_{safe_stage}"
+    diameter_key = f"aci_transfer_end_zone_db_mm_{safe_stage}"
+    user_key = f"aci_transfer_end_zone_user_length_m_{safe_stage}"
+    default_diameter, diameter_source = _active_strand_diameter_for_transfer_length_mm()
+    basis = str(st.session_state.get(basis_key) or "Transfer length 60db")
+    diameter = float(st.session_state.get(diameter_key, default_diameter) or default_diameter)
+    user_length = float(st.session_state.get(user_key, 0.0) or 0.0)
+    depth = _section_depth_mm_from_session()
+    try:
+        length = aci_transfer_end_zone_length_m(
+            strand_diameter_mm=diameter,
+            member_depth_mm=depth,
+            user_defined_length_m=user_length,
+            basis=basis,
+        )
+    except Exception:
+        length = aci_transfer_end_zone_length_m(strand_diameter_mm=default_diameter, basis="Transfer length 60db")
+        basis = "Transfer length 60db"
+    if "60" in basis or "transfer" in basis.casefold():
+        detail = f"{basis}: lt = 60db = 60 × {diameter:.1f} mm = {length:.3f} m ({diameter_source})"
+    elif "depth" in basis.casefold():
+        detail = f"{basis}: h = {0.0 if depth is None else depth:.1f} mm = {length:.3f} m"
+    elif "face" in basis.casefold():
+        detail = "Conservative end-face-only option: higher end-zone line is not extended along the span."
+    else:
+        detail = f"{basis}: user-defined end-zone length = {length:.3f} m"
+    return float(length), basis, detail
+
+
+def _diagram_uses_aci_transfer_end_zone_limit(stage_label: str) -> bool:
+    if not _is_building_aci_transfer_end_zone_applicable(stage_label):
+        return False
+    profile = _girder_stage_limit_profile_for_diagram(stage_label)
+    return str(getattr(profile, "limit_profile_key", "")) == "aci_transfer_end_zone_verified"
+
+
+def _girder_sls_tension_limit_at_station(stage_label: str, station_m: float, *, span_length_m: float | None = None) -> tuple[float, str]:
+    """Return positive tensile limit at station for display/checking.
+
+    Most profiles are constant along the span.  CODE.SLS.LIMIT5 adds one
+    scoped exception: Building ACI transfer end-zone checked with a piecewise
+    0.50√f'ci end-zone limit and 0.25√f'ci interior limit.
+    """
+
+    compression_limit, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    del compression_limit
+    if not _diagram_uses_aci_transfer_end_zone_limit(stage_label):
+        return float(tension_limit), profile_label
+    fc = _girder_fc_for_sls_limit_preview()
+    span = float(span_length_m or _girder_sls_span_length_from_session([]) or 0.0)
+    end_length, _basis, _detail = _aci_transfer_end_zone_length_state(stage_label)
+    trace = aci_transfer_tension_limit_trace(
+        span_length_m=max(span, 1.0e-6),
+        fci_MPa=float(fc),
+        end_zone_length_m=end_length,
+        use_end_zone_limit=True,
+    )
+    x = float(station_m)
+    in_end_zone = x <= trace.end_zone_length_m + 1.0e-9 or x >= max(span - trace.end_zone_length_m, 0.0) - 1.0e-9
+    return (trace.end_zone_limit_MPa if in_end_zone else trace.interior_limit_MPa), profile_label
+
+
+def _girder_sls_tension_limit_trace_for_graph(stage_label: str, df: pd.DataFrame) -> tuple[list[float], list[float], str]:
+    """Return x/y trace for the tensile limit line displayed on the SLS graph."""
+
+    _compression, tension_limit, profile_label = _girder_sls_diagram_limit_summary(stage_label)
+    if df.empty or "Station x (m)" not in df.columns:
+        return [0.0, 1.0], [float(tension_limit), float(tension_limit)], profile_label
+    x_min = float(pd.to_numeric(df["Station x (m)"], errors="coerce").min())
+    x_max = float(pd.to_numeric(df["Station x (m)"], errors="coerce").max())
+    if abs(x_max - x_min) <= 1e-9:
+        x_min -= 0.5
+        x_max += 0.5
+    if not _diagram_uses_aci_transfer_end_zone_limit(stage_label):
+        return [x_min, x_max], [float(tension_limit), float(tension_limit)], profile_label
+    fc = _girder_fc_for_sls_limit_preview()
+    end_length, _basis, _detail = _aci_transfer_end_zone_length_state(stage_label)
+    trace = aci_transfer_tension_limit_trace(
+        span_length_m=max(x_max - x_min, 1.0e-6),
+        fci_MPa=float(fc),
+        end_zone_length_m=end_length,
+        use_end_zone_limit=True,
+    )
+    return [x_min + x for x in trace.x_m], list(trace.y_MPa), profile_label
+
+
 def _render_girder_tension_limit_guidance(
     *,
     title: str,
@@ -5520,7 +5713,12 @@ def _render_girder_tension_limit_guidance(
             exposure_options = ["Moderate exposure / bonded", "Severe exposure / bonded", "Unbonded or no tension"]
             if st.session_state.get(exposure_key) not in exposure_options:
                 st.session_state[exposure_key] = exposure_options[0]
-            exposure = st.selectbox("Exposure / tendon condition", exposure_options, key=exposure_key)
+            if stage == STAGE_FINAL_SERVICE:
+                exposure = st.selectbox("Exposure / tendon condition", exposure_options, key=exposure_key)
+            else:
+                exposure = "moderate"
+                st.markdown("**Exposure / tendon condition**")
+                st.caption("Not applied to Transfer/Construction; AASHTO exposure/tendon condition controls Service-stage tensile limit only.")
             aci_service_class = "Class U"
         else:
             aci_options = ["Class U", "Class T", "No tension"]
@@ -5544,7 +5742,13 @@ def _render_girder_tension_limit_guidance(
             st.markdown("**Effect duration**")
             st.caption("Not applied to this stage; service duration controls only service-stage classification.")
     if method == "Auto from current ordinary rebar layout":
-        verified = summary.get("auto_verified")
+        # CODE.SLS.LIMIT5: ACI transfer end-zone higher limit requires an
+        # engineer-verified R24.5.3 condition.  Auto rebar detection is only a
+        # screening aid and must not silently select the higher end-zone limit.
+        if code == "ACI 318" and stage == STAGE_TRANSFER:
+            verified = None
+        else:
+            verified = summary.get("auto_verified")
     elif method == "Verified bonded tension reinforcement":
         verified = True
     elif method == "No bonded reinforcement / no-tension condition":
@@ -5607,6 +5811,70 @@ def _render_girder_tension_limit_guidance(
         ],
         columns=2,
     )
+    # CODE.SLS.LIMIT5: show ACI transfer end-zone formulas directly in the visible guide.
+    if code == "ACI 318" and stage == STAGE_TRANSFER and _is_building_aci_transfer_end_zone_applicable(stage):
+        end_zone_selected = selected_profile_key == "aci_transfer_end_zone_verified"
+        safe_stage = _beam_sls_stage_label_for_analysis(stage).replace(" ", "_").replace("/", "_")
+        basis_key = f"aci_transfer_end_zone_length_basis_{safe_stage}"
+        diameter_key = f"aci_transfer_end_zone_db_mm_{safe_stage}"
+        user_key = f"aci_transfer_end_zone_user_length_m_{safe_stage}"
+        default_diameter, _diameter_source = _active_strand_diameter_for_transfer_length_mm()
+        basis_options = ["Transfer length 60db", "Member depth h", "User-defined length", "Conservative end face only"]
+        if st.session_state.get(basis_key) not in basis_options:
+            st.session_state[basis_key] = basis_options[0]
+        ez_cols = st.columns([1.05, 0.85, 0.85])
+        with ez_cols[0]:
+            st.selectbox("ACI transfer end-zone length basis", basis_options, key=basis_key)
+        with ez_cols[1]:
+            st.number_input(
+                "Strand db for 60db (mm)",
+                min_value=1.0,
+                value=float(st.session_state.get(diameter_key, default_diameter) or default_diameter),
+                step=0.1,
+                format="%.1f",
+                key=diameter_key,
+                help="Used only when end-zone length basis is Transfer length 60db. Default comes from active strand layout when available.",
+            )
+        with ez_cols[2]:
+            st.number_input(
+                "User end-zone length (m)",
+                min_value=0.0,
+                value=float(st.session_state.get(user_key, 0.0) or 0.0),
+                step=0.05,
+                format="%.3f",
+                key=user_key,
+                help="Used only when end-zone length basis is User-defined length.",
+            )
+        span_for_trace = _girder_sls_span_length_from_session([])
+        end_length, _end_basis, end_detail = _aci_transfer_end_zone_length_state(stage)
+        trace = aci_transfer_tension_limit_trace(
+            span_length_m=max(float(span_for_trace), 1.0e-6),
+            fci_MPa=float(fc_for_formula),
+            end_zone_length_m=end_length,
+            use_end_zone_limit=end_zone_selected,
+        )
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": "ACI transfer end-zone limit",
+                    "value": f"{trace.end_zone_limit_MPa:.3f} MPa" if end_zone_selected else "Not active",
+                    "detail": f"End zone: 0.50√{float(fc_for_formula):.3f} MPa; {end_detail}",
+                    "status": "warning" if end_zone_selected else "neutral",
+                },
+                {
+                    "title": "ACI transfer interior limit",
+                    "value": f"{trace.interior_limit_MPa:.3f} MPa",
+                    "detail": f"Interior/general span: 0.25√{float(fc_for_formula):.3f} MPa",
+                    "status": "info",
+                },
+            ],
+            columns=2,
+        )
+        if end_zone_selected:
+            st.warning(
+                "ACI end-zone higher tensile limit is used only for this Building precast prestressed girder Transfer preview. "
+                "Confirm bonded non-prestressed reinforcement is adequate for total tensile force or that cracked-section adequacy is shown before final design."
+            )
     if code != "AASHTO LRFD Bridge" and stage != STAGE_FINAL_SERVICE:
         st.info("ACI Class U / Class T service classification changes the Service-stage tensile limit only. Transfer and Construction use their own stage-specific limit formulas.")
 

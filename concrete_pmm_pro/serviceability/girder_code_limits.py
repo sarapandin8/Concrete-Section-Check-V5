@@ -87,6 +87,22 @@ class GirderTensionLimitGuidance:
 
 
 @dataclass(frozen=True)
+class AciTransferEndZoneTensionLimitTrace:
+    """Piecewise ACI 318 transfer tension-limit trace for simply supported ends.
+
+    This helper is used only as display/check-limit metadata.  It does not alter
+    the SLS stress solver or prestress Pe(x) calculation.
+    """
+
+    x_m: tuple[float, ...]
+    y_MPa: tuple[float, ...]
+    end_zone_length_m: float
+    interior_limit_MPa: float
+    end_zone_limit_MPa: float
+    formula_note: str
+
+
+@dataclass(frozen=True)
 class GirderServiceStressLimitProfile:
     """Concrete service-stress limit profile for one Beam/Girder preview check."""
 
@@ -362,13 +378,21 @@ def girder_sls_limit_profile_options(
         return (
             GirderStressLimitProfileOption(
                 key="aci_transfer_basic",
-                label="Initial transfer — basic prestressed member preview",
-                description="0.60 f'ci compression; 0.25√f'ci tension capped at 1.38 MPa as a conservative initial-transfer preview.",
+                label="Initial transfer — general span limit",
+                description="0.60 f'ci compression; 0.25√f'ci tension for general/interior transfer-stage sections.",
                 compression_limit_ratio=0.60,
                 tension_limit_mode="sqrt(fc) ratio",
                 tension_sqrt_fc_ratio=0.25,
-                tension_limit_cap_MPa=1.38,
-                clause_note="ACI prestressed-member initial-transfer preview. Confirm end-region/reinforcement conditions and project edition before final design.",
+                clause_note="ACI 318-14/19 Table 24.5.3.2 transfer-stage preview: general/interior tension limit. End-zone higher limit is separate and requires verified ACI R24.5.3 condition.",
+            ),
+            GirderStressLimitProfileOption(
+                key="aci_transfer_end_zone_verified",
+                label="Initial transfer — end-zone limit verified",
+                description="Piecewise ACI transfer tension preview: 0.50√f'ci at simply supported end zones and 0.25√f'ci in the interior span. Requires verified ACI R24.5.3 condition.",
+                compression_limit_ratio=0.60,
+                tension_limit_mode="sqrt(fc) ratio",
+                tension_sqrt_fc_ratio=0.25,
+                clause_note="ACI 318-14/19 Table 24.5.3.2 allows 0.50√f'ci at ends of simply supported members when ACI R24.5.3 condition is satisfied. The scalar profile value is the interior 0.25√f'ci limit; full-length diagrams use a piecewise line.",
             ),
             GirderStressLimitProfileOption(
                 key="aci_transfer_no_tension",
@@ -382,14 +406,13 @@ def girder_sls_limit_profile_options(
     if stage == STAGE_DECK_CASTING:
         return (
             GirderStressLimitProfileOption(
-                key="aci_deck_precomp_user",
-                label="Pre-composite construction stage — engineer-controlled",
-                description="0.55 f'c_stage compression; 0.25√f'c_stage tension capped at 1.38 MPa as editable construction-stage preview.",
-                compression_limit_ratio=0.55,
+                key="aci_deck_precomp_cip_pour_fr",
+                label="CIP pour / construction — modulus-of-rupture tension limit",
+                description="0.60 f'c compression; fr = 0.62√f'c tension for temporary CIP pour construction stress preview of the precast beam.",
+                compression_limit_ratio=0.60,
                 tension_limit_mode="sqrt(fc) ratio",
-                tension_sqrt_fc_ratio=0.25,
-                tension_limit_cap_MPa=1.38,
-                clause_note="ACI construction-stage preview. Confirm project-specific temporary stress limits.",
+                tension_sqrt_fc_ratio=0.62,
+                clause_note="ACI-style construction/CIP pour preview for the precast beam concrete: use modulus of rupture fr = 0.62√f'c as the temporary construction tensile limit. This is not the ACI transfer Table 24.5.3.2 end-zone provision; confirm project criteria before final design.",
             ),
         )
     if stage == STAGE_FINAL_SERVICE:
@@ -552,21 +575,29 @@ def recommend_girder_tension_limit_profile(
                 "OK",
                 "Initial transfer selected as no-tension preview.",
             )
-        if verified is None:
-            warnings.append("Transfer tensile stress limit is a conservative preview; verify end-region reinforcement and project criteria.")
+        if verified is True:
+            return GirderTensionLimitGuidance(
+                "aci_transfer_end_zone_verified",
+                "OK",
+                "ACI transfer end-zone condition verified; use piecewise 0.50√f'ci end-zone limit and 0.25√f'ci interior limit.",
+            )
+        if verified is False:
+            warnings.append("ACI R24.5.3 end-zone condition is not verified; use 0.25√f'ci general transfer tension limit.")
+        else:
+            warnings.append("ACI transfer end-zone condition is not verified by the app; use 0.25√f'ci general transfer tension limit unless the engineer verifies R24.5.3.")
         return GirderTensionLimitGuidance(
             "aci_transfer_basic",
             status(),
-            "Initial-transfer basic prestressed-member preview selected.",
+            "Initial-transfer general span prestressed-member preview selected.",
             tuple(warnings),
         )
 
     if stage == STAGE_DECK_CASTING:
-        warnings.append("ACI construction-stage tensile limit is project-specific; current profile is engineer-controlled preview.")
+        warnings.append("ACI construction/CIP pour tensile limit uses modulus of rupture fr = 0.62√f'c as a temporary-stage preview; confirm project criteria before final design.")
         return GirderTensionLimitGuidance(
-            "aci_deck_precomp_user",
+            "aci_deck_precomp_cip_pour_fr",
             "REVIEW",
-            "Pre-composite construction-stage engineer-controlled profile selected.",
+            "CIP pour construction-stage modulus-of-rupture tensile limit selected for the precast beam concrete.",
             tuple(warnings),
         )
 
@@ -603,6 +634,83 @@ def recommend_girder_tension_limit_profile(
         "REVIEW",
         "User-defined ACI stage; select project-specific tensile stress limit.",
         ("User-defined stage cannot be classified automatically.",),
+    )
+
+
+
+
+def aci_transfer_end_zone_length_m(
+    *,
+    strand_diameter_mm: float | None = None,
+    member_depth_mm: float | None = None,
+    user_defined_length_m: float | None = None,
+    basis: str = "Transfer length 60db",
+) -> float:
+    """Return practical ACI transfer end-zone length in metres.
+
+    ACI 318 states the higher transfer tension limit at the ends of simply
+    supported members but does not prescribe a numeric end-zone length.  The
+    project default is transfer length, ``60db``.  This helper is intentionally
+    explicit so UI/reporting can show the assumption instead of hiding it.
+    """
+
+    text = str(basis or "Transfer length 60db").strip().casefold()
+    if "face" in text or "conservative" in text:
+        return 0.0
+    if "user" in text:
+        value = 0.0 if user_defined_length_m is None else float(user_defined_length_m)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError("user_defined_length_m must be a non-negative finite value.")
+        return value
+    if "depth" in text or text == "h":
+        value_mm = 0.0 if member_depth_mm is None else float(member_depth_mm)
+        if not math.isfinite(value_mm) or value_mm <= 0.0:
+            raise ValueError("member_depth_mm must be positive when using member depth as end-zone length.")
+        return value_mm / 1000.0
+    db_mm = 12.7 if strand_diameter_mm is None else float(strand_diameter_mm)
+    if not math.isfinite(db_mm) or db_mm <= 0.0:
+        raise ValueError("strand_diameter_mm must be positive when using transfer length 60db.")
+    return 60.0 * db_mm / 1000.0
+
+
+def aci_transfer_tension_limit_trace(
+    *,
+    span_length_m: float,
+    fci_MPa: float,
+    end_zone_length_m: float,
+    use_end_zone_limit: bool = True,
+) -> AciTransferEndZoneTensionLimitTrace:
+    """Return the ACI transfer-stage piecewise tension limit line.
+
+    Interior/general span limit = 0.25√f'ci.  End-zone limit for simply
+    supported member ends = 0.50√f'ci when the ACI R24.5.3 condition is
+    verified by the engineer.  Units are MPa and metres.
+    """
+
+    _require_positive("span_length_m", span_length_m)
+    _require_positive("fci_MPa", fci_MPa)
+    interior = 0.25 * math.sqrt(float(fci_MPa))
+    end_zone = 0.50 * math.sqrt(float(fci_MPa))
+    length = max(0.0, float(end_zone_length_m))
+    length = min(length, float(span_length_m) / 2.0)
+    if (not use_end_zone_limit) or length <= 1.0e-9:
+        return AciTransferEndZoneTensionLimitTrace(
+            x_m=(0.0, float(span_length_m)),
+            y_MPa=(interior, interior),
+            end_zone_length_m=0.0,
+            interior_limit_MPa=interior,
+            end_zone_limit_MPa=end_zone if use_end_zone_limit else interior,
+            formula_note="ACI transfer general span: ft = 0.25√f'ci.",
+        )
+    left = length
+    right = float(span_length_m) - length
+    return AciTransferEndZoneTensionLimitTrace(
+        x_m=(0.0, left, left, right, right, float(span_length_m)),
+        y_MPa=(end_zone, end_zone, interior, interior, end_zone, end_zone),
+        end_zone_length_m=length,
+        interior_limit_MPa=interior,
+        end_zone_limit_MPa=end_zone,
+        formula_note="ACI transfer end zone: ft = 0.50√f'ci at ends; interior: ft = 0.25√f'ci.",
     )
 
 

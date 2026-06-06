@@ -35,15 +35,15 @@ def validate_girder_code_limits() -> list[ValidationResult]:
             actual=aashto_service.compression_limit_MPa(fc),
             abs_tolerance=1.0e-9,
             units="MPa",
-            engineering_note="Preview profile value is centralized and editable; verify project-specific code clause before final design.",
+            engineering_note="ACI transfer general/interior profile uses 0.25√f'ci; end-zone higher limit is a separate verified profile.",
         )
     )
     results.append(
         numeric_validation_result(
             case_id="CODE.SLS.LIMIT1.ACI.TRANSFER.TENSION",
             category=CATEGORY,
-            title="ACI transfer tension preview limit with cap",
-            expected=1.38,
+            title="ACI transfer general/interior tension preview limit",
+            expected=0.25 * math.sqrt(fc),
             actual=aci_transfer.tension_allowable_MPa(fc),
             abs_tolerance=1.0e-9,
             units="MPa",

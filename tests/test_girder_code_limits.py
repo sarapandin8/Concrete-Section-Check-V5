@@ -32,7 +32,7 @@ def test_default_aci_transfer_profile_is_distinct_stage_profile() -> None:
 
     assert profile.compression_limit_ratio == pytest.approx(0.60)
     assert profile.tension_sqrt_fc_ratio == pytest.approx(0.25)
-    assert profile.tension_allowable_MPa(45.0) == pytest.approx(1.38)
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.25 * math.sqrt(45.0))
 
 
 def test_girder_code_limit_check_respects_compression_negative_tension_positive() -> None:
@@ -153,6 +153,47 @@ def test_transfer_tension_cap_is_visible_in_formula_summary() -> None:
     assert "min(" in formula.tension_formula
     assert "1.380" in formula.tension_substitution
 
+
+
+def test_aci_transfer_end_zone_profile_and_trace_uses_050_root_fci_at_ends() -> None:
+    from concrete_pmm_pro.serviceability import aci_transfer_end_zone_length_m, aci_transfer_tension_limit_trace
+
+    profile = default_girder_sls_limit_profile(
+        "ACI 318",
+        "Transfer / Release",
+        limit_profile_key="aci_transfer_end_zone_verified",
+    )
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.25 * math.sqrt(45.0))
+    length = aci_transfer_end_zone_length_m(strand_diameter_mm=12.7, basis="Transfer length 60db")
+    trace = aci_transfer_tension_limit_trace(span_length_m=20.0, fci_MPa=45.0, end_zone_length_m=length)
+
+    assert length == pytest.approx(0.762)
+    assert trace.interior_limit_MPa == pytest.approx(0.25 * math.sqrt(45.0))
+    assert trace.end_zone_limit_MPa == pytest.approx(0.50 * math.sqrt(45.0))
+    assert trace.y_MPa[0] == pytest.approx(trace.end_zone_limit_MPa)
+    assert trace.y_MPa[2] == pytest.approx(trace.interior_limit_MPa)
+
+
+def test_tension_limit_guidance_selects_aci_transfer_end_zone_only_when_verified() -> None:
+    from concrete_pmm_pro.serviceability import recommend_girder_tension_limit_profile
+
+    verified = recommend_girder_tension_limit_profile(
+        code="ACI 318",
+        stage="Transfer / Release",
+        bonded_tension_reinforcement_verified=True,
+    )
+    unverified = recommend_girder_tension_limit_profile(
+        code="ACI 318",
+        stage="Transfer / Release",
+        bonded_tension_reinforcement_verified=None,
+    )
+
+    assert verified.recommended_profile_key == "aci_transfer_end_zone_verified"
+    assert verified.status == "OK"
+    assert unverified.recommended_profile_key == "aci_transfer_basic"
+    assert unverified.status == "REVIEW"
+
+
 def test_girder_code_limit_validation_suite_passes() -> None:
     results = validate_girder_code_limits()
 
@@ -168,7 +209,7 @@ def test_limit_formula_summary_shows_code_stage_formula_text() -> None:
     assert "f'ci" in formula.compression_formula
     assert "27.000 MPa" in formula.compression_substitution
     assert "0.250" in formula.tension_formula
-    assert "1.380 MPa" in formula.tension_substitution
+    assert "1.677 MPa" in formula.tension_substitution
     assert formula.profile_note.startswith("ACI 318")
 
 
@@ -264,3 +305,18 @@ def test_tension_limit_guidance_selects_aci_class_t_but_requires_review_when_not
     assert guidance.recommended_profile_key == "aci_service_class_t_upper"
     assert guidance.status == "REVIEW"
     assert any("Class T" in warning for warning in guidance.warnings)
+
+
+def test_aci_construction_cip_pour_uses_modulus_of_rupture_tension_limit() -> None:
+    profile = default_girder_sls_limit_profile("ACI 318", "Deck casting / Pre-composite")
+    formula = girder_sls_limit_formula_summary(profile=profile, fc_MPa=45.0)
+
+    assert profile.limit_profile_key == "aci_deck_precomp_cip_pour_fr"
+    assert profile.compression_limit_ratio == pytest.approx(0.60)
+    assert profile.tension_sqrt_fc_ratio == pytest.approx(0.62)
+    assert profile.tension_limit_cap_MPa is None
+    assert profile.compression_limit_MPa(45.0) == pytest.approx(27.0)
+    assert profile.tension_allowable_MPa(45.0) == pytest.approx(0.62 * math.sqrt(45.0))
+    assert "0.620" in formula.tension_formula
+    assert "4.159 MPa" in formula.tension_substitution
+    assert "CIP pour" in profile.limit_profile_label

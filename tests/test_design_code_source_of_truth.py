@@ -81,7 +81,7 @@ def test_code_setup1_source_files_have_project_code_guardrails() -> None:
     assert "AASHTO LRFD PMM is planned" in ANALYSIS_SOURCE
     assert "Prestress loss code basis" in PRESTRESS_SOURCE
     assert "Prestress loss basis differs from Project Design Code" in PRESTRESS_SOURCE
-    assert "ACI 318 / PCI-style prestress loss formulas are planned" in PRESTRESS_SOURCE
+    assert "ACI 318 / PCI-style approximate loss basis selected" in PRESTRESS_SOURCE
 
 
 def test_workflow_type2_filters_project_design_code_by_workflow() -> None:

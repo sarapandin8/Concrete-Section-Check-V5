@@ -9,6 +9,7 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     GirderLossStrandGroupInput,
     RefinedAashtoCoefficientInput,
     calculate_aashto_approximate_long_term_loss_MPa,
+    calculate_aci_pci_approximate_prestress_loss,
     calculate_approximate_prestress_loss,
     calculate_elastic_shortening_iterative,
     estimate_kdf,
@@ -16,6 +17,7 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     estimate_refined_aashto_coefficients,
     estimate_volume_surface_ratio_mm,
     loss_result_dataframe_to_force_state_table,
+    pci_relaxation_c_factor,
     relaxation_loss_MPa,
 )
 
@@ -84,6 +86,74 @@ def test_aashto_approximate_long_term_loss_uses_humidity_strength_and_relaxation
     assert round(fpR, 3) == round(relaxation_loss_MPa("Low relaxation"), 3)
     assert loss_stress_relieved > loss_low
 
+
+
+def test_pci_relaxation_c_factor_interpolates_and_clamps() -> None:
+    assert pci_relaxation_c_factor(0.67) == pci_relaxation_c_factor(0.68)
+    assert pci_relaxation_c_factor(0.81) == pci_relaxation_c_factor(0.80)
+    mid = pci_relaxation_c_factor(0.75)
+    assert 1.11 < mid < 1.16
+
+
+def test_aci_pci_approximate_loss_separates_es_cr_sh_re_from_aashto() -> None:
+    base = _loss_input()
+    aci_input = GirderApproximateLossInput(
+        groups=base.groups,
+        section_area_mm2=base.section_area_mm2,
+        section_Ix_mm4=base.section_Ix_mm4,
+        centroid_y_from_bottom_mm=base.centroid_y_from_bottom_mm,
+        fci_MPa=base.fci_MPa,
+        fc_MPa=base.fc_MPa,
+        Eci_MPa=base.Eci_MPa,
+        humidity_percent=75.0,
+        relaxation_class="Low relaxation",
+        volume_surface_ratio_mm=3.5 * 25.4,
+        kcir=0.90,
+        kcr=2.0,
+        ksh=1.0,
+        self_weight_moment_kNm=250.0,
+    )
+    result = calculate_aci_pci_approximate_prestress_loss(aci_input)
+    df = result.result_dataframe().set_index("Group ID")
+    assert result.status in {"OK", "REVIEW"}
+    assert any("ACI/PCI-style approximate" in message for message in result.messages)
+    assert df.loc["Row 1", "ES loss MPa"] > 0.0
+    assert df.loc["Row 1", "LT loss MPa"] > 0.0
+    assert df.loc["Row 1", "Pe_transfer/strand_kN"] < df.loc["Row 1", "Pjack/strand_kN"]
+    assert df.loc["Row 1", "Pe_eff_final/strand_kN"] < df.loc["Row 1", "Pe_transfer/strand_kN"]
+    assert "CR=" in str(df.loc["Row 1", "Engineering note"])
+    assert "SH=" in str(df.loc["Row 1", "Engineering note"])
+    assert "RE=" in str(df.loc["Row 1", "Engineering note"])
+
+
+def test_aci_pci_shrinkage_loss_reduces_at_higher_relative_humidity() -> None:
+    low_rh = calculate_aci_pci_approximate_prestress_loss(
+        GirderApproximateLossInput(
+            groups=_loss_input().groups,
+            section_area_mm2=_loss_input().section_area_mm2,
+            section_Ix_mm4=_loss_input().section_Ix_mm4,
+            centroid_y_from_bottom_mm=_loss_input().centroid_y_from_bottom_mm,
+            fci_MPa=_loss_input().fci_MPa,
+            fc_MPa=_loss_input().fc_MPa,
+            Eci_MPa=_loss_input().Eci_MPa,
+            humidity_percent=50.0,
+            volume_surface_ratio_mm=3.5 * 25.4,
+        )
+    ).result_dataframe()
+    high_rh = calculate_aci_pci_approximate_prestress_loss(
+        GirderApproximateLossInput(
+            groups=_loss_input().groups,
+            section_area_mm2=_loss_input().section_area_mm2,
+            section_Ix_mm4=_loss_input().section_Ix_mm4,
+            centroid_y_from_bottom_mm=_loss_input().centroid_y_from_bottom_mm,
+            fci_MPa=_loss_input().fci_MPa,
+            fc_MPa=_loss_input().fc_MPa,
+            Eci_MPa=_loss_input().Eci_MPa,
+            humidity_percent=85.0,
+            volume_surface_ratio_mm=3.5 * 25.4,
+        )
+    ).result_dataframe()
+    assert high_rh.loc[0, "Total loss MPa"] < low_rh.loc[0, "Total loss MPa"]
 
 def test_approximate_loss_maps_to_stage_pe_and_preserves_order() -> None:
     result = calculate_approximate_prestress_loss(_loss_input())

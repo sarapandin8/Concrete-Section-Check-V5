@@ -48,11 +48,18 @@ from concrete_pmm_pro.serviceability.girder_prestress_losses import (
     LOSS_INPUT_AUDIT_COLUMNS,
     RefinedAashtoCoefficientInput,
     RefinedAashtoManualCoefficientInput,
+    calculate_aci_pci_approximate_prestress_loss,
     calculate_approximate_prestress_loss,
     calculate_refined_aashto_time_dependent_loss,
     estimate_refined_aashto_coefficients,
     estimate_volume_surface_ratio_mm,
     loss_result_dataframe_to_force_state_table,
+)
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    girder_self_weight_kN_m,
+    simple_span_udl_moment_kNm,
+    system_settings_from_mapping,
 )
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
     debonded_strand_count_for_row,
@@ -1626,10 +1633,11 @@ def _effective_girder_loss_code_basis(settings: dict[str, Any]) -> str:
 def _render_girder_loss_code_basis_selector(settings: dict[str, Any], *, method: str) -> tuple[dict[str, Any], str, bool]:
     """Render the local prestress-loss code-basis selector.
 
-    CODE.SETUP1 permits a loss-basis override while keeping the project design
-    code as the default.  Only the existing AASHTO-style loss calculators are
-    active in this milestone; ACI/PCI and manual/project-specific choices are
-    status guards, not new formulas.
+    The loss-basis selector is deliberately controlled by calculation basis,
+    not by workflow alone.  ACI/PCI-style approximate loss can be used for
+    Building projects by default and as a Bridge cross-check when explicitly
+    selected; refined time-dependent loss remains AASHTO-only in the current
+    implementation.
     """
 
     project_code = project_design_code_from_session(st.session_state)
@@ -1645,20 +1653,26 @@ def _render_girder_loss_code_basis_selector(settings: dict[str, Any], *, method:
     )
     settings["loss_code_basis"] = str(selected)
     effective_basis = _effective_girder_loss_code_basis(settings)
-    differs = effective_basis not in {project_code, GIRDER_LOSS_BASIS_MANUAL}
     if selected != GIRDER_LOSS_BASIS_USE_PROJECT and effective_basis != project_code:
         st.warning("Prestress loss basis differs from Project Design Code — Engineering review required.")
+    approximate_mode = method == "Approximate code-based loss"
     if effective_basis == PROJECT_CODE_AASHTO_LRFD:
         st.info("AASHTO LRFD loss basis selected. Existing approximate/refined loss calculators remain engineering-preview workflows, not final code-certified loss design.")
         return settings, effective_basis, True
     if effective_basis == PROJECT_CODE_ACI318:
+        if approximate_mode:
+            st.info(
+                "ACI 318 / PCI-style approximate loss basis selected. The app will use a separate PCI-style ES + CR + SH + RE preview; "
+                "it is not the AASHTO approximate formula renamed as ACI."
+            )
+            return settings, effective_basis, True
         st.warning(
-            "ACI 318 / PCI-style prestress loss formulas are planned but not implemented in this milestone. "
-            "Use Manual stage Pe or Percentage loss for ACI-governed projects until the ACI/PCI loss solver is added."
+            "Refined time-dependent loss is currently AASHTO-only. Use Approximate code-based loss for ACI/PCI-style estimates, "
+            "or enter reviewed force states manually."
         )
         return settings, effective_basis, False
     st.warning(
-        "Manual / project-specific loss basis selected. Enter reviewed force states manually; the AASHTO calculate-and-use buttons are disabled for this basis."
+        "Manual / project-specific loss basis selected. Enter reviewed force states manually; calculate-and-use buttons are disabled for this basis."
     )
     return settings, effective_basis, False
 
@@ -2069,6 +2083,17 @@ def _girder_code_loss_input_audit_dataframe(
     return pd.DataFrame(rows, columns=LOSS_INPUT_AUDIT_COLUMNS)
 
 
+def _self_weight_midspan_moment_for_loss_kNm(geometry: SectionGeometry | None, section_area_mm2: float) -> float:
+    """Return simple-span self-weight midspan moment for loss fcir relief."""
+
+    try:
+        system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+        w_self = girder_self_weight_kN_m(float(section_area_mm2), system.concrete_unit_weight_kN_m3)
+        return simple_span_udl_moment_kNm(w_self, system.span_length_m / 2.0, system.span_length_m)
+    except Exception:
+        return 0.0
+
+
 def _build_girder_approximate_loss_input(
     *,
     geometry: SectionGeometry | None,
@@ -2078,6 +2103,11 @@ def _build_girder_approximate_loss_input(
     humidity_percent: float,
     relaxation_class: str,
     fpj_ratio: float | None = None,
+    volume_surface_ratio_mm: float | None = None,
+    kcir: float | None = None,
+    kcr: float | None = None,
+    ksh: float | None = None,
+    fcds_MPa: float | None = None,
 ) -> GirderApproximateLossInput | None:
     if geometry is None:
         return None
@@ -2097,6 +2127,12 @@ def _build_girder_approximate_loss_input(
     ))
     if not groups:
         return None
+    if volume_surface_ratio_mm is None or float(volume_surface_ratio_mm) <= 0.0:
+        try:
+            perimeter = _section_exposed_outer_perimeter_mm(geometry)
+            volume_surface_ratio_mm = estimate_volume_surface_ratio_mm(float(props.area_mm2), perimeter)
+        except Exception:
+            volume_surface_ratio_mm = 88.9
     return GirderApproximateLossInput(
         groups=groups,
         section_area_mm2=float(props.area_mm2),
@@ -2107,6 +2143,12 @@ def _build_girder_approximate_loss_input(
         Eci_MPa=Eci,
         humidity_percent=float(humidity_percent),
         relaxation_class=str(relaxation_class),
+        volume_surface_ratio_mm=float(volume_surface_ratio_mm or 88.9),
+        kcir=float(kcir if kcir is not None else 0.90),
+        kcr=float(kcr if kcr is not None else 2.0),
+        ksh=float(ksh if ksh is not None else 1.0),
+        fcds_MPa=float(fcds_MPa if fcds_MPa is not None else 0.0),
+        self_weight_moment_kNm=_self_weight_midspan_moment_for_loss_kNm(geometry, float(props.area_mm2)),
     )
 
 
@@ -2459,6 +2501,40 @@ def _render_girder_code_based_loss_estimate(
                 key="girder_code_loss_relaxation_class",
             )
         settings.update({"fci_MPa": float(fci), "fpj_ratio": float(fpj_ratio), "humidity_percent": float(humidity), "relaxation_class": str(relaxation)})
+        if effective_loss_basis == PROJECT_CODE_ACI318:
+            aci_cols = st.columns(4)
+            auto_vs_mm = 88.9
+            try:
+                props_preview = compute_gross_section_properties(geometry) if geometry is not None else None
+                if props_preview is not None:
+                    auto_vs_mm = estimate_volume_surface_ratio_mm(float(props_preview.area_mm2), _section_exposed_outer_perimeter_mm(geometry))
+            except Exception:
+                auto_vs_mm = 88.9
+            with aci_cols[0]:
+                vs_in = st.number_input(
+                    "🟨 V/S for PCI shrinkage (in.)",
+                    min_value=0.1,
+                    step=0.1,
+                    value=float(settings.get("aci_pci_vs_in", auto_vs_mm / 25.4)),
+                    format="%.2f",
+                    key="girder_aci_pci_vs_in",
+                    help=f"Auto-estimated gross-section V/S is about {auto_vs_mm / 25.4:.2f} in. Review void/exposed perimeter assumptions before final use.",
+                )
+            with aci_cols[1]:
+                kcir = st.number_input("Kcir", min_value=0.0, max_value=1.5, step=0.05, value=float(settings.get("aci_pci_kcir", 0.90)), format="%.2f", key="girder_aci_pci_kcir")
+            with aci_cols[2]:
+                kcr = st.number_input("Kcr", min_value=0.0, max_value=4.0, step=0.10, value=float(settings.get("aci_pci_kcr", 2.00)), format="%.2f", key="girder_aci_pci_kcr")
+            with aci_cols[3]:
+                ksh = st.number_input("Ksh", min_value=0.0, max_value=2.0, step=0.05, value=float(settings.get("aci_pci_ksh", 1.00)), format="%.2f", key="girder_aci_pci_ksh")
+            settings.update({
+                "aci_pci_vs_in": float(vs_in),
+                "aci_pci_volume_surface_ratio_mm": float(vs_in) * 25.4,
+                "aci_pci_kcir": float(kcir),
+                "aci_pci_kcr": float(kcr),
+                "aci_pci_ksh": float(ksh),
+                "aci_pci_fcds_MPa": float(settings.get("aci_pci_fcds_MPa", 0.0) or 0.0),
+            })
+            st.caption("ACI/PCI-style approximate loss uses ES + CR + SH + RE. Self-weight relief in fcir uses the Beam/Girder span and concrete unit weight from Setup where available.")
         st.session_state["girder_prestress_code_loss_settings"] = settings
 
     audit = _girder_code_loss_input_audit_dataframe(
@@ -2497,6 +2573,7 @@ def _render_girder_code_based_loss_estimate(
                 st.session_state["girder_prestress_code_loss_summary_table"] = result.summary_dataframe()
                 st.session_state["girder_prestress_refined_loss_interval_table"] = result.interval_dataframe()
                 st.session_state["girder_prestress_code_loss_messages"] = list(result.messages)
+                st.session_state["girder_prestress_code_loss_result_basis"] = "AASHTO LRFD refined"
                 mapped = loss_result_dataframe_to_force_state_table(result_df_to_apply, force_table)
                 normalized = _normalize_girder_loss_force_state_table(mapped, strand_table, mode="Manual stage Pe")
                 st.session_state["girder_prestress_loss_force_state_table"] = normalized
@@ -2519,6 +2596,11 @@ def _render_girder_code_based_loss_estimate(
             humidity_percent=float(settings.get("humidity_percent", 70.0)),
             relaxation_class=str(settings.get("relaxation_class", "Low relaxation")),
             fpj_ratio=float(settings.get("fpj_ratio", DEFAULT_CODE_LOSS_FPJ_RATIO) or DEFAULT_CODE_LOSS_FPJ_RATIO),
+            volume_surface_ratio_mm=float(settings.get("aci_pci_volume_surface_ratio_mm", 0.0) or 0.0),
+            kcir=float(settings.get("aci_pci_kcir", 0.90) or 0.90),
+            kcr=float(settings.get("aci_pci_kcr", 2.0) or 2.0),
+            ksh=float(settings.get("aci_pci_ksh", 1.0) or 1.0),
+            fcds_MPa=float(settings.get("aci_pci_fcds_MPa", 0.0) or 0.0),
         )
         calc_clicked = st.button(
             "Calculate and use approximate losses",
@@ -2531,12 +2613,18 @@ def _render_girder_code_based_loss_estimate(
             if loss_input is None:
                 st.error("Approximate loss estimate requires section geometry, gross properties, active strand rows, and Pjack values.")
             else:
-                result = calculate_approximate_prestress_loss(loss_input)
+                if effective_loss_basis == PROJECT_CODE_ACI318:
+                    result = calculate_aci_pci_approximate_prestress_loss(loss_input)
+                    result_basis_label = "ACI 318 / PCI-style approximate"
+                else:
+                    result = calculate_approximate_prestress_loss(loss_input)
+                    result_basis_label = "AASHTO LRFD approximate"
                 result_df_to_apply = result.result_dataframe()
                 st.session_state["girder_prestress_code_loss_result_table"] = result_df_to_apply
                 st.session_state["girder_prestress_code_loss_summary_table"] = result.summary_dataframe()
                 st.session_state["girder_prestress_refined_loss_interval_table"] = pd.DataFrame()
                 st.session_state["girder_prestress_code_loss_messages"] = list(result.messages)
+                st.session_state["girder_prestress_code_loss_result_basis"] = result_basis_label
                 mapped = loss_result_dataframe_to_force_state_table(result_df_to_apply, force_table)
                 normalized = _normalize_girder_loss_force_state_table(mapped, strand_table, mode="Manual stage Pe")
                 st.session_state["girder_prestress_loss_force_state_table"] = normalized
@@ -2544,7 +2632,7 @@ def _render_girder_code_based_loss_estimate(
                 st.session_state["girder_strand_layout_table"] = updated_strands
                 st.session_state["girder_prestress_code_loss_apply_status"] = "Applied"
                 st.session_state["girder_prestress_loss_force_state_apply_status"] = "Applied"
-                st.session_state["girder_prestress_active_pe_source"] = "Approximate code-based loss"
+                st.session_state["girder_prestress_active_pe_source"] = result_basis_label
                 st.session_state.pop("girder_strand_layout_editor", None)
                 st.session_state.pop("girder_prestress_loss_force_state_editor", None)
                 st.success("Approximate losses calculated and set as the active Pe source for Force States, strand table, and Effective Prestress Preview.")
@@ -2553,8 +2641,19 @@ def _render_girder_code_based_loss_estimate(
                     rerun()
 
     result_table = st.session_state.get("girder_prestress_code_loss_result_table")
+    expected_result_basis = (
+        "AASHTO LRFD refined"
+        if refined_mode
+        else ("ACI 318 / PCI-style approximate" if effective_loss_basis == PROJECT_CODE_ACI318 else "AASHTO LRFD approximate")
+    )
+    stored_result_basis = st.session_state.get("girder_prestress_code_loss_result_basis")
     if result_table is None or pd.DataFrame(result_table).empty:
         st.info("Calculate and use a loss estimate to populate the active Pe_transfer, Pe_construction, and Pe_final values.")
+        return
+    if stored_result_basis and stored_result_basis != expected_result_basis:
+        st.info(
+            f"Existing loss result was calculated with {stored_result_basis}. Recalculate to use {expected_result_basis}; stale results are hidden to avoid mixing loss bases."
+        )
         return
     result_df = pd.DataFrame(result_table)
     st.dataframe(_loss_display_dataframe(result_df), use_container_width=True, hide_index=True)
@@ -2578,13 +2677,22 @@ def _render_girder_code_based_loss_estimate(
                 "- This is an engineering preview requiring review, not final clause-certified loss design."
             )
         else:
-            st.markdown(
-                "- Pretensioned girder approximation only: ES + long-term loss.\n"
-                "- Elastic shortening is iterated using post-ES prestress and gross-section properties.\n"
-                "- Approximate long-term loss is evaluated with AASHTO-style humidity, strength, Aps/Ag, and relaxation terms.\n"
-                "- Construction Pe is set equal to transfer Pe in LOSS2A; interval splitting is reserved for refined AASHTO LOSS3A.\n"
-                "- This is an engineering estimate requiring review, not final code-certified loss design."
-            )
+            if expected_result_basis == "ACI 318 / PCI-style approximate":
+                st.markdown(
+                    "- ACI/PCI-style pretensioned girder approximation: ES + CR + SH + RE.\n"
+                    "- Elastic shortening uses PCI Kcir shortcut with gross-section properties and self-weight relief where span/system data are available.\n"
+                    "- Creep uses Kcr × Eps/Ec × (fcir − fcds); current fcds default is 0.00 MPa unless project-specific review is added.\n"
+                    "- Shrinkage uses PCI-style V/S and RH term; relaxation uses PCI Kre/J/C-factor table interpolation.\n"
+                    "- This is an engineering estimate requiring review, not final code-certified loss design."
+                )
+            else:
+                st.markdown(
+                    "- Pretensioned girder approximation only: ES + long-term loss.\n"
+                    "- Elastic shortening is iterated using post-ES prestress and gross-section properties.\n"
+                    "- Approximate long-term loss is evaluated with AASHTO-style humidity, strength, Aps/Ag, and relaxation terms.\n"
+                    "- Construction Pe is set equal to transfer Pe in LOSS2A; interval splitting is reserved for refined AASHTO LOSS3A.\n"
+                    "- This is an engineering estimate requiring review, not final code-certified loss design."
+                )
 
 def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geometry: SectionGeometry | None = None) -> None:
     st.markdown("#### Prestress Force States / Losses")
@@ -2649,10 +2757,16 @@ def _render_girder_force_states_losses_workspace(strand_table: pd.DataFrame, geo
                 "Automatic coefficient prediction and load-derived deck stress effects are future milestones."
             )
         else:
-            st.warning(
-                "LOSS2A approximate code-based loss results are engineering-preview values. AASHTO calculation is available now; ACI/PCI loss calculation is planned. "
-                "The Calculate-and-use action is the single source of truth for this mode."
-            )
+            if effective_loss_basis == PROJECT_CODE_ACI318:
+                st.warning(
+                    "ACI/PCI-style approximate loss results are engineering-preview values for pretensioned girders. "
+                    "They may be used for Building default workflow or Bridge cross-check when intentionally selected; final project criteria still require engineering review."
+                )
+            else:
+                st.warning(
+                    "AASHTO approximate code-based loss results are engineering-preview values. "
+                    "The Calculate-and-use action is the single source of truth for this mode."
+                )
         return
 
     pe_disabled = mode == "Percentage loss"

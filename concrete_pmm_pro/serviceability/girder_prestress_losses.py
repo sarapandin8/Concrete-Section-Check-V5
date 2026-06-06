@@ -14,6 +14,11 @@ from typing import Any, Iterable
 import pandas as pd
 
 MPA_PER_KSI = 6.894757293168361
+PSI_PER_MPA = 1000.0 / MPA_PER_KSI
+MM_PER_INCH = 25.4
+
+LOSS_BASIS_AASHTO_APPROXIMATE = "AASHTO LRFD approximate"
+LOSS_BASIS_ACI_PCI_APPROXIMATE = "ACI 318 / PCI-style approximate"
 
 LOSS_RESULT_COLUMNS = [
     "Group ID",
@@ -80,6 +85,13 @@ class GirderApproximateLossInput:
     relaxation_class: str = "Low relaxation"
     es_tolerance_MPa: float = 0.05
     max_iterations: int = 25
+    # Optional ACI/PCI-style approximate parameters. Defaults keep existing AASHTO behavior unchanged.
+    volume_surface_ratio_mm: float = 88.9  # 3.5 in typical PCI starting value for I-girders
+    kcir: float = 0.90
+    kcr: float = 2.0
+    ksh: float = 1.0
+    fcds_MPa: float = 0.0
+    self_weight_moment_kNm: float = 0.0
 
     @property
     def total_aps_mm2(self) -> float:
@@ -179,6 +191,184 @@ def relaxation_loss_MPa(relaxation_class: str) -> float:
     if "stress" in label and "relieved" in label:
         return ksi_to_mpa(10.0)
     return ksi_to_mpa(2.4)
+
+def _mpa_to_psi(value_mpa: float) -> float:
+    return float(value_mpa) * PSI_PER_MPA
+
+
+def _psi_to_mpa(value_psi: float) -> float:
+    return float(value_psi) / PSI_PER_MPA
+
+
+def pci_relaxation_constants(relaxation_class: str) -> tuple[float, float, str]:
+    """Return PCI-style relaxation constants (Kre psi, J, note)."""
+
+    label = str(relaxation_class or "").strip().lower()
+    if "stress" in label and "relieved" in label:
+        return 20_000.0, 0.15, "270-ksi stress-relieved strand PCI table constants"
+    return 5_000.0, 0.04, "270-ksi low-relaxation strand PCI table constants"
+
+
+def pci_relaxation_c_factor(fsi_over_fpu: float) -> float:
+    """Interpolate the PCI C factor for 270-ksi low-relaxation strand.
+
+    The documented table covers fsi/fpu from 0.68 to 0.80.  Values outside
+    the table are clamped because this is an approximate engineering preview,
+    not a final loss-design certificate.
+    """
+
+    table = (
+        (0.68, 0.90),
+        (0.70, 0.98),
+        (0.72, 1.05),
+        (0.74, 1.11),
+        (0.76, 1.16),
+        (0.78, 1.22),
+        (0.80, 1.28),
+    )
+    x = float(fsi_over_fpu)
+    if x <= table[0][0]:
+        return table[0][1]
+    if x >= table[-1][0]:
+        return table[-1][1]
+    for (x0, y0), (x1, y1) in zip(table, table[1:]):
+        if x0 <= x <= x1:
+            t = (x - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0)
+    return table[-1][1]
+
+
+def _pci_shrinkage_loss_MPa(*, Ep_MPa: float, ksh: float, volume_surface_ratio_mm: float, humidity_percent: float) -> float:
+    vs_in = max(float(volume_surface_ratio_mm), 0.0) / MM_PER_INCH
+    rh = min(max(float(humidity_percent), 0.0), 100.0)
+    vs_factor = max(1.0 - 0.06 * vs_in, 0.0)
+    return max(8.2e-6 * max(float(ksh), 0.0) * max(float(Ep_MPa), 0.0) * vs_factor * (100.0 - rh), 0.0)
+
+
+def _pci_relaxation_loss_MPa(
+    *,
+    relaxation_class: str,
+    fpj_MPa: float,
+    fpu_MPa: float,
+    es_loss_MPa: float,
+    creep_loss_MPa: float,
+    shrinkage_loss_MPa: float,
+) -> tuple[float, float, float, str]:
+    fsi_over_fpu = 0.0 if float(fpu_MPa) <= 1.0e-9 else max(float(fpj_MPa), 0.0) / float(fpu_MPa)
+    c_factor = pci_relaxation_c_factor(fsi_over_fpu)
+    kre_psi, j_factor, note = pci_relaxation_constants(relaxation_class)
+    prior_losses_psi = _mpa_to_psi(max(float(es_loss_MPa), 0.0) + max(float(creep_loss_MPa), 0.0) + max(float(shrinkage_loss_MPa), 0.0))
+    relaxation_psi = max((kre_psi - j_factor * prior_losses_psi) * c_factor, 0.0)
+    return _psi_to_mpa(relaxation_psi), c_factor, j_factor, note
+
+
+def calculate_aci_pci_approximate_prestress_loss(input_data: GirderApproximateLossInput) -> GirderApproximateLossResult:
+    """Calculate an ACI 318 project / PCI-style approximate pretensioned loss estimate.
+
+    This is intentionally separate from the existing AASHTO approximate helper.
+    It implements the PCI-style component workflow documented for ACI-governed
+    precast pretensioned members: ES + CR + SH + RE.  Compression is positive
+    internally for loss calculations; returned Pe values keep the existing app
+    convention of positive prestress force magnitude per strand.
+    """
+
+    messages: list[str] = [
+        "ACI/PCI-style approximate loss preview: ACI 318 requires losses to be considered but does not prescribe these equations directly; review against project PCI/ACI criteria.",
+    ]
+    if not input_data.groups:
+        return GirderApproximateLossResult((), 0, 0.0, 0.0, 0.0, "MISSING", ("No active strand groups are available.",))
+    if input_data.section_area_mm2 <= 0.0:
+        raise ValueError("Section area must be positive for ACI/PCI approximate loss.")
+    if input_data.section_Ix_mm4 <= 0.0:
+        raise ValueError("Section Ix must be positive for ACI/PCI approximate loss.")
+    if input_data.Eci_MPa <= 0.0:
+        raise ValueError("Eci must be positive for ACI/PCI approximate loss.")
+    Ec_MPa = 4700.0 * max(float(input_data.fc_MPa), 1.0) ** 0.5
+    if not (40.0 <= float(input_data.humidity_percent) <= 100.0):
+        messages.append("Relative humidity is outside the 40%–100% advisory range.")
+    if input_data.volume_surface_ratio_mm <= 0.0:
+        messages.append("V/S is non-positive; PCI shrinkage loss uses zero V/S correction.")
+    if input_data.self_weight_moment_kNm <= 0.0:
+        messages.append("Self-weight moment Mg is zero/not available; PCI fcir does not include self-weight relief.")
+
+    groups = tuple(group for group in input_data.groups if group.no_strands > 0 and group.area_per_strand_mm2 > 0.0)
+    total_force_N = sum(group.total_aps_mm2 * group.fpj_MPa for group in groups)
+    total_prestress_moment_Nmm = sum(
+        group.total_aps_mm2 * group.fpj_MPa * (group.y_mm_from_bottom - input_data.centroid_y_from_bottom_mm)
+        for group in groups
+    )
+    Mg_Nmm = max(float(input_data.self_weight_moment_kNm), 0.0) * 1_000_000.0
+
+    group_results: list[GirderApproximateLossGroupResult] = []
+    max_re = 0.0
+    for group in groups:
+        fpj = group.fpj_MPa
+        dy = float(group.y_mm_from_bottom - input_data.centroid_y_from_bottom_mm)
+        prestress_compression = total_force_N / input_data.section_area_mm2 + total_prestress_moment_Nmm * dy / input_data.section_Ix_mm4
+        prestress_compression = max(float(prestress_compression), 0.0)
+        self_weight_relief = Mg_Nmm * abs(dy) / input_data.section_Ix_mm4
+        fcir = max(max(float(input_data.kcir), 0.0) * prestress_compression - self_weight_relief, 0.0)
+        es = max(group.Ep_MPa, 0.0) / input_data.Eci_MPa * fcir
+        creep = max(float(input_data.kcr), 0.0) * max(group.Ep_MPa, 0.0) / Ec_MPa * max(fcir - max(float(input_data.fcds_MPa), 0.0), 0.0)
+        shrinkage = _pci_shrinkage_loss_MPa(
+            Ep_MPa=group.Ep_MPa,
+            ksh=float(input_data.ksh),
+            volume_surface_ratio_mm=float(input_data.volume_surface_ratio_mm),
+            humidity_percent=float(input_data.humidity_percent),
+        )
+        relaxation, c_factor, j_factor, relaxation_note = _pci_relaxation_loss_MPa(
+            relaxation_class=input_data.relaxation_class,
+            fpj_MPa=fpj,
+            fpu_MPa=group.fpu_MPa,
+            es_loss_MPa=es,
+            creep_loss_MPa=creep,
+            shrinkage_loss_MPa=shrinkage,
+        )
+        max_re = max(max_re, relaxation)
+        transfer_stress = max(fpj - es, 0.0)
+        final_stress = max(fpj - es - creep - shrinkage - relaxation, 0.0)
+        pe_transfer = group.area_per_strand_mm2 * transfer_stress / 1000.0
+        pe_final = group.area_per_strand_mm2 * final_stress / 1000.0
+        total_loss = fpj - final_stress
+        loss_percent = 0.0 if fpj <= 1.0e-9 else total_loss / fpj * 100.0
+        row_messages: list[str] = []
+        if loss_percent < 5.0:
+            row_messages.append("total loss below 5%")
+        if loss_percent > 35.0:
+            row_messages.append("total loss above 35%")
+        fsi_over_fpu = 0.0 if group.fpu_MPa <= 1.0e-9 else fpj / group.fpu_MPa
+        if not (0.68 <= fsi_over_fpu <= 0.80):
+            row_messages.append("fpj/fpu outside PCI C-factor table range; C factor was clamped")
+        status = "OK" if not row_messages else "REVIEW"
+        note = (
+            f"ACI/PCI-style approximate: ES={es:.1f} MPa, CR={creep:.1f} MPa, SH={shrinkage:.1f} MPa, RE={relaxation:.1f} MPa; "
+            f"Kcir={float(input_data.kcir):.2f}, Kcr={float(input_data.kcr):.2f}, Ksh={float(input_data.ksh):.2f}, "
+            f"C={c_factor:.2f}, J={j_factor:.2f}; {relaxation_note}."
+        )
+        if row_messages:
+            note += " REVIEW: " + "; ".join(row_messages)
+        group_results.append(
+            GirderApproximateLossGroupResult(
+                group_id=group.group_id,
+                no_strands=group.no_strands,
+                pjack_per_strand_kN=group.pjack_per_strand_kN,
+                fpj_MPa=fpj,
+                fcgp_MPa=fcir,
+                es_loss_MPa=es,
+                lt_loss_MPa=creep + shrinkage + relaxation,
+                total_loss_MPa=total_loss,
+                pe_transfer_per_strand_kN=pe_transfer,
+                pe_construction_per_strand_kN=pe_transfer,
+                pe_final_per_strand_kN=pe_final,
+                total_loss_percent=loss_percent,
+                status=status,
+                note=note,
+            )
+        )
+    statuses = {row.status for row in group_results}
+    overall = "OK" if statuses == {"OK"} and len(messages) == 1 else "REVIEW"
+    return GirderApproximateLossResult(tuple(group_results), 1, 0.0, 0.0, max_re, overall, tuple(messages))
+
 
 
 def calculate_elastic_shortening_iterative(input_data: GirderApproximateLossInput) -> tuple[dict[str, float], dict[str, float], int]:
@@ -733,6 +923,13 @@ class RefinedAashtoManualCoefficientInput:
     delta_fcdf_MPa: float = 0.0
     es_tolerance_MPa: float = 0.05
     max_iterations: int = 25
+    # Optional ACI/PCI-style approximate parameters. Defaults keep existing AASHTO behavior unchanged.
+    volume_surface_ratio_mm: float = 88.9  # 3.5 in typical PCI starting value for I-girders
+    kcir: float = 0.90
+    kcr: float = 2.0
+    ksh: float = 1.0
+    fcds_MPa: float = 0.0
+    self_weight_moment_kNm: float = 0.0
 
 
 @dataclass(frozen=True)

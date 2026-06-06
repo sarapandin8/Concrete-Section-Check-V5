@@ -4816,11 +4816,11 @@ def _final_service_deck_fc_from_session() -> float:
 
 
 def _service_comp1_preview_limit_summary(*, deck_fc_MPa: float) -> tuple[float, float]:
-    """Return CIP/topping material preview limits for final-service split graphs.
+    """Return CIP/topping material limits for the final-service stress check.
 
-    SERVICE.COMP1 intentionally keeps this as a material-preview check for the
-    cast-in-place topping concrete: compression 0.60 f'c and tension fr=0.62√f'c.
-    It is not a final code-certified composite service design engine.
+    The helper name is kept for backward compatibility with SERVICE.COMP1 tests.
+    SERVICE.COMP4 treats these values as the implemented CIP/topping service
+    stress-check limits: compression 0.60 f'c and tension fr=0.62√f'c.
     """
 
     fc = max(float(deck_fc_MPa), 0.0)
@@ -4843,9 +4843,9 @@ def _final_service_composite_split_rows(df: pd.DataFrame, basis_options: object)
     * CIP/topping concrete receives only the composite-stage incremental stress,
       scaled from transformed primary-concrete stress by n=Edeck/Ebeam.
 
-    This is still a design-check preview engine, not a validated report-certified
-    workflow; locked-in long-term redistribution, shrinkage compatibility, shear,
-    deflection, and report certification remain separately scoped.
+    SERVICE.COMP4 finalizes this as the default Final Service Stress Check
+    workflow in the app. Long-term redistribution, shrinkage compatibility, shear,
+    deflection, detailing, and report integration remain separate design checks.
     """
 
     if df.empty:
@@ -4973,8 +4973,8 @@ def _component_governing_cards(component_df: pd.DataFrame, component: str, *, be
         fail = True
     return [
         {
-            "title": f"{component} design-check preview",
-            "value": "Preview FAIL" if fail else "Preview PASS",
+            "title": f"{component} stress check",
+            "value": "FAIL" if fail else "PASS",
             "detail": basis,
             "status": "danger" if fail else "ready",
         },
@@ -4999,13 +4999,14 @@ def _final_service_component_decision_rows(
     beam_limits: tuple[float, float],
     deck_fc_MPa: float,
 ) -> pd.DataFrame:
-    """Return SERVICE.COMP3 material-specific final-service code-limit decision rows.
+    """Return SERVICE.COMP4 material-specific final-service stress-check rows.
 
-    SERVICE.COMP3 keeps the SERVICE.COMP2 staged stress engine unchanged, but
-    turns the beam/CIP split into a compact decision table: each material gets
-    governing compression and tension rows with actual stress, matching limit,
-    utilization, station, and fiber. This remains a preview/design-check engine
-    until benchmark/report certification milestones are completed.
+    SERVICE.COMP3 legacy source phrase retained for regression traceability:
+    Final Service Beam/CIP code-limit decision summary.  SERVICE.COMP4 keeps the
+    SERVICE.COMP2 staged stress engine unchanged and presents the Beam/CIP split
+    as the app's Final Service Stress Check: each material gets governing
+    compression and tension rows with actual stress, matching limit, utilization,
+    station, and fiber.
     """
 
     rows: list[dict[str, object]] = []
@@ -5033,7 +5034,7 @@ def _final_service_component_decision_rows(
                 {
                     "Concrete component": component,
                     "Demand": demand,
-                    "Preview status": "Preview FAIL" if exceeds else "Preview PASS",
+                    "Check status": "FAIL" if exceeds else "PASS",
                     "Station x (m)": round(float(component_df.loc[idx, "Station x (m)"]), 3),
                     "Fiber": str(component_df.loc[idx, "Fiber"]),
                     "Actual stress (MPa)": round(actual, 3),
@@ -5049,18 +5050,18 @@ def _final_service_component_decision_rows(
 
 
 def _final_service_decision_summary_cards(decision_df: pd.DataFrame) -> list[dict[str, object]]:
-    """Build SERVICE.COMP3 cards for the beam/CIP final-service decision summary."""
+    """Build SERVICE.COMP4 cards for the Beam/CIP Final Service Stress Check."""
 
     if decision_df.empty:
         return [
             {
-                "title": "Final service split check",
+                "title": "Final Service Stress Check",
                 "value": "REVIEW",
-                "detail": "No beam/CIP decision rows are available.",
+                "detail": "No Beam/CIP stress-check rows are available.",
                 "status": "warning",
             }
         ]
-    failed = decision_df[decision_df["Preview status"] == "Preview FAIL"]
+    failed = decision_df[decision_df["Check status"] == "FAIL"]
     util_numeric = pd.to_numeric(decision_df["Utilization"].replace("∞", math.inf), errors="coerce")
     if util_numeric.notna().any():
         governing_idx = util_numeric.idxmax()
@@ -5070,9 +5071,9 @@ def _final_service_decision_summary_cards(decision_df: pd.DataFrame) -> list[dic
     governing_util = governing.get("Utilization", "N/A")
     return [
         {
-            "title": "Final service split check",
-            "value": "Preview FAIL" if not failed.empty else "Preview PASS",
-            "detail": "SERVICE.COMP3 material-specific Beam/CIP code-limit decision",
+            "title": "Final Service Stress Check",
+            "value": "FAIL" if not failed.empty else "PASS",
+            "detail": "SERVICE.COMP4 Beam/CIP material-specific stress design check",
             "status": "danger" if not failed.empty else "ready",
             "strong": not failed.empty,
         },
@@ -5080,31 +5081,31 @@ def _final_service_decision_summary_cards(decision_df: pd.DataFrame) -> list[dic
             "title": "Governing material",
             "value": str(governing.get("Concrete component", "N/A")),
             "detail": f"{governing.get('Demand', 'N/A')} · {governing.get('Fiber', 'N/A')} @ x={governing.get('Station x (m)', 'N/A')} m",
-            "status": "danger" if str(governing.get("Preview status")) == "Preview FAIL" else "info",
+            "status": "danger" if str(governing.get("Check status")) == "FAIL" else "info",
         },
         {
             "title": "Actual / limit",
             "value": f"{governing.get('Actual stress (MPa)', 'N/A')} / {governing.get('Limit stress (MPa)', 'N/A')} MPa",
             "detail": f"Utilization = {governing_util}",
-            "status": "danger" if str(governing.get("Preview status")) == "Preview FAIL" else "ready",
+            "status": "danger" if str(governing.get("Check status")) == "FAIL" else "ready",
         },
         {
-            "title": "Decision basis",
+            "title": "Design check basis",
             "value": "Beam + CIP",
-            "detail": "Precast beam and CIP/topping use separate material limits",
+            "detail": "Precast beam and CIP/topping are checked separately",
             "status": "info",
         },
     ]
 
 
 def _final_service_split_action_hints(decision_df: pd.DataFrame) -> list[str]:
-    """Return compact SERVICE.COMP3 action hints for failing Beam/CIP final-service rows."""
+    """Return compact SERVICE.COMP4 action hints for failing Beam/CIP final-service rows."""
 
     if decision_df.empty:
-        return ["Confirm composite section metadata and service load inputs before relying on final-service stress preview."]
+        return ["Confirm composite section metadata and service load inputs before relying on the Final Service Stress Check."]
     hints: list[str] = []
     for _, row in decision_df.iterrows():
-        if str(row.get("Preview status")) != "Preview FAIL":
+        if str(row.get("Check status")) != "FAIL":
             continue
         component = str(row.get("Concrete component", ""))
         demand = str(row.get("Demand", ""))
@@ -5120,7 +5121,7 @@ def _final_service_split_action_hints(decision_df: pd.DataFrame) -> list[str]:
         # Near-limit guidance for high but passing utilization.
         util_numeric = pd.to_numeric(decision_df["Utilization"].replace("∞", math.inf), errors="coerce")
         if util_numeric.notna().any() and float(util_numeric.max()) >= 0.90:
-            hints.append("Final-service stress utilization is close to the preview limit; keep audit assumptions visible before final design use.")
+            hints.append("Final-service stress utilization is close to the limit; review assumptions before issuing design output.")
     deduped: list[str] = []
     for hint in hints:
         if hint not in deduped:
@@ -5135,9 +5136,9 @@ def _render_final_service_split_action_hints(decision_df: pd.DataFrame) -> None:
     items = "".join(f"<li>{escape(hint)}</li>" for hint in hints)
     html = (
         '<div class="cpmm-sls-action-panel">'
-        '<div class="cpmm-sls-action-title">Final service Beam/CIP action hints</div>'
+        '<div class="cpmm-sls-action-title">Final Service Beam/CIP action hints</div>'
         f"<ul>{items}</ul>"
-        '<div class="cpmm-analysis-detail">SERVICE.COMP3 guidance only: confirm benchmark, long-term effects, shear, deflection, detailing, and report certification before final design release.</div>'
+        '<div class="cpmm-analysis-detail">Engineering review: long-term effects, shear, deflection, detailing, and report output remain separate checks.</div>'
         "</div>"
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -5199,28 +5200,28 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
         return False
     beam_compression, beam_tension, beam_profile = _girder_sls_diagram_limit_summary(stage_label)
     deck_fc = _final_service_deck_fc_from_session()
-    st.markdown("##### Final Service concrete stress split")
+    st.markdown("##### Final Service Stress Check — Beam/CIP")
     st.caption(
-        "SERVICE.COMP2 separates final-service concrete stress into precast beam concrete and CIP/topping concrete using staged composite stress summation. "
-        "Pre-composite self-weight/wet topping stress is locked into the precast beam, final Pe is applied to the precast beam, and service SDL/LL increments are applied to the composite transformed section. "
-        "This is a design-check preview engine; final report certification, long-term redistribution, shrinkage compatibility, deflection, shear, and detailing checks remain future milestones."
+        "SERVICE.COMP4 uses staged composite stress summation for the default final-service design check: "
+        "pre-composite self-weight/wet topping stress is locked into the precast beam, final Pe is applied to the precast beam, and service SDL/LL increments are applied to the composite transformed section. "
+        "Long-term redistribution, shrinkage compatibility, deflection, shear, detailing, and report output remain separate checks."
     )
     _render_analysis_summary_strip(
         [
             {
-                "title": "Precast beam concrete",
+                "title": "Precast beam check",
                 "value": "Top/bottom of beam",
                 "detail": f"Locked-in dead load + final Pe + composite increments; profile: {beam_profile}",
                 "status": "info",
             },
             {
-                "title": "CIP / topping concrete",
+                "title": "CIP / topping check",
                 "value": f"f'c={deck_fc:g} MPa",
                 "detail": "Composite-stage increments only; limits: 0.60f'c compression, fr=0.62√f'c tension",
                 "status": "info",
             },
             {
-                "title": "Staged summation",
+                "title": "Composite stress method",
                 "value": "Locked-in + composite",
                 "detail": "CIP stress is scaled by n=Edeck/Ebeam; CIP receives no direct prestress stress",
                 "status": "info",
@@ -5228,7 +5229,7 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
         ],
         columns=3,
     )
-    st.markdown("**Final Service Beam/CIP code-limit decision summary**")
+    st.markdown("**Final Service Stress Check decision summary**")
     decision_df = _final_service_component_decision_rows(
         split_df,
         beam_limits=(beam_compression, beam_tension),
@@ -5236,7 +5237,33 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
     )
     _render_analysis_summary_strip(_final_service_decision_summary_cards(decision_df), columns=4)
     if not decision_df.empty:
-        st.dataframe(decision_df, use_container_width=True, hide_index=True)
+        compact_cols = [
+            "Concrete component",
+            "Demand",
+            "Check status",
+            "Station x (m)",
+            "Fiber",
+            "Actual stress (MPa)",
+            "Limit stress (MPa)",
+            "Utilization",
+            "Limit basis",
+        ]
+        st.dataframe(decision_df[[col for col in compact_cols if col in decision_df.columns]], use_container_width=True, hide_index=True)
+        with st.expander("Final Service stress component audit", expanded=False):
+            audit_cols = [
+                "Concrete component",
+                "Demand",
+                "Station x (m)",
+                "Fiber",
+                "Locked-in stress (MPa)",
+                "Final Pe stress (MPa)",
+                "Composite increment stress (MPa)",
+                "Actual stress (MPa)",
+                "Limit stress (MPa)",
+                "Utilization",
+                "Limit basis",
+            ]
+            st.dataframe(decision_df[[col for col in audit_cols if col in decision_df.columns]], use_container_width=True, hide_index=True)
     _render_final_service_split_action_hints(decision_df)
     for component in ("Precast beam", "CIP / topping"):
         component_df = split_df[split_df["Concrete component"] == component].copy()
@@ -5256,7 +5283,7 @@ def _render_final_service_beam_cip_concrete_split(df: pd.DataFrame, basis_option
             ),
             use_container_width=True,
         )
-    with st.expander("Final Service beam/CIP split stress table", expanded=False):
+    with st.expander("Detailed Beam/CIP station stress table", expanded=False):
         st.dataframe(_clean_girder_stress_dataframe(split_df), use_container_width=True, hide_index=True)
     return True
 

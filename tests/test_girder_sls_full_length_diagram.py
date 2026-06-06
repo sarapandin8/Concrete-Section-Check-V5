@@ -160,7 +160,7 @@ def test_sls_limit5_2_aci_end_zone_controls_render_once_to_avoid_duplicate_keys(
 
 def test_service_comp1_splits_final_service_beam_and_cip_concrete_stress() -> None:
     assert "SERVICE.COMP1" in SOURCE
-    assert "Final Service concrete stress split" in SOURCE
+    assert "Final Service Stress Check — Beam/CIP" in SOURCE
     assert "Concrete Stress (beam) — Final Service" in SOURCE
     assert "Concrete Stress (CIP) — Final Service" in SOURCE
     assert "_render_final_service_beam_cip_concrete_split" in SOURCE
@@ -176,7 +176,7 @@ def test_service_comp2_adds_staged_composite_final_service_engine() -> None:
     assert "Composite increment stress (MPa)" in SOURCE
     assert "CIP/topping receives composite-stage increments only" in SOURCE
     assert "CIP receives no direct prestress stress" in SOURCE
-    assert "long-term redistribution, shrinkage compatibility, deflection, shear, and detailing checks remain future milestones" in SOURCE
+    assert "Long-term redistribution, shrinkage compatibility, deflection, shear, detailing, and report output remain separate checks" in SOURCE
 
 
 def test_service_comp2_1_hides_service_overview_behind_split_graphs() -> None:
@@ -191,7 +191,17 @@ def test_service_comp3_adds_final_service_beam_cip_code_limit_decision_engine() 
     assert "SERVICE.COMP3" in SOURCE
     assert "Final Service Beam/CIP code-limit decision summary" in SOURCE
     assert "_final_service_component_decision_rows" in SOURCE
-    assert "Precast beam and CIP/topping use separate material limits" in SOURCE
+    assert "Precast beam and CIP/topping are checked separately" in SOURCE
     assert "Actual stress (MPa)" in SOURCE
     assert "Limit stress (MPa)" in SOURCE
-    assert "Final service Beam/CIP action hints" in SOURCE
+    assert "Final Service Beam/CIP action hints" in SOURCE
+
+
+def test_service_comp4_finalizes_service_stress_check_workflow_without_certified_overclaim() -> None:
+    assert "SERVICE.COMP4" in SOURCE
+    assert "Final Service Stress Check — Beam/CIP" in SOURCE
+    assert "Final Service Stress Check decision summary" in SOURCE
+    assert '"Check status": "FAIL" if exceeds else "PASS"' in SOURCE
+    assert "Final Service stress component audit" in SOURCE
+    assert "Long-term redistribution, shrinkage compatibility, deflection, shear, detailing, and report output remain separate checks" in SOURCE
+    assert "code-certified" not in SOURCE[SOURCE.find("def _render_final_service_beam_cip_concrete_split"):SOURCE.find("def _render_girder_full_length_sls_diagram")]

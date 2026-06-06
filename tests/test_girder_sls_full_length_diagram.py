@@ -214,6 +214,15 @@ def test_deflect_sls1_workspace_is_not_rendered_from_generic_serviceability_expa
     assert "_render_girder_deflection_camber_workspace(basis_options=basis_options)" not in serviceability_block
     assert "current = _serviceability_settings_from_session()" in serviceability_block
 
+
+def test_deflect_sls1_2_adds_dedicated_analysis_deflection_tab() -> None:
+    assert "DEFLECT.SLS1.2" in SOURCE
+    assert "SLS Deflection / Camber" in SOURCE
+    assert "render_analysis_sls_deflection_camber" in SOURCE
+    assert "uls_tab, sls_tab, sls_deflection_tab, report_tab" in SOURCE
+    stress_block = SOURCE[SOURCE.find("def render_analysis_sls_stress"):SOURCE.find("def render_analysis_sls_deflection_camber")]
+    assert "_render_girder_deflection_camber_workspace" not in stress_block
+
 def test_deflect_sls1_adds_short_term_deflection_camber_workspace() -> None:
     assert "DEFLECT.SLS1" in SOURCE
     assert "SLS Deflection / Camber" in SOURCE

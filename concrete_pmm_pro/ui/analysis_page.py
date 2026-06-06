@@ -200,7 +200,7 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
     sls_benchmark_summary_to_dataframe,
 )
 
-ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "Report / QA"]
+ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "SLS Deflection / Camber", "Report / QA"]
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
 PMM_3D_LAYER_DEFAULTS = {
     "show_pmm_3d_surface": True,
@@ -7453,11 +7453,10 @@ def _render_beam_girder_service_stress_preview() -> None:
         st.write("- Composite transformed basis uses deck/topping transformed to the primary/precast concrete basis.")
         st.write("- This preview is a manual elastic stress check foundation only; code-limit checks are editable previews and staged checks are future work and remain engineer-controlled.")
 
-    # DEFLECT.SLS1.1 — render deflection/camber only inside the active Beam/Girder
-    # workspace, where the section-basis options are already available.  This
-    # avoids the NameError caused by calling the workspace from the generic
-    # serviceability expander, which has no local basis_options variable.
-    _render_girder_deflection_camber_workspace(basis_options=basis_options)
+    # DEFLECT.SLS1.2 — deflection/camber now lives in its own top-level
+    # Analysis tab so the Stress & Cracking workspace stays focused and clean.
+    # The dedicated tab rebuilds the same Beam/Girder basis_options and calls
+    # _render_girder_deflection_camber_workspace there.
 
 def _render_serviceability_expander() -> None:
     current = _serviceability_settings_from_session()
@@ -8381,6 +8380,32 @@ def render_analysis_sls_stress() -> None:
     _render_sls_verification_expander()
 
 
+def render_analysis_sls_deflection_camber() -> None:
+    st.subheader("SLS Deflection / Camber")
+    _render_project_design_code_guard(workflow="girder_sls")
+    st.info("Deflection convention: positive = upward camber, negative = downward deflection.")
+
+    mode_settings = _analysis_mode_from_session()
+    is_bridge_workflow = is_beam_girder_future_workflow(mode_settings)
+    is_building_workflow = is_building_beam_girder_workflow(mode_settings)
+    if not (is_bridge_workflow or is_building_workflow):
+        st.info("SLS Deflection / Camber is available for Bridge and Building Beam/Girder workflows.")
+        return
+
+    section_geometry = st.session_state.get("section_geometry")
+    section_parameters = st.session_state.get("section_parameters", {})
+    basis_options = build_girder_service_stress_basis_options(
+        section_geometry,
+        section_parameters,
+        member_type=mode_settings.member_type,
+    )
+    for item in basis_options.info:
+        st.info(item)
+    for warning in basis_options.warnings:
+        st.warning(f"Girder deflection preview warning: {warning}")
+    _render_girder_deflection_camber_workspace(basis_options=basis_options)
+
+
 def render_analysis_report_qa() -> None:
     st.subheader("Report / QA")
     st.info("Report and QA tools summarize stored results only; they do not rerun PMM, SLS, or verification solvers.")
@@ -8389,11 +8414,13 @@ def render_analysis_report_qa() -> None:
 
 def render_analysis_page() -> None:
     st.subheader("Analysis")
-    uls_tab, sls_tab, report_tab = st.tabs(ANALYSIS_SUBTABS)
+    uls_tab, sls_tab, sls_deflection_tab, report_tab = st.tabs(ANALYSIS_SUBTABS)
     with uls_tab:
         render_analysis_uls_pmm()
     with sls_tab:
         render_analysis_sls_stress()
+    with sls_deflection_tab:
+        render_analysis_sls_deflection_camber()
     with report_tab:
         render_analysis_report_qa()
     _render_runtime_diagnostics_expander()

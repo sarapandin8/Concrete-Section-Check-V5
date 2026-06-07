@@ -3591,21 +3591,25 @@ def _beam_uls_shear_result_for_row(
     vu_kN = _beam_uls_float(row.get("Vuy"))
     mux_kNm = _beam_uls_float(row.get("Mux"))
     case = str(row.get("Case Name") or "-")
+    diagram_boundary = bool(row.get("__Diagram boundary"))
     notes: list[str] = []
     if not math.isfinite(vu_kN) or abs(vu_kN) <= _BEAM_ULS_DEMAND_TOL:
-        return {
-            "Check": "Shear",
-            "Status": "NO DEMAND",
-            "Governing x": _format_beam_uls_x(x_m),
-            "Case": case,
-            "Demand": "-",
-            "Capacity": "-",
-            "Utilization": "-",
-            "Demand kN": 0.0,
-            "φVn kN": float("nan"),
-            "D/C value": float("nan"),
-            "Notes": "No finite Vuy demand.",
-        }
+        if not diagram_boundary:
+            return {
+                "Check": "Shear",
+                "Status": "NO DEMAND",
+                "Governing x": _format_beam_uls_x(x_m),
+                "Case": case,
+                "Demand": "-",
+                "Capacity": "-",
+                "Utilization": "-",
+                "Demand kN": 0.0,
+                "φVn kN": float("nan"),
+                "D/C value": float("nan"),
+                "Notes": "No finite Vuy demand.",
+            }
+        vu_kN = 0.0
+        notes.append("Diagram boundary capacity value only; not a governing shear design section.")
     zone = _beam_uls_active_shear_zone_for_station(state, x_m)
     if zone is None:
         return {
@@ -3703,8 +3707,10 @@ def _beam_uls_shear_result_for_row(
     vs_n = avs_mm2_per_mm * float(fy) * float(depth_for_vs)
     vn_n = max(0.0, vc_n + vs_n)
     phi_vn_kN = phi * vn_n / 1000.0
-    strength_utilization = abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
-    strength_status = "PASS" if math.isfinite(strength_utilization) and strength_utilization <= 1.0 else "FAIL"
+    strength_utilization = (
+        float("nan") if diagram_boundary else abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
+    )
+    strength_status = "BOUNDARY" if diagram_boundary else ("PASS" if math.isfinite(strength_utilization) and strength_utilization <= 1.0 else "FAIL")
     detailing = _beam_uls_shear_detailing_guard(
         strength_route=strength_route,
         fc_MPa=fc,
@@ -3719,7 +3725,9 @@ def _beam_uls_shear_result_for_row(
     detailing_dc = _beam_uls_float(detailing.get("Detailing D/C value"))
     finite_dcs = [value for value in [strength_utilization, detailing_dc] if math.isfinite(value)]
     governing_dc = max(finite_dcs) if finite_dcs else float("nan")
-    if strength_status == "FAIL" or detailing_status == "FAIL":
+    if diagram_boundary:
+        status = "DIAGRAM BOUNDARY"
+    elif strength_status == "FAIL" or detailing_status == "FAIL":
         status = "FAIL"
     elif detailing_status == "REVIEW":
         status = "REVIEW"
@@ -3727,9 +3735,13 @@ def _beam_uls_shear_result_for_row(
         status = "PASS"
     if detailing.get("Detailing notes"):
         notes.append(str(detailing.get("Detailing notes")))
-    utilization_text = _format_beam_uls_ratio(strength_utilization)
-    if math.isfinite(detailing_dc):
-        utilization_text = f"{utilization_text} / det {_format_beam_uls_ratio(detailing_dc)}"
+    if diagram_boundary:
+        utilization_text = "-"
+        governing_dc = float("nan")
+    else:
+        utilization_text = _format_beam_uls_ratio(strength_utilization)
+        if math.isfinite(detailing_dc):
+            utilization_text = f"{utilization_text} / det {_format_beam_uls_ratio(detailing_dc)}"
     return {
         "Check": "Shear",
         "Status": status,
@@ -3737,7 +3749,7 @@ def _beam_uls_shear_result_for_row(
         "Detailing status": detailing_status,
         "Governing x": _format_beam_uls_x(x_m),
         "Case": case,
-        "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+        "Demand": _format_beam_uls_demand(vu_kN, "kN") if not diagram_boundary else "0.00 kN",
         "Capacity": f"φVn = {phi_vn_kN:,.2f} kN",
         "Utilization": utilization_text,
         "Demand kN": float(vu_kN),
@@ -3806,6 +3818,69 @@ def _beam_uls_shear_check_dataframe(
                 else "-",
             )
         rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _beam_uls_shear_diagram_boundary_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    """Return φVc/φVs/φVn diagram-boundary rows at x=0 and x=L.
+
+    These rows are for plotting capacity continuity only.  They are not added to
+    the governing shear check because shear design normally uses critical
+    sections near supports, not an automatically certified check at the exact
+    member end.
+    """
+
+    base = _beam_uls_shear_check_dataframe(
+        state,
+        pd.DataFrame(columns=list(active_df.columns) if isinstance(active_df, pd.DataFrame) else []),
+        strength_route=strength_route,
+    )
+    columns = list(base.columns)
+    if active_df is None or active_df.empty:
+        return pd.DataFrame(columns=columns)
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    if not math.isfinite(span_m) or span_m <= 0.0:
+        return pd.DataFrame(columns=columns)
+    cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()]
+    if not cases:
+        cases = ["-"]
+    rows: list[dict[str, object]] = []
+    for case_name in cases:
+        for x_m in (0.0, float(span_m)):
+            demand_row = {
+                "Active": True,
+                "Station x (m)": float(x_m),
+                "Case Name": case_name,
+                "Mux": 1.0e-3,
+                "Vuy": 0.0,
+                "Tu": 0.0,
+                "Muy": 0.0,
+                "Vux": 0.0,
+                "Nu": 0.0,
+                "Note": "Shear capacity diagram boundary",
+                "__Diagram boundary": True,
+            }
+            result = _beam_uls_shear_result_for_row(state, demand_row, strength_route=strength_route)
+            if "dv mm" not in result and "dv mm" in columns:
+                result["dv mm"] = float("nan")
+            for column in columns:
+                result.setdefault(
+                    column,
+                    float("nan")
+                    if column.endswith("kN")
+                    or column.endswith("mm")
+                    or column.endswith("mm2/mm")
+                    or column.endswith("mm2/m")
+                    or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "φ"}
+                    else "-",
+                )
+            if math.isfinite(_beam_uls_float(result.get("φVn kN"))):
+                rows.append(result)
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -4296,7 +4371,13 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
     return fig
 
 
-def _make_beam_uls_shear_capacity_figure(active_df: pd.DataFrame, shear_check_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+def _make_beam_uls_shear_capacity_figure(
+    active_df: pd.DataFrame,
+    shear_check_df: pd.DataFrame | None,
+    *,
+    code_label: str,
+    boundary_capacity_df: pd.DataFrame | None = None,
+) -> go.Figure:
     fig = _make_beam_uls_demand_figure(
         active_df,
         column="Vuy",
@@ -4306,7 +4387,10 @@ def _make_beam_uls_shear_capacity_figure(active_df: pd.DataFrame, shear_check_df
     if shear_check_df is None or shear_check_df.empty:
         fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
         return fig
-    plot_df = shear_check_df.copy()
+    plot_sources = [shear_check_df]
+    if boundary_capacity_df is not None and not boundary_capacity_df.empty:
+        plot_sources.append(boundary_capacity_df)
+    plot_df = pd.concat(plot_sources, ignore_index=True, sort=False).copy()
     plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
     plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
     plot_df["__phi_vn"] = pd.to_numeric(plot_df.get("φVn kN"), errors="coerce")
@@ -4378,6 +4462,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         strength_route=strength_route,
     )
     shear_check_df = _beam_uls_shear_check_dataframe(
+        st.session_state,
+        active_df,
+        strength_route=strength_route,
+    )
+    shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
         st.session_state,
         active_df,
         strength_route=strength_route,
@@ -4483,11 +4572,17 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         if shear_result is None:
             _render_beam_uls_shear_layout_readiness_panel(st.session_state)
         st.plotly_chart(
-            _make_beam_uls_shear_capacity_figure(active_df, shear_check_df, code_label=code_label),
+            _make_beam_uls_shear_capacity_figure(
+                active_df,
+                shear_check_df,
+                code_label=code_label,
+                boundary_capacity_df=shear_boundary_capacity_df,
+            ),
             use_container_width=True,
         )
         st.caption(
-            "Shear capacity is from the active provided stirrup layout by zone. The status now combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
+            "Shear capacity is from the active provided stirrup layout by zone. The φVn / φVc / φVs diagram is extended to x=0 and x=L as capacity-boundary values when the provided layout is available. "
+            "The status still combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
             "Detailed AASHTO MCFT β/θ calibration, high-shear spacing triggers, and benchmark certification remain separate QA/design steps."
         )
         with st.expander("Shear strength audit / provided stirrup output", expanded=False):
@@ -4501,6 +4596,13 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 st.info("Shear audit output is not available until active ULS demand rows and active stirrup zones are ready.")
             else:
                 st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Shear end-boundary capacity values", expanded=False):
+            if shear_boundary_capacity_df.empty:
+                st.info("End-boundary φVc / φVs / φVn values are not available until the provided stirrup layout and section/material inputs are ready.")
+            else:
+                st.caption("Diagram-boundary capacity values at x=0 and x=L. These are plotted to make the capacity curve continuous; they are not treated as governing shear design sections.")
+                st.dataframe(_beam_uls_shear_audit_dataframe(shear_boundary_capacity_df), use_container_width=True, hide_index=True)
+
         with st.expander("Shear method notes", expanded=False):
             st.write(f"- Shear route: {strength_route.shear_basis_note}")
             st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")

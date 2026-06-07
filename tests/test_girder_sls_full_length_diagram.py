@@ -269,7 +269,10 @@ def test_uls_girder1_adds_compact_beam_girder_uls_workspace() -> None:
     assert "beam_uls_loads_table" in SOURCE
     assert "Compact ULS check table" in SOURCE
     assert "ULS demand table — audit / source data" in SOURCE
-    assert "ULS demand/capacity diagrams" in SOURCE
+    assert "ULS check workspace" in SOURCE
+    assert "BEAM_ULS_CHECK_TAB_LABELS" in SOURCE
+    assert "Check-specific tabs are placed directly under the compact table" in SOURCE
+    assert "ULS demand/capacity diagrams" not in SOURCE
     assert "Capacity checks are not available yet; no PASS/FAIL is issued" in SOURCE
 
 

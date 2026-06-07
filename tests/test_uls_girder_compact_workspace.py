@@ -1,12 +1,14 @@
 import pandas as pd
 
 from concrete_pmm_pro.ui.analysis_page import (
+    BEAM_ULS_CHECK_TAB_LABELS,
     _active_beam_uls_demand_dataframe_from_session,
     _beam_uls_check_table,
     _beam_uls_flexure_audit_dataframe,
     _beam_uls_shear_audit_dataframe,
     _beam_uls_shear_check_dataframe,
     _beam_uls_summary_cards,
+    _beam_uls_torsion_interaction_status,
 )
 
 
@@ -620,3 +622,44 @@ def test_uls_shear1_audit_dataframe_exposes_capacity_components() -> None:
     assert row["φVs"] == "600.00 kN"
     assert row["D/C"] == "1.125"
     assert "AASHTO" in row["Code basis"]
+
+
+def test_uls_ui2_check_tabs_are_main_workspace_labels() -> None:
+    assert BEAM_ULS_CHECK_TAB_LABELS == ["Flexure", "Shear", "Torsion", "Shear + Torsion"]
+
+
+def test_uls_ui2_shear_torsion_interaction_status_does_not_fake_pass() -> None:
+    no_torsion = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 1000.0, "Vuy": 300.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    with_torsion = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 1000.0, "Vuy": 300.0, "Tu": 45.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+
+    no_torsion_status = _beam_uls_torsion_interaction_status(no_torsion)
+    with_torsion_status = _beam_uls_torsion_interaction_status(with_torsion)
+
+    assert no_torsion_status["value"] == "Not applicable — Tu not active"
+    assert no_torsion_status["status"] == "neutral"
+    assert with_torsion_status["value"] == "CHECK REQUIRED — torsion interaction not implemented"
+    assert with_torsion_status["status"] == "warning"
+    assert "45.00 kN-m" in with_torsion_status["detail"]
+    assert "Do not certify" in with_torsion_status["detail"]
+
+
+def test_uls_ui2_source_places_check_tabs_under_compact_table_without_general_diagram_expander() -> None:
+    from pathlib import Path
+
+    source = Path("concrete_pmm_pro/ui/analysis_page.py").read_text()
+    compact_idx = source.index('st.markdown("#### Compact ULS check table")')
+    tabs_idx = source.index("st.tabs(BEAM_ULS_CHECK_TAB_LABELS)")
+    audit_idx = source.index('with st.expander("ULS demand table — audit / source data"')
+
+    assert compact_idx < tabs_idx < audit_idx
+    assert 'with st.expander("ULS demand/capacity diagrams"' not in source
+    assert 'with st.expander("Flexure strength audit / benchmark output"' in source
+    assert 'with st.expander("Shear strength audit / provided stirrup output"' in source

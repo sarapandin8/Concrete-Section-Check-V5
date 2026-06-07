@@ -3727,6 +3727,39 @@ def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -
     return pd.DataFrame(audit_rows, columns=columns)
 
 
+
+BEAM_ULS_CHECK_TAB_LABELS = ["Flexure", "Shear", "Torsion", "Shear + Torsion"]
+
+
+def _beam_uls_torsion_interaction_status(active_df: pd.DataFrame) -> dict[str, str]:
+    """Return the compact Shear + Torsion interaction status for the ULS tab workspace."""
+
+    torsion = _beam_uls_governing_action(active_df, "Tu")
+    if torsion is None or float(torsion["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+        return {
+            "title": "Shear + torsion interaction",
+            "value": "Not applicable — Tu not active",
+            "detail": "No active torsion demand is present in the ULS station rows; review shear independently.",
+            "status": "neutral",
+        }
+    return {
+        "title": "Shear + torsion interaction",
+        "value": "CHECK REQUIRED — torsion interaction not implemented",
+        "detail": (
+            f"Tu = {_format_beam_uls_demand(torsion['demand'], 'kN-m')} at "
+            f"x={_format_beam_uls_x(torsion['x_m'])} ({torsion['case']}). "
+            "Do not certify combined shear + torsion until a verified interaction engine is implemented."
+        ),
+        "status": "warning",
+    }
+
+
+def _beam_uls_check_tab_caption() -> str:
+    return (
+        "Check-specific tabs are placed directly under the compact table so the main ULS actions are visible without opening a general expander. "
+        "Each tab keeps only its own decision cards, diagram, audit output, and limitation notes."
+    )
+
 def _beam_uls_check_table(
     active_df: pd.DataFrame,
     flexure_preview_df: pd.DataFrame | None = None,
@@ -4102,7 +4135,9 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX.SC1 keeps the strain-compatibility section engine as the primary flexure method, but exposes code-compatible audit basis: Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. ULS.SHEAR1 adds first-pass provided-stirrup sectional φVn; torsion remains route-ready but not calculated."
+        "Flexure uses the strain-compatibility section engine with workflow-specific code-compatible audit basis: "
+        "Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. "
+        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion remains route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -4146,58 +4181,131 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         hide_index=True,
     )
 
-    with st.expander("Flexure strength audit / benchmark output", expanded=False):
-        st.caption(
-            "SC1 audit output for the governing flexure workflow: Mn nominal, route φ, φMn, D/C, "
-            "bending direction, tension face, code-compatible strain-compatibility basis, and resistance-factor policy. Use this table for independent spreadsheet/software comparison."
-        )
-        audit_df = _beam_uls_flexure_audit_dataframe(flexure_preview_df)
-        if audit_df.empty:
-            st.info("Flexure audit output is not available until active ULS demand rows and section reinforcement are ready.")
-        else:
-            st.dataframe(audit_df, use_container_width=True, hide_index=True)
+    st.markdown("#### ULS check workspace")
+    st.caption(_beam_uls_check_tab_caption())
+    flex_tab, shear_tab, torsion_tab, interaction_tab = st.tabs(BEAM_ULS_CHECK_TAB_LABELS)
 
-    with st.expander("Shear strength audit / provided stirrup output", expanded=False):
-        st.caption(
-            "First-pass sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
-            "Vu, φVc, φVs, φVn, D/C, Av/s, bw, d/dv, and code route. Minimum reinforcement, maximum spacing, "
-            "detailed AASHTO MCFT calibration, and benchmark certification remain follow-up QA milestones."
-        )
-        shear_audit_df = _beam_uls_shear_audit_dataframe(shear_check_df)
-        if shear_audit_df.empty:
-            st.info("Shear audit output is not available until active ULS demand rows and active stirrup zones are ready.")
+    with flex_tab:
+        flexure = _beam_uls_governing_action(active_df, "Mux")
+        flex_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
+        if flex_preview is not None:
+            flex_status = str(flex_preview.get("Status") or "REVIEW")
+            flex_cards = [
+                {"title": "Flexure status", "value": flex_status, "detail": "Primary Mux strength check", "status": "danger" if flex_status == "FAIL" else ("ready" if flex_status == "PASS" else "warning"), "strong": True},
+                {"title": "Governing Mu / D/C", "value": f"{flex_preview.get('Demand', '-')} · {flex_preview.get('Utilization', '-')}", "detail": f"{flex_preview.get('Case', '-')} @ x={flex_preview.get('Governing x', '-')}", "status": "info"},
+                {"title": "Flexure capacity", "value": str(flex_preview.get("Capacity") or "-"), "detail": "Section φMn from active flexure route", "status": "info"},
+                {"title": "Method", "value": "Strain compatibility", "detail": strength_route.flexure_engine_label, "status": "neutral"},
+            ]
         else:
-            st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
-
-    with st.expander("ULS demand/capacity diagrams", expanded=False):
-        st.caption(
-            "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific code-compatible strain-compatibility basis. Shear uses active provided stirrup zones for first-pass φVn. φTn remains absent until a verified {strength_route.project_design_code} torsion engine is implemented."
+            flex_cards = [
+                {"title": "Flexure status", "value": "NOT READY", "detail": "φMn check is not available for active rows.", "status": "warning", "strong": True},
+                {"title": "Governing Mu", "value": _format_beam_uls_demand(flexure["demand"], "kN-m") if flexure else "-", "detail": f"{flexure['case']} @ x={_format_beam_uls_x(flexure['x_m'])}" if flexure else "No finite Mux", "status": "info"},
+                {"title": "Flexure capacity", "value": "-", "detail": "Section/reinforcement data not ready", "status": "neutral"},
+                {"title": "Method", "value": "Strain compatibility", "detail": strength_route.flexure_engine_label, "status": "neutral"},
+            ]
+        _render_analysis_summary_strip(flex_cards, columns=4)
+        st.plotly_chart(
+            _make_beam_uls_flexure_preview_figure(active_df, flexure_preview_df, code_label=code_label),
+            use_container_width=True,
         )
-        flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
-        with flex_tab:
-            st.plotly_chart(
-                _make_beam_uls_flexure_preview_figure(active_df, flexure_preview_df, code_label=code_label),
-                use_container_width=True,
-            )
+        st.caption(
+            "Section φMn is plotted using the active workflow flexure route; zero-demand endpoints are plotted as φMn = 0 diagram boundary points. "
+            "Development length, debonding, anchorage, and end-zone detailing checks are separate from this flexure strength curve."
+        )
+        with st.expander("Flexure strength audit / benchmark output", expanded=False):
             st.caption(
-                "Section φMn is plotted using the active workflow flexure route; zero-demand endpoints are plotted as φMn = 0 diagram boundary points. "
-                "Development length, debonding, anchorage, and end-zone detailing checks are separate from this flexure strength curve."
+                "Audit output for the governing flexure workflow: Mn nominal, route φ, φMn, D/C, "
+                "bending direction, tension face, code-compatible strain-compatibility basis, and resistance-factor policy. Use this table for independent spreadsheet/software comparison."
             )
-        with shear_tab:
-            st.plotly_chart(
-                _make_beam_uls_shear_capacity_figure(active_df, shear_check_df, code_label=code_label),
-                use_container_width=True,
-            )
+            audit_df = _beam_uls_flexure_audit_dataframe(flexure_preview_df)
+            if audit_df.empty:
+                st.info("Flexure audit output is not available until active ULS demand rows and section reinforcement are ready.")
+            else:
+                st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Flexure method notes", expanded=False):
+            st.write(f"- Flexure route: {strength_route.flexure_basis_note}")
+            st.write("- The plotted φMn curve is a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate checks.")
+            st.write("- Flexure audit output is benchmark-ready, but final calibration against trusted examples or commercial girder software is still required before calling the module fully certified.")
+            if flexure_preview_messages:
+                st.caption("Flexure check notes: " + " | ".join(flexure_preview_messages[:5]))
+
+    with shear_tab:
+        shear = _beam_uls_governing_action(active_df, "Vuy")
+        shear_result = _beam_uls_governing_shear_row(shear_check_df)
+        if shear_result is not None:
+            shear_status = str(shear_result.get("Status") or "REVIEW")
+            shear_cards = [
+                {"title": "Shear status", "value": shear_status, "detail": "Provided-stirrup sectional check", "status": "danger" if shear_status == "FAIL" else ("ready" if shear_status == "PASS" else "warning"), "strong": True},
+                {"title": "Governing Vu / D/C", "value": f"{shear_result.get('Demand', '-')} · {shear_result.get('Utilization', '-')}", "detail": f"{shear_result.get('Case', '-')} @ x={shear_result.get('Governing x', '-')}", "status": "info"},
+                {"title": "Shear capacity", "value": str(shear_result.get("Capacity") or "-"), "detail": str(shear_result.get("Stirrup") or "Active stirrup zone"), "status": "info"},
+                {"title": "Method", "value": "Provided stirrup φVn", "detail": strength_route.shear_engine_label, "status": "neutral"},
+            ]
+        else:
+            shear_status, shear_capacity_note = _beam_uls_shear_layout_status(st.session_state)
+            shear_cards = [
+                {"title": "Shear status", "value": shear_status if shear else "NOT READY", "detail": "φVn check needs active Vuy rows and active stirrup zones.", "status": "warning", "strong": True},
+                {"title": "Governing Vu", "value": _format_beam_uls_demand(shear["demand"], "kN") if shear else "-", "detail": f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy", "status": "info"},
+                {"title": "Shear capacity", "value": shear_capacity_note if shear else "-", "detail": "No fake minimum stirrup is assumed", "status": "neutral"},
+                {"title": "Method", "value": "Provided stirrup φVn", "detail": strength_route.shear_engine_label, "status": "neutral"},
+            ]
+        _render_analysis_summary_strip(shear_cards, columns=4)
+        st.plotly_chart(
+            _make_beam_uls_shear_capacity_figure(active_df, shear_check_df, code_label=code_label),
+            use_container_width=True,
+        )
+        st.caption(
+            "Shear capacity is from the active provided stirrup layout by zone. φVn is a first-pass sectional shear check; "
+            "minimum transverse reinforcement, maximum spacing, detailed AASHTO MCFT β/θ calibration, and benchmark certification remain separate QA/design steps."
+        )
+        with st.expander("Shear strength audit / provided stirrup output", expanded=False):
             st.caption(
-                "Shear capacity is from the active provided stirrup layout by zone. φVn is a first-pass sectional shear check; "
-                "minimum transverse reinforcement, maximum spacing, detailed AASHTO MCFT β/θ calibration, and benchmark certification remain separate QA/design steps."
+                "First-pass sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
+                "Vu, φVc, φVs, φVn, D/C, Av/s, bw, d/dv, and code route. Minimum reinforcement, maximum spacing, "
+                "detailed AASHTO MCFT calibration, and benchmark certification remain follow-up QA milestones."
             )
-        with torsion_tab:
-            st.plotly_chart(
-                _make_beam_uls_demand_figure(active_df, column="Tu", title=f"Torsion Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Torsion, Tu (kN-m)"),
-                use_container_width=True,
-            )
+            shear_audit_df = _beam_uls_shear_audit_dataframe(shear_check_df)
+            if shear_audit_df.empty:
+                st.info("Shear audit output is not available until active ULS demand rows and active stirrup zones are ready.")
+            else:
+                st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Shear method notes", expanded=False):
+            st.write(f"- Shear route: {strength_route.shear_basis_note}")
+            st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
+            st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, minimum reinforcement, spacing, prestress shear effects, and benchmark calibration are added.")
+
+    with torsion_tab:
+        torsion = _beam_uls_governing_action(active_df, "Tu")
+        torsion_has_demand = torsion is not None and float(torsion["abs_demand"]) > _BEAM_ULS_DEMAND_TOL
+        torsion_cards = [
+            {"title": "Torsion status", "value": "PLANNED" if torsion_has_demand else "OPTIONAL", "detail": "φTn is not implemented yet", "status": "warning" if torsion_has_demand else "neutral", "strong": True},
+            {"title": "Governing Tu", "value": _format_beam_uls_demand(torsion["demand"], "kN-m") if torsion else "-", "detail": f"{torsion['case']} @ x={_format_beam_uls_x(torsion['x_m'])}" if torsion else "No active torsion demand", "status": "info"},
+            {"title": "Torsion capacity", "value": "-", "detail": "φTn planned", "status": "neutral"},
+            {"title": "Route", "value": "Torsion route-ready", "detail": strength_route.torsion_basis_note, "status": "neutral"},
+        ]
+        _render_analysis_summary_strip(torsion_cards, columns=4)
+        st.plotly_chart(
+            _make_beam_uls_demand_figure(active_df, column="Tu", title=f"Torsion Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Torsion, Tu (kN-m)"),
+            use_container_width=True,
+        )
+        if torsion_has_demand:
+            st.warning("Torsion demand is present, but φTn and torsion reinforcement checks are not implemented. Do not issue torsion PASS/FAIL from this workspace yet.")
+        else:
+            st.info("No active torsion demand is present in the ULS station rows. Keep torsion optional unless the design model produces nonzero Tu.")
+        with st.expander("Torsion method notes", expanded=False):
+            st.write(f"- Torsion route: {strength_route.torsion_basis_note}")
+            st.write("- Future checks must include torsion threshold, torsion reinforcement, combined shear + torsion interaction, and code-specific detailing limits.")
+
+    with interaction_tab:
+        interaction = _beam_uls_torsion_interaction_status(active_df)
+        _render_analysis_summary_strip([interaction], columns=1)
+        if interaction["value"].startswith("Not applicable"):
+            st.info(interaction["detail"])
+        else:
+            st.warning(interaction["detail"])
+        st.caption(
+            "This tab is intentionally separated from the shear tab because combined shear + torsion is a different design decision. "
+            "When Tu is active, a shear-only PASS must not be treated as a combined-interaction PASS."
+        )
 
     with st.expander("ULS demand table — audit / source data", expanded=False):
         st.caption("Read-only normalized view of Active rows from Loads. Secondary actions Muy, Vux, and Nu are kept here for audit, not default decision display.")

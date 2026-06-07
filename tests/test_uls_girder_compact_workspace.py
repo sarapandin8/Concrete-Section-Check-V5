@@ -3,6 +3,7 @@ import pandas as pd
 from concrete_pmm_pro.ui.analysis_page import (
     _active_beam_uls_demand_dataframe_from_session,
     _beam_uls_check_table,
+    _beam_uls_flexure_audit_dataframe,
     _beam_uls_summary_cards,
 )
 
@@ -384,3 +385,97 @@ def test_uls_flex_code1_apply_building_aci_keeps_strain_phi_capacity() -> None:
 
     assert routed == 900.0
     assert "ACI 318" in note
+
+
+
+def test_uls_flex_verify1_audit_dataframe_exposes_benchmark_values() -> None:
+    preview = pd.DataFrame(
+        [
+            {
+                "Check": "Flexure",
+                "Status": "FAIL",
+                "Governing x": "10.000 m",
+                "Case": "Strength I",
+                "Demand": "5,000.00 kN-m",
+                "Capacity": "φMn = 4,000.00 kN-m",
+                "Utilization": "1.250",
+                "Demand kN-m": 5000.0,
+                "Capacity kN-m": 4000.0,
+                "Utilization value": 1.25,
+                "Mn nominal kN-m": 4000.0,
+                "φ value": 1.0,
+                "φMn kN-m": 4000.0,
+                "D/C value": 1.25,
+                "Bending direction": "Sagging (+Mux)",
+                "Tension face": "Bottom face",
+                "Code basis": "φMn — AASHTO LRFD",
+                "Method": "AASHTO LRFD φ × nominal strain-compatibility Mn",
+                "Benchmark readiness": "Benchmark-ready flexure row",
+                "Notes": "Primary Mux flexure only",
+            }
+        ]
+    )
+
+    audit = _beam_uls_flexure_audit_dataframe(preview)
+
+    assert list(audit.columns)[:11] == [
+        "Governing",
+        "Station x",
+        "Case",
+        "Status",
+        "Direction",
+        "Tension face",
+        "Mu demand",
+        "Mn nominal",
+        "φ",
+        "φMn",
+        "D/C",
+    ]
+    row = audit.iloc[0]
+    assert row["Governing"] == "Yes"
+    assert row["Mn nominal"] == "4,000.00 kN-m"
+    assert row["φ"] == "1.000"
+    assert row["φMn"] == "4,000.00 kN-m"
+    assert row["D/C"] == "1.250"
+    assert row["Code basis"] == "φMn — AASHTO LRFD"
+    assert row["Tension face"] == "Bottom face"
+
+
+def test_uls_flex_verify1_engine_populates_nominal_mn_and_effective_phi() -> None:
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+    from concrete_pmm_pro.ui.analysis_page import _beam_uls_flexure_preview_dataframe
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 20.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+
+    preview, _ = _beam_uls_flexure_preview_dataframe(state, active, code_label="ACI 318", is_building=True)
+
+    row = preview.iloc[0]
+    assert row["Mn nominal kN-m"] > 0.0
+    assert row["φMn kN-m"] == row["Capacity kN-m"]
+    assert 0.0 < row["φ value"] <= 1.0
+    assert row["Bending direction"] == "Sagging (+Mux)"
+    assert row["Tension face"] == "Bottom face"
+    assert "ACI 318" in row["Code basis"]
+    assert row["Benchmark readiness"] == "Benchmark-ready flexure row"

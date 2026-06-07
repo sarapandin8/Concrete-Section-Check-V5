@@ -2857,6 +2857,34 @@ def _beam_uls_nominal_flexure_capacity_for_input(analysis_input: AnalysisInput) 
         messages.append(f"Nominal-capacity interpolation carried {nominal_result.warning_count} warning(s).")
     return float(nominal_result.capacity_phiMn_Nmm), messages
 
+
+
+def _beam_uls_flexure_direction_label(demand_kNm: float | None) -> str:
+    demand = _beam_uls_float(demand_kNm)
+    if not math.isfinite(demand) or abs(demand) <= _BEAM_ULS_DEMAND_TOL:
+        return "Boundary / zero Mux"
+    return "Sagging (+Mux)" if demand > 0.0 else "Hogging (-Mux)"
+
+
+def _beam_uls_flexure_tension_face_label(demand_kNm: float | None) -> str:
+    demand = _beam_uls_float(demand_kNm)
+    if not math.isfinite(demand) or abs(demand) <= _BEAM_ULS_DEMAND_TOL:
+        return "-"
+    return "Bottom face" if demand > 0.0 else "Top face"
+
+
+def _beam_uls_effective_phi_value(routed_capacity_nmm: float | None, nominal_capacity_nmm: float | None) -> float:
+    if routed_capacity_nmm is None or nominal_capacity_nmm is None:
+        return float("nan")
+    try:
+        routed = float(routed_capacity_nmm)
+        nominal = float(nominal_capacity_nmm)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not math.isfinite(routed) or not math.isfinite(nominal) or nominal <= 0.0:
+        return float("nan")
+    return routed / nominal
+
 def _beam_uls_flexure_preview_dataframe(
     state: Mapping[str, object],
     active_df: pd.DataFrame,
@@ -2897,6 +2925,15 @@ def _beam_uls_flexure_preview_dataframe(
         "Capacity basis",
         "Route φ",
         "Method",
+        "Mn nominal kN-m",
+        "φ value",
+        "φMn kN-m",
+        "D/C value",
+        "Bending direction",
+        "Tension face",
+        "Code basis",
+        "Route",
+        "Benchmark readiness",
         "Notes",
     ]
     if active_df.empty:
@@ -2970,6 +3007,15 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity basis": "diagram boundary",
                     "Route φ": "-",
                     "Method": "section boundary",
+                    "Mn nominal kN-m": float("nan"),
+                    "φ value": float("nan"),
+                    "φMn kN-m": 0.0,
+                    "D/C value": float("nan"),
+                    "Bending direction": _beam_uls_flexure_direction_label(0.0),
+                    "Tension face": _beam_uls_flexure_tension_face_label(0.0),
+                    "Code basis": "diagram boundary",
+                    "Route": "section boundary",
+                    "Benchmark readiness": "Boundary point; not used for D/C",
                     "Notes": "Zero-Mux endpoint plotted as φMn = 0 for flexure diagram boundary; D/C is not applicable at zero demand",
                 }
             )
@@ -3054,14 +3100,18 @@ def _beam_uls_flexure_preview_dataframe(
         )
         nominal_capacity_nmm: float | None = None
         nominal_messages: list[str] = []
-        if flexure_basis.requires_nominal_capacity:
-            nominal_capacity_nmm, nominal_messages = _beam_uls_nominal_flexure_capacity_for_input(analysis_input)
-            messages.extend(nominal_messages)
+        # VERIFY1 exposes Mn nominal and effective φ for benchmark-ready audit.
+        # The nominal solve is attempted for all routed flexure rows; code-specific
+        # layers still decide whether nominal Mn is required to compute φMn.
+        nominal_capacity_nmm, nominal_messages = _beam_uls_nominal_flexure_capacity_for_input(analysis_input)
+        messages.extend(nominal_messages)
         routed_capacity_nmm, routed_basis_note = apply_flexure_code_basis(
             phi_capacity_nmm=float(result.capacity_phiMn_Nmm),
             nominal_capacity_nmm=nominal_capacity_nmm,
             basis=flexure_basis,
         )
+        nominal_capacity_kNm = float(nominal_capacity_nmm) / 1_000_000.0 if nominal_capacity_nmm is not None and nominal_capacity_nmm > 0.0 else float("nan")
+        route_phi_value = _beam_uls_effective_phi_value(routed_capacity_nmm, nominal_capacity_nmm)
         if routed_capacity_nmm is None or routed_capacity_nmm <= 0.0:
             rows.append(
                 {
@@ -3079,6 +3129,15 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity basis": flexure_basis.display_label,
                     "Route φ": flexure_basis.resistance_factor_text,
                     "Method": flexure_basis.method_label,
+                    "Mn nominal kN-m": nominal_capacity_kNm,
+                    "φ value": route_phi_value,
+                    "φMn kN-m": float("nan"),
+                    "D/C value": float("nan"),
+                    "Bending direction": _beam_uls_flexure_direction_label(demand),
+                    "Tension face": _beam_uls_flexure_tension_face_label(demand),
+                    "Code basis": flexure_basis.capacity_label,
+                    "Route": flexure_basis.route_label,
+                    "Benchmark readiness": "Needs review; routed φMn unavailable",
                     "Notes": routed_basis_note,
                 }
             )
@@ -3123,6 +3182,15 @@ def _beam_uls_flexure_preview_dataframe(
                 "Capacity basis": flexure_basis.display_label if not zero_demand_endpoint else "diagram boundary",
                 "Route φ": flexure_basis.resistance_factor_text if not zero_demand_endpoint else "-",
                 "Method": method,
+                "Mn nominal kN-m": nominal_capacity_kNm if not zero_demand_endpoint else float("nan"),
+                "φ value": route_phi_value if not zero_demand_endpoint else float("nan"),
+                "φMn kN-m": capacity_kNm,
+                "D/C value": utilization_value,
+                "Bending direction": _beam_uls_flexure_direction_label(demand),
+                "Tension face": _beam_uls_flexure_tension_face_label(demand),
+                "Code basis": flexure_basis.capacity_label if not zero_demand_endpoint else "diagram boundary",
+                "Route": flexure_basis.route_label if not zero_demand_endpoint else "section boundary",
+                "Benchmark readiness": "Benchmark-ready flexure row" if not zero_demand_endpoint else "Boundary point; not used for D/C",
                 "Notes": "; ".join(note_parts),
             }
         )
@@ -3158,6 +3226,88 @@ def _beam_uls_shear_layout_status(state: Mapping[str, object]) -> tuple[str, str
     if active_zones > 0:
         return "LAYOUT READY", f"{active_zones} active stirrup zone(s); φVn engine planned"
     return "LAYOUT REQUIRED", "Define active stirrup zones in Sections → Rebar → Shear Reinforcement"
+
+
+
+def _format_beam_uls_audit_number(value: object, *, digits: int = 2, unit: str = "") -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(numeric):
+        return "-"
+    suffix = f" {unit}" if unit else ""
+    return f"{numeric:,.{digits}f}{suffix}"
+
+
+def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Return benchmark-ready flexure audit rows for the ULS workspace.
+
+    VERIFY1 keeps the default screen compact and moves intermediate values here:
+    demand, nominal Mn, route φ, φMn, D/C, bending direction, tension face, and
+    code route.  It is intentionally display/audit only and does not change the
+    strength solver.
+    """
+
+    columns = [
+        "Governing",
+        "Station x",
+        "Case",
+        "Status",
+        "Direction",
+        "Tension face",
+        "Mu demand",
+        "Mn nominal",
+        "φ",
+        "φMn",
+        "D/C",
+        "Code basis",
+        "Method",
+        "Benchmark readiness",
+        "Notes",
+    ]
+    if flexure_preview_df is None or flexure_preview_df.empty:
+        return pd.DataFrame(columns=columns)
+    df = flexure_preview_df.copy()
+    if "Check" in df.columns:
+        df = df[df["Check"].astype(str).str.casefold() == "flexure"].copy()
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    df["__util"] = pd.to_numeric(df.get("Utilization value"), errors="coerce")
+    governing_idx = df["__util"].idxmax() if df["__util"].notna().any() else None
+    audit_rows: list[dict[str, object]] = []
+    for idx, row in df.iterrows():
+        demand = row.get("Demand kN-m")
+        mn_nominal = row.get("Mn nominal kN-m")
+        phi_value = row.get("φ value")
+        phi_mn = row.get("φMn kN-m", row.get("Capacity kN-m"))
+        dc_value = row.get("D/C value", row.get("Utilization value"))
+        status = str(row.get("Status") or "-")
+        route_phi = row.get("Route φ")
+        phi_display = _format_beam_uls_ratio(phi_value)
+        if phi_display == "-":
+            phi_display = str(route_phi or "-")
+        audit_rows.append(
+            {
+                "Governing": "Yes" if governing_idx is not None and idx == governing_idx else "",
+                "Station x": str(row.get("Governing x") or "-"),
+                "Case": str(row.get("Case") or "-"),
+                "Status": status,
+                "Direction": str(row.get("Bending direction") or _beam_uls_flexure_direction_label(demand)),
+                "Tension face": str(row.get("Tension face") or _beam_uls_flexure_tension_face_label(demand)),
+                "Mu demand": _format_beam_uls_audit_number(demand, unit="kN-m"),
+                "Mn nominal": _format_beam_uls_audit_number(mn_nominal, unit="kN-m"),
+                "φ": phi_display,
+                "φMn": _format_beam_uls_audit_number(phi_mn, unit="kN-m"),
+                "D/C": _format_beam_uls_ratio(dc_value),
+                "Code basis": str(row.get("Code basis") or row.get("Capacity basis") or "-"),
+                "Method": str(row.get("Method") or "-"),
+                "Benchmark readiness": str(row.get("Benchmark readiness") or "-"),
+                "Notes": str(row.get("Notes") or ""),
+            }
+        )
+    return pd.DataFrame(audit_rows, columns=columns)
+
 
 def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None = None, *, state: Mapping[str, object] | None = None) -> pd.DataFrame:
     flexure = _beam_uls_governing_action(active_df, "Mux")
@@ -3443,7 +3593,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX.CODE1 routes flexure resistance by workflow: Bridge → AASHTO LRFD resistance-factor layer, Building → ACI 318 strain-based φ. Shear/torsion remain route-ready but not calculated."
+        "ULS.FLEX.VERIFY1 exposes benchmark-ready flexure audit values while keeping the default screen compact. Bridge → AASHTO LRFD resistance-factor layer; Building → ACI 318 strain-based φ. Shear/torsion remain route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -3471,6 +3621,17 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     st.markdown("#### Compact ULS check table")
     st.dataframe(_beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, state=st.session_state), use_container_width=True, hide_index=True)
+
+    with st.expander("Flexure strength audit / benchmark output", expanded=False):
+        st.caption(
+            "VERIFY1 audit output for the governing flexure workflow: Mn nominal, route φ, φMn, D/C, "
+            "bending direction, tension face, and code basis. Use this table for independent spreadsheet/software comparison."
+        )
+        audit_df = _beam_uls_flexure_audit_dataframe(flexure_preview_df)
+        if audit_df.empty:
+            st.info("Flexure audit output is not available until active ULS demand rows and section reinforcement are ready.")
+        else:
+            st.dataframe(audit_df, use_container_width=True, hide_index=True)
 
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(
@@ -3505,6 +3666,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS strength-check limitations", expanded=False):
         st.write(f"- Active ULS strength route: {strength_route.workflow_label} → {strength_route.display_code_label}.")
         st.write(f"- Flexure route: {strength_route.flexure_basis_note}")
+        st.write("- Flexure audit output reports Mn nominal, route φ, φMn, D/C, bending direction, tension face, method, and code basis for benchmark comparison.")
         st.write("- Flexure φMn is plotted as a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
         st.write(f"- Shear route: {strength_route.shear_basis_note}")
         st.write(f"- Torsion route: {strength_route.torsion_basis_note}")

@@ -3238,17 +3238,41 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
         & preview_df["Method"].astype(str).str.contains("zero-demand endpoint", case=False, na=False)
     ].copy()
     if not endpoint_review_df.empty:
+        finite_y_values: list[float] = []
+        for series_name in ["__demand_kNm", "__capacity_kNm"]:
+            values = pd.to_numeric(preview_df.get(series_name, pd.Series(dtype=float)), errors="coerce")
+            finite_y_values.extend([abs(float(value)) for value in values if pd.notna(value) and math.isfinite(float(value))])
+        demand_values = pd.to_numeric(active_df.get("Mux", pd.Series(dtype=float)), errors="coerce")
+        finite_y_values.extend([abs(float(value)) for value in demand_values if pd.notna(value) and math.isfinite(float(value))])
+        y_scale = max(finite_y_values) if finite_y_values else 1.0
+        marker_y = max(y_scale * 0.055, 1.0)
+        endpoint_marker_y = [marker_y] * len(endpoint_review_df.index)
         fig.add_trace(
             go.Scatter(
                 x=endpoint_review_df["__x_m"],
-                y=endpoint_review_df["__demand_kNm"],
+                y=endpoint_marker_y,
                 mode="markers+text",
-                text=["end-zone review"] * len(endpoint_review_df.index),
-                textposition="bottom center",
+                text=["End-zone review"] * len(endpoint_review_df.index),
+                textposition="top center",
                 name="Endpoint review — φMn not shown",
-                hovertemplate="x=%{x:.3f} m<br>φMn preview not shown at zero-Mux end station<extra></extra>",
+                hovertemplate=(
+                    "x=%{x:.3f} m<br>Endpoint review marker only"
+                    "<br>φMn preview not shown at zero-Mux end station<extra></extra>"
+                ),
+                marker={"size": 13, "symbol": "diamond-open", "line": {"width": 2}},
             )
         )
+        endpoint_x_values = sorted({float(value) for value in endpoint_review_df["__x_m"] if pd.notna(value) and math.isfinite(float(value))})
+        for index, endpoint_x in enumerate(endpoint_x_values):
+            annotation_position = "top left" if index == 0 else "top right"
+            fig.add_vline(
+                x=endpoint_x,
+                line_width=1,
+                line_dash="dot",
+                opacity=0.55,
+                annotation_text="End-zone review",
+                annotation_position=annotation_position,
+            )
 
     fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs φMn preview</sup>"})
     return fig
@@ -3314,7 +3338,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             )
             st.caption(
                 "φMn preview is omitted at zero-Mux end stations and at stations where capacity cannot be interpolated. "
-                "Those stations are treated as REVIEW; end-zone/development capacity is not certified in this preview."
+                "Endpoint review markers are visual flags only; end-zone/development capacity is not certified in this preview."
             )
         with shear_tab:
             st.plotly_chart(

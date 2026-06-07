@@ -222,4 +222,8 @@ def test_uls_flex1_1_flexure_figure_labels_only_governing_preview_not_every_stat
     assert text_by_trace["Governing flexure preview"] == ["FAIL · D/C 1.396"]
     assert all("PASS" not in text for values in text_by_trace.values() for text in values)
     assert "Endpoint review — φMn not shown" in trace_names
-    assert text_by_trace["Endpoint review — φMn not shown"] == ["end-zone review", "end-zone review"]
+    assert text_by_trace["Endpoint review — φMn not shown"] == ["End-zone review", "End-zone review"]
+    endpoint_trace = next(trace for trace in fig.data if trace.name == "Endpoint review — φMn not shown")
+    assert all(float(y) > 0.0 for y in endpoint_trace.y)
+    assert endpoint_trace.marker.size >= 13
+    assert len(fig.layout.shapes or []) >= 2

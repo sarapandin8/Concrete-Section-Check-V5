@@ -270,7 +270,7 @@ def test_uls_girder1_adds_compact_beam_girder_uls_workspace() -> None:
     assert "Compact ULS check table" in SOURCE
     assert "ULS demand table — audit / source data" in SOURCE
     assert "ULS demand diagrams — preview / demand only" in SOURCE
-    assert "Capacity engine is planned; no PASS/FAIL is issued yet" in SOURCE
+    assert "Capacity checks are not available yet; no PASS/FAIL is issued" in SOURCE
 
 
 def test_uls_girder1_routes_beam_workflows_away_from_pmm_solver_workspace() -> None:

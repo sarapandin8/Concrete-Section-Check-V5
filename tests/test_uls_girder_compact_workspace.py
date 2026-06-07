@@ -38,7 +38,8 @@ def test_uls_girder1_check_table_reports_governing_primary_actions_and_planned_c
     assert flexure["Status"] == "PLANNED"
     assert flexure["Case"] == "MID"
     assert flexure["Governing x"] == "10.000 m"
-    assert flexure["Capacity"] == "planned"
+    assert flexure["Capacity"] == "-"
+    assert flexure["Utilization"] == "-"
     assert shear["Case"] == "END"
     assert torsion["Status"] == "PLANNED"
 

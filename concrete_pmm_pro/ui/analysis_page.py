@@ -517,9 +517,9 @@ def _runtime_timings_dataframe() -> pd.DataFrame:
 
 
 def _render_runtime_diagnostics_expander() -> None:
-    with st.expander("Runtime Diagnostics", expanded=False):
+    with st.expander("Developer diagnostics", expanded=False):
         st.info(
-            "Timing diagnostics measure UI-triggered expensive operations only. "
+            "Developer timing diagnostics measure UI-triggered expensive operations only. "
             "They do not change PMM/SLS formulas, sign conventions, or engineering results."
         )
         timings_df = _runtime_timings_dataframe()
@@ -2629,8 +2629,8 @@ def _beam_uls_check_table(active_df: pd.DataFrame) -> pd.DataFrame:
                 "Governing x": _format_beam_uls_x(governing["x_m"]),
                 "Case": str(governing["case"]),
                 "Demand": _format_beam_uls_demand(governing["demand"], unit),
-                "Capacity": "planned",
-                "Utilization": "planned",
+                "Capacity": "-",
+                "Utilization": "-",
             }
         )
     return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
@@ -2660,7 +2660,7 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
         {
             "title": "Overall ULS check",
             "value": "NOT READY",
-            "detail": f"{len(active_df):,} active demand row(s). Capacity engine is planned; no PASS/FAIL is issued yet.",
+            "detail": f"{len(active_df):,} active demand row(s). Capacity checks are not available yet; no PASS/FAIL is issued.",
             "status": "warning",
             "strong": True,
         },
@@ -2668,8 +2668,8 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
         {"title": "Critical shear demand", "value": shear_value, "detail": shear_detail, "status": "info"},
         {
             "title": "Design action",
-            "value": "Capacity planned",
-            "detail": f"{workflow_label}; {code_label}. Flexure/shear/torsion strength checks are future milestones.",
+            "value": "Capacity engine not yet available",
+            "detail": f"Review governing ULS demand now; run φMn / φVn / φTn checks after the {code_label} strength engine is implemented.",
             "status": "neutral",
         },
     ]
@@ -2745,7 +2745,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS demand workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "Strength capacity curves and PASS/FAIL checks are planned milestones, so this page must not show a false PASS."
+        "Strength capacity checks are not available yet; this page shows governing ULS demand only and must not show a false PASS."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -2771,7 +2771,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS demand diagrams — preview / demand only", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            "Capacity lines φMn, φVn, and φTn are intentionally absent until the named capacity-engine milestones are implemented."
+            "Capacity lines φMn, φVn, and φTn are intentionally absent until a verified strength engine is implemented."
         )
         flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand", "Shear demand", "Torsion demand"])
         with flex_tab:
@@ -2794,11 +2794,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.caption("Read-only normalized view of Active rows from Loads. Secondary actions Muy, Vux, and Nu are kept here for audit, not default decision display.")
         st.dataframe(_beam_uls_audit_dataframe(active_df), use_container_width=True, hide_index=True)
 
-    with st.expander("ULS.GIRDER1 capability notes", expanded=False):
-        st.write("- Flexure, shear, and torsion capacity engines are not implemented in this milestone.")
+    with st.expander("ULS strength-check limitations", expanded=False):
+        st.write("- Flexure, shear, and torsion capacity engines are not available yet.")
         st.write("- No φMn / φVn / φTn, development length, debonding strength, interface shear, or end-zone bursting check is claimed here.")
-        st.write("- Use this workspace to confirm governing factored demand before implementing capacity checks.")
-        st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are not changed by this ULS framework milestone.")
+        st.write("- Use this workspace to confirm governing factored demand before running future capacity checks.")
+        st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")
 
 
 def _analysis_card_html(title: str, value: str, detail: str = "", status: str = "info", strong: bool = False) -> str:

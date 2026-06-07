@@ -475,6 +475,10 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "ULS Bridge Beam/Girder Design Loads" in source
     assert "ULS Building Beam/Girder Design Loads" in source
     assert "SLS Girder Service Loads" in source
+    assert "LOADS.COMPACT1" in source
+    assert 'st.tabs(["ULS Loads", "SLS Loads"])' in source
+    assert 'st.expander("Axis convention for load input", expanded=False)' in source
+    assert 'st.expander("Load input status", expanded=validation_has_issues)' in source
     assert "Do not include prestress in the Loads resultant" in source
     assert "Load Component" in source
     assert "enter service actions by stage" in source

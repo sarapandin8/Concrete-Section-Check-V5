@@ -2726,6 +2726,7 @@ def _beam_uls_flexure_analysis_input_for_station(
     row: Mapping[str, object],
     code_label: str,
     is_building: bool,
+    capacity_direction: float | None = None,
 ) -> tuple[AnalysisInput | None, list[str]]:
     messages: list[str] = []
     geometry = _beam_uls_get_state_value(state, "section_geometry")
@@ -2769,8 +2770,15 @@ def _beam_uls_flexure_analysis_input_for_station(
 
     mu = _beam_uls_float(row.get("Mux"))
     nu = _beam_uls_float(row.get("Nu"))
-    if not math.isfinite(mu) or abs(mu) <= _BEAM_ULS_DEMAND_TOL:
-        return None, messages + ["Mux demand is zero or not finite."]
+    if not math.isfinite(mu):
+        return None, messages + ["Mux demand is not finite."]
+    if abs(mu) <= _BEAM_ULS_DEMAND_TOL:
+        if capacity_direction is None or not math.isfinite(float(capacity_direction)) or abs(float(capacity_direction)) <= 0.0:
+            return None, messages + ["Mux demand is zero and no flexure-capacity direction was provided."]
+        # Section-strength capacity can still be plotted at a zero-demand endpoint.
+        # The tiny directional moment gives the PMM ray a bending sign without
+        # changing the displayed demand or treating the endpoint as governing.
+        mu = math.copysign(max(_BEAM_ULS_DEMAND_TOL * 10.0, 1.0e-3), float(capacity_direction))
     if not math.isfinite(nu):
         nu = 0.0
     case = str(row.get("Case Name") or "ULS").strip() or "ULS"
@@ -2824,6 +2832,7 @@ def _beam_uls_flexure_preview_dataframe(
         "Demand kN-m",
         "Capacity kN-m",
         "Utilization value",
+        "Capacity plot sign",
         "Method",
         "Notes",
     ]
@@ -2853,37 +2862,40 @@ def _beam_uls_flexure_preview_dataframe(
         ].copy()
         if not endpoint_rows.empty:
             messages.append(
-                "Zero-Mux end station(s) are shown as REVIEW markers only; end-zone/development flexure capacity is not certified in this preview."
+                "Zero-Mux end station(s) are included in the full-span section φMn preview; endpoint D/C is not governing because demand is zero."
             )
+
+    def _capacity_direction_for_zero_demand(row: Mapping[str, object]) -> float:
+        row_case = str(row.get("Case Name") or "")
+        row_x = _beam_uls_float(row.get("Station x (m)"))
+        candidates = nonzero_rows.copy()
+        if not candidates.empty and row_case:
+            same_case = candidates[candidates["Case Name"].astype(str) == row_case].copy()
+            if not same_case.empty:
+                candidates = same_case
+        if not candidates.empty:
+            candidates = candidates[candidates["__mux_kNm"].notna()].copy()
+            if math.isfinite(row_x) and "__station_m" in candidates.columns:
+                candidates["__distance_to_endpoint"] = (candidates["__station_m"].astype(float) - float(row_x)).abs()
+                candidates = candidates.sort_values("__distance_to_endpoint", kind="stable")
+            candidate_mu = _beam_uls_float(candidates.iloc[0].get("Mux")) if not candidates.empty else float("nan")
+            if math.isfinite(candidate_mu) and abs(candidate_mu) > _BEAM_ULS_DEMAND_TOL:
+                return -1.0 if candidate_mu < 0.0 else 1.0
+        return 1.0
 
     demand_rows = pd.concat([nonzero_rows, endpoint_rows], axis=0).sort_values(["Case Name", "__station_m"], kind="stable")
     for _, demand_row in demand_rows.iterrows():
         demand = _beam_uls_float(demand_row.get("Mux"))
         station = _format_beam_uls_x(demand_row.get("Station x (m)"))
         case = str(demand_row.get("Case Name") or "-")
-        if math.isfinite(demand) and abs(demand) <= _BEAM_ULS_DEMAND_TOL:
-            rows.append(
-                {
-                    "Check": "Flexure",
-                    "Status": "REVIEW",
-                    "Governing x": station,
-                    "Case": case,
-                    "Demand": "-",
-                    "Capacity": "-",
-                    "Utilization": "-",
-                    "Demand kN-m": 0.0,
-                    "Capacity kN-m": float("nan"),
-                    "Utilization value": float("nan"),
-                    "Method": "zero-demand endpoint review",
-                    "Notes": "Zero Mux endpoint; φMn preview is not plotted. End-zone/development capacity is not certified in this preview.",
-                }
-            )
-            continue
+        zero_demand_endpoint = math.isfinite(demand) and abs(demand) <= _BEAM_ULS_DEMAND_TOL
+        capacity_direction = _capacity_direction_for_zero_demand(demand_row) if zero_demand_endpoint else None
         analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(
             state,
             row=demand_row,
             code_label=code_label,
             is_building=is_building,
+            capacity_direction=capacity_direction,
         )
         messages.extend(input_messages)
         if analysis_input is None:
@@ -2899,6 +2911,7 @@ def _beam_uls_flexure_preview_dataframe(
                     "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
+                    "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
                     "Method": "not ready",
                     "Notes": "; ".join(input_messages[-3:]),
                 }
@@ -2921,6 +2934,7 @@ def _beam_uls_flexure_preview_dataframe(
                     "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
+                    "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
                     "Method": "solver error",
                     "Notes": f"Flexure preview solver error: {exc}",
                 }
@@ -2939,6 +2953,7 @@ def _beam_uls_flexure_preview_dataframe(
                     "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
+                    "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
                     "Method": "not checked",
                     "Notes": "Flexure capacity could not be interpolated from PMM preview.",
                 }
@@ -2946,23 +2961,39 @@ def _beam_uls_flexure_preview_dataframe(
             continue
         capacity_kNm = float(result.capacity_phiMn_Nmm) / 1_000_000.0
         utilization = float(result.dcr)
-        status = "PASS" if utilization <= 1.0 else "FAIL"
         method = result.capacity_method or "PMM preview"
         note_parts = ["Primary Mux flexure only", f"{code_label} basis label"]
-        if result.warning_count:
-            note_parts.append(f"{result.warning_count} interpolation warning(s)")
+        if zero_demand_endpoint:
+            status = "SECTION PREVIEW"
+            display_demand = "0.00 kN-m"
+            display_utilization = "-"
+            utilization_value = float("nan")
+            method = "full-span section φMn preview"
+            note_parts = [
+                "Zero-Mux endpoint included for full-span section-strength curve",
+                "D/C is not applicable at zero demand",
+                "Development/detailing checks are separate from this section-strength preview",
+            ]
+        else:
+            status = "PASS" if utilization <= 1.0 else "FAIL"
+            display_demand = _format_beam_uls_demand(demand, "kN-m")
+            display_utilization = _format_beam_uls_ratio(utilization)
+            utilization_value = utilization
+            if result.warning_count:
+                note_parts.append(f"{result.warning_count} interpolation warning(s)")
         rows.append(
             {
                 "Check": "Flexure",
                 "Status": status,
                 "Governing x": station,
                 "Case": case,
-                "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                "Demand": display_demand,
                 "Capacity": f"φMn preview = {capacity_kNm:,.2f} kN-m",
-                "Utilization": _format_beam_uls_ratio(utilization),
-                "Demand kN-m": float(demand),
+                "Utilization": display_utilization,
+                "Demand kN-m": 0.0 if zero_demand_endpoint else float(demand),
                 "Capacity kN-m": capacity_kNm,
-                "Utilization value": utilization,
+                "Utilization value": utilization_value,
+                "Capacity plot sign": capacity_direction if zero_demand_endpoint else (-1.0 if demand < 0.0 else 1.0),
                 "Method": method,
                 "Notes": "; ".join(note_parts),
             }
@@ -3184,6 +3215,10 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
     preview_df["__demand_kNm"] = pd.to_numeric(preview_df["Demand kN-m"], errors="coerce")
     preview_df["__capacity_kNm"] = pd.to_numeric(preview_df["Capacity kN-m"], errors="coerce")
     preview_df["__utilization"] = pd.to_numeric(preview_df["Utilization value"], errors="coerce")
+    if "Capacity plot sign" in preview_df.columns:
+        preview_df["__capacity_plot_sign"] = pd.to_numeric(preview_df["Capacity plot sign"], errors="coerce")
+    else:
+        preview_df["__capacity_plot_sign"] = preview_df["__demand_kNm"].map(lambda demand: -1.0 if pd.notna(demand) and float(demand) < 0.0 else 1.0)
 
     capacity_df = preview_df[preview_df["__x_m"].notna() & preview_df["__demand_kNm"].notna() & preview_df["__capacity_kNm"].notna()].copy()
     if capacity_df.empty:
@@ -3195,9 +3230,11 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
         x_values: list[float] = []
         y_values: list[float] = []
         for _, row in case_df.iterrows():
-            demand = float(row["__demand_kNm"])
             capacity = float(row["__capacity_kNm"])
-            sign = -1.0 if demand < 0.0 else 1.0
+            sign = float(row.get("__capacity_plot_sign", 1.0))
+            if not math.isfinite(sign) or abs(sign) <= 0.0:
+                demand = float(row["__demand_kNm"])
+                sign = -1.0 if demand < 0.0 else 1.0
             x_values.append(float(row["__x_m"]))
             y_values.append(sign * capacity)
         fig.add_trace(
@@ -3214,9 +3251,11 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
     if not governing_candidates.empty:
         idx = governing_candidates["__utilization"].astype(float).idxmax()
         row = governing_candidates.loc[idx]
-        demand = float(row["__demand_kNm"])
         capacity = float(row["__capacity_kNm"])
-        sign = -1.0 if demand < 0.0 else 1.0
+        sign = float(row.get("__capacity_plot_sign", 1.0))
+        if not math.isfinite(sign) or abs(sign) <= 0.0:
+            demand = float(row["__demand_kNm"])
+            sign = -1.0 if demand < 0.0 else 1.0
         utilization = float(row["__utilization"])
         status = str(row.get("Status") or "REVIEW")
         fig.add_trace(
@@ -3231,50 +3270,8 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
             )
         )
 
-    endpoint_review_df = preview_df[
-        preview_df["__x_m"].notna()
-        & preview_df["__demand_kNm"].notna()
-        & preview_df["__capacity_kNm"].isna()
-        & preview_df["Method"].astype(str).str.contains("zero-demand endpoint", case=False, na=False)
-    ].copy()
-    if not endpoint_review_df.empty:
-        finite_y_values: list[float] = []
-        for series_name in ["__demand_kNm", "__capacity_kNm"]:
-            values = pd.to_numeric(preview_df.get(series_name, pd.Series(dtype=float)), errors="coerce")
-            finite_y_values.extend([abs(float(value)) for value in values if pd.notna(value) and math.isfinite(float(value))])
-        demand_values = pd.to_numeric(active_df.get("Mux", pd.Series(dtype=float)), errors="coerce")
-        finite_y_values.extend([abs(float(value)) for value in demand_values if pd.notna(value) and math.isfinite(float(value))])
-        y_scale = max(finite_y_values) if finite_y_values else 1.0
-        marker_y = max(y_scale * 0.055, 1.0)
-        endpoint_marker_y = [marker_y] * len(endpoint_review_df.index)
-        fig.add_trace(
-            go.Scatter(
-                x=endpoint_review_df["__x_m"],
-                y=endpoint_marker_y,
-                mode="markers+text",
-                text=["End-zone review"] * len(endpoint_review_df.index),
-                textposition="top center",
-                name="Endpoint review — φMn not shown",
-                hovertemplate=(
-                    "x=%{x:.3f} m<br>Endpoint review marker only"
-                    "<br>φMn preview not shown at zero-Mux end station<extra></extra>"
-                ),
-                marker={"size": 13, "symbol": "diamond-open", "line": {"width": 2}},
-            )
-        )
-        endpoint_x_values = sorted({float(value) for value in endpoint_review_df["__x_m"] if pd.notna(value) and math.isfinite(float(value))})
-        for index, endpoint_x in enumerate(endpoint_x_values):
-            annotation_position = "top left" if index == 0 else "top right"
-            fig.add_vline(
-                x=endpoint_x,
-                line_width=1,
-                line_dash="dot",
-                opacity=0.55,
-                annotation_text="End-zone review",
-                annotation_position=annotation_position,
-            )
 
-    fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs φMn preview</sup>"})
+    fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs full-span section φMn preview</sup>"})
     return fig
 
 def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
@@ -3296,7 +3293,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX1 adds primary Mux flexure φMn preview only; shear, torsion, development, debonding strength, and final certification remain future milestones."
+        "ULS.FLEX1.3 adds primary Mux section φMn preview along the span; shear, torsion, development/detailing checks, and final certification remain future milestones."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -3337,8 +3334,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 use_container_width=True,
             )
             st.caption(
-                "φMn preview is omitted at zero-Mux end stations and at stations where capacity cannot be interpolated. "
-                "Endpoint review markers are visual flags only; end-zone/development capacity is not certified in this preview."
+                "Section φMn preview is plotted at active station points, including zero-demand endpoints, for full-span diagram continuity. "
+                "Development length, debonding, anchorage, and end-zone detailing checks are separate from this section-strength curve."
             )
         with shear_tab:
             st.plotly_chart(
@@ -3357,7 +3354,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     with st.expander("ULS strength-check limitations", expanded=False):
         st.write("- Flexure capacity is a preview based on the existing strain-compatibility PMM engine and primary Mux demand only.")
-        st.write("- Shear φVn, torsion φTn, development length, debonding strength, interface shear, and end-zone bursting checks are not claimed here.")
+        st.write("- Flexure φMn is a section-strength preview plotted along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
+        st.write("- Shear φVn and torsion φTn checks are not claimed here.")
         st.write("- Dedicated girder strand layout can be included at the demand station for preview, but transfer-length/development certification is still future work.")
         st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")
         if flexure_preview_messages:

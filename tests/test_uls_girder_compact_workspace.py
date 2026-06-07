@@ -194,7 +194,7 @@ def test_uls_flex1_1_summary_status_includes_flexure_preview_result() -> None:
     assert "no overall ULS PASS/FAIL" in cards[0]["detail"]
 
 
-def test_uls_flex1_1_flexure_figure_labels_only_governing_preview_not_every_station() -> None:
+def test_uls_flex1_3_flexure_figure_plots_full_span_section_phi_mn_without_endpoint_review_trace() -> None:
     from concrete_pmm_pro.ui.analysis_page import _make_beam_uls_flexure_preview_figure
 
     active = pd.DataFrame(
@@ -207,10 +207,10 @@ def test_uls_flex1_1_flexure_figure_labels_only_governing_preview_not_every_stat
     )
     preview = pd.DataFrame(
         [
-            {"Check": "Flexure", "Status": "REVIEW", "Governing x": "0.000 m", "Case": "Strength I", "Demand": "-", "Capacity": "-", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": float("nan"), "Utilization value": float("nan"), "Method": "zero-demand endpoint review", "Notes": "Zero Mux endpoint"},
-            {"Check": "Flexure", "Status": "PASS", "Governing x": "5.000 m", "Case": "Strength I", "Demand": "2,500.00 kN-m", "Capacity": "φMn preview = 3,500.00 kN-m", "Utilization": "0.714", "Demand kN-m": 2500.0, "Capacity kN-m": 3500.0, "Utilization value": 0.714, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
-            {"Check": "Flexure", "Status": "FAIL", "Governing x": "10.000 m", "Case": "Strength I", "Demand": "5,000.00 kN-m", "Capacity": "φMn preview = 3,580.44 kN-m", "Utilization": "1.396", "Demand kN-m": 5000.0, "Capacity kN-m": 3580.44, "Utilization value": 1.396, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
-            {"Check": "Flexure", "Status": "REVIEW", "Governing x": "20.000 m", "Case": "Strength I", "Demand": "-", "Capacity": "-", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": float("nan"), "Utilization value": float("nan"), "Method": "zero-demand endpoint review", "Notes": "Zero Mux endpoint"},
+            {"Check": "Flexure", "Status": "SECTION PREVIEW", "Governing x": "0.000 m", "Case": "Strength I", "Demand": "0.00 kN-m", "Capacity": "φMn preview = 3,450.00 kN-m", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": 3450.0, "Utilization value": float("nan"), "Capacity plot sign": 1.0, "Method": "full-span section φMn preview", "Notes": "Zero-Mux endpoint included"},
+            {"Check": "Flexure", "Status": "PASS", "Governing x": "5.000 m", "Case": "Strength I", "Demand": "2,500.00 kN-m", "Capacity": "φMn preview = 3,500.00 kN-m", "Utilization": "0.714", "Demand kN-m": 2500.0, "Capacity kN-m": 3500.0, "Utilization value": 0.714, "Capacity plot sign": 1.0, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
+            {"Check": "Flexure", "Status": "FAIL", "Governing x": "10.000 m", "Case": "Strength I", "Demand": "5,000.00 kN-m", "Capacity": "φMn preview = 3,580.44 kN-m", "Utilization": "1.396", "Demand kN-m": 5000.0, "Capacity kN-m": 3580.44, "Utilization value": 1.396, "Capacity plot sign": 1.0, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
+            {"Check": "Flexure", "Status": "SECTION PREVIEW", "Governing x": "20.000 m", "Case": "Strength I", "Demand": "0.00 kN-m", "Capacity": "φMn preview = 3,450.00 kN-m", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": 3450.0, "Utilization value": float("nan"), "Capacity plot sign": 1.0, "Method": "full-span section φMn preview", "Notes": "Zero-Mux endpoint included"},
         ]
     )
 
@@ -221,9 +221,48 @@ def test_uls_flex1_1_flexure_figure_labels_only_governing_preview_not_every_stat
     assert "Governing flexure preview" in trace_names
     assert text_by_trace["Governing flexure preview"] == ["FAIL · D/C 1.396"]
     assert all("PASS" not in text for values in text_by_trace.values() for text in values)
-    assert "Endpoint review — φMn not shown" in trace_names
-    assert text_by_trace["Endpoint review — φMn not shown"] == ["End-zone review", "End-zone review"]
-    endpoint_trace = next(trace for trace in fig.data if trace.name == "Endpoint review — φMn not shown")
-    assert all(float(y) > 0.0 for y in endpoint_trace.y)
-    assert endpoint_trace.marker.size >= 13
-    assert len(fig.layout.shapes or []) >= 2
+    assert not any(str(name).startswith("Endpoint review") for name in trace_names)
+    capacity_trace = next(trace for trace in fig.data if trace.name == "φMn preview — Strength I")
+    assert list(capacity_trace.x) == [0.0, 5.0, 10.0, 20.0]
+    assert list(capacity_trace.y) == [3450.0, 3500.0, 3580.44, 3450.0]
+
+
+def test_uls_flex1_3_preview_engine_plots_section_phi_mn_at_zero_mux_endpoints() -> None:
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+    from concrete_pmm_pro.ui.analysis_page import _beam_uls_flexure_preview_dataframe
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "ACI19-ULS-2", "Mux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "end"},
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 20.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "mid"},
+            {"Active": True, "Station x (m)": 6.0, "Case Name": "ACI19-ULS-2", "Mux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "end"},
+        ]
+    )
+
+    preview, messages = _beam_uls_flexure_preview_dataframe(state, active, code_label="ACI 318", is_building=True)
+
+    assert any("full-span section φMn preview" in message for message in messages)
+    endpoints = preview[preview["Governing x"].isin(["0.000 m", "6.000 m"])]
+    assert len(endpoints) == 2
+    assert set(endpoints["Status"]) == {"SECTION PREVIEW"}
+    assert all(endpoints["Capacity kN-m"] > 0.0)
+    assert endpoints["Utilization value"].isna().all()
+    assert "D/C is not applicable at zero demand" in endpoints.iloc[0]["Notes"]

@@ -50,6 +50,22 @@ EDITOR_COLUMNS = ["Active", "Case Name", "Limit State", "Pu", "Mux", "Muy", "Not
 COLUMN_ULS_LOAD_COLUMNS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vuy", "Tu", "Note"]
 COLUMN_SLS_LOAD_COLUMNS = ["Active", "Case Name", "P", "Mx", "My", "Note"]
 BEAM_ULS_LOAD_COLUMNS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
+
+# LOADS.TEMPLATE1 — ULS Beam/Girder import modes keep default input minimal while
+# making the engineering assumption explicit and auditable.  Users may still
+# add rows/cases manually in the dynamic table or import larger templates.
+BEAM_ULS_INPUT_MODE_MINIMUM = "Minimum design input — primary gravity combo"
+BEAM_ULS_INPUT_MODE_ENVELOPE = "Governing envelope input"
+BEAM_ULS_INPUT_MODE_FULL = "Full combination input"
+BEAM_ULS_INPUT_MODE_REVIEW = "Governing-only / engineering review"
+BEAM_ULS_INPUT_MODE_OPTIONS = [
+    BEAM_ULS_INPUT_MODE_MINIMUM,
+    BEAM_ULS_INPUT_MODE_ENVELOPE,
+    BEAM_ULS_INPUT_MODE_FULL,
+    BEAM_ULS_INPUT_MODE_REVIEW,
+]
+BEAM_ULS_INPUT_MODE_STATE_KEY = "beam_uls_input_mode"
+
 BEAM_SLS_LOAD_COLUMNS = ["Active", "Station x (m)", "Case Name", "Stage", "Load Component", "Section Basis", "N", "Mx", "My", "Vy", "Vx", "T", "Note"]
 # LOADS.SLS2A keeps Load Component as internal/project metadata for backward
 # compatibility, but the commercial Beam/Girder SLS editor exposes only the
@@ -528,13 +544,43 @@ def _default_column_sls_load_table() -> pd.DataFrame:
     )
 
 
-def _default_beam_uls_load_table() -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 1000.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Flexure/shear/torsion design resultant"},
-        ],
-        columns=BEAM_ULS_LOAD_COLUMNS,
-    )
+def _beam_uls_primary_case_name(workflow_key: str) -> str:
+    return "ACI19-ULS-2" if workflow_key == "building" else "Strength I"
+
+
+def _beam_uls_primary_case_note(workflow_key: str) -> str:
+    if workflow_key == "building":
+        return "Primary gravity combo: U = 1.2D + 1.6L + 0.5(Lr/S/R). Enter factored station resultants."
+    return "Primary AASHTO gravity strength combo. Enter factored station resultants from Strength I."
+
+
+def _beam_uls_template_row(case_name: str, *, station_m: float = 0.0, note: str = "", active: bool = False) -> dict[str, Any]:
+    """Return a safe Beam/Girder ULS template row.
+
+    Numeric demands are intentionally zero and Active defaults to False so a
+    fresh project cannot accidentally create fake design demand in Analysis.
+    """
+
+    return {
+        "Active": bool(active),
+        "Station x (m)": float(station_m),
+        "Case Name": case_name,
+        "Mux": 0.0,
+        "Vuy": 0.0,
+        "Tu": 0.0,
+        "Muy": 0.0,
+        "Vux": 0.0,
+        "Nu": 0.0,
+        "Note": note or "Template row — enter factored ULS demand and set Active when verified.",
+    }
+
+
+def _default_beam_uls_load_table(workflow_key: str = "bridge") -> pd.DataFrame:
+    """Return the minimal safe Beam/Girder ULS table for the active workflow."""
+
+    case_name = _beam_uls_primary_case_name(workflow_key)
+    note = _beam_uls_primary_case_note(workflow_key)
+    return pd.DataFrame([_beam_uls_template_row(case_name, note=note, active=False)], columns=BEAM_ULS_LOAD_COLUMNS)
 
 
 def _default_beam_sls_load_table() -> pd.DataFrame:
@@ -544,6 +590,167 @@ def _default_beam_sls_load_table() -> pd.DataFrame:
         [_beam_sls_default_row_for_stage(spec["stage"]) for spec in _beam_sls_stage_input_specs()],
         columns=BEAM_SLS_LOAD_COLUMNS,
     )
+
+
+def _beam_uls_mode_index(value: object) -> int:
+    text = str(value or "").strip()
+    return BEAM_ULS_INPUT_MODE_OPTIONS.index(text) if text in BEAM_ULS_INPUT_MODE_OPTIONS else 0
+
+
+def _beam_uls_station_template_values(span_length_m: float | None) -> list[float]:
+    try:
+        span = float(span_length_m) if span_length_m is not None else 20.0
+    except (TypeError, ValueError):
+        span = 20.0
+    if span <= 0.0:
+        span = 20.0
+    return [0.0, span / 4.0, span / 2.0, 3.0 * span / 4.0, span]
+
+
+def _beam_uls_template_case_names(workflow_key: str, mode: str) -> list[tuple[str, str]]:
+    """Return case labels/notes for the selected ULS input mode."""
+
+    if mode == BEAM_ULS_INPUT_MODE_ENVELOPE:
+        return [
+            ("ULS Envelope Mu+", "Envelope row for positive flexure demand."),
+            ("ULS Envelope Mu-", "Envelope row for negative flexure demand."),
+            ("ULS Envelope Vu", "Envelope row for governing shear demand."),
+            ("ULS Envelope Tu", "Envelope row for governing torsion demand, if applicable."),
+        ]
+    if mode == BEAM_ULS_INPUT_MODE_REVIEW:
+        primary = _beam_uls_primary_case_name(workflow_key)
+        return [(primary, "Governing-only input. Engineering review required: confirm omitted combinations do not govern any station/check.")]
+    if mode == BEAM_ULS_INPUT_MODE_FULL and workflow_key == "building":
+        return [
+            ("ACI19-ULS-1", "U = 1.4D"),
+            ("ACI19-ULS-2", "U = 1.2D + 1.6L + 0.5(Lr/S/R)"),
+            ("ACI19-ULS-3", "U = 1.2D + 1.6(Lr/S/R) + (1.0L or 0.5W)"),
+            ("ACI19-ULS-4", "U = 1.2D + 1.0W + 1.0L + 0.5(Lr/S/R)"),
+            ("ACI19-ULS-5", "U = 1.2D + 1.0E + 1.0L + 0.2S"),
+            ("ACI19-ULS-6", "U = 0.9D + 1.0W"),
+            ("ACI19-ULS-7", "U = 0.9D + 1.0E"),
+        ]
+    if mode == BEAM_ULS_INPUT_MODE_FULL:
+        return [
+            ("Strength I", "AASHTO LRFD primary gravity/live-load strength combo."),
+            ("Strength III", "AASHTO LRFD wind-on-structure strength combo where applicable."),
+            ("Strength V", "AASHTO LRFD live load plus wind strength combo where applicable."),
+            ("Extreme Event I", "Extreme event seismic/other project-specific event where applicable."),
+            ("Extreme Event II", "Extreme event collision/vessel/ice or project-specific event where applicable."),
+        ]
+    primary = _beam_uls_primary_case_name(workflow_key)
+    return [(primary, _beam_uls_primary_case_note(workflow_key))]
+
+
+def _beam_uls_template_table(workflow_key: str, mode: str, *, span_length_m: float | None = None, compact: bool = False) -> pd.DataFrame:
+    """Return a safe inactive ULS station-resultant template for UI/download."""
+
+    stations = [0.0] if compact else _beam_uls_station_template_values(span_length_m)
+    rows: list[dict[str, Any]] = []
+    for case_name, note in _beam_uls_template_case_names(workflow_key, mode):
+        for station in stations:
+            rows.append(_beam_uls_template_row(case_name, station_m=station, note=note, active=False))
+    return _stringify_table(pd.DataFrame(rows, columns=BEAM_ULS_LOAD_COLUMNS), BEAM_ULS_LOAD_COLUMNS)
+
+
+def _is_old_fake_beam_uls_default(df: pd.DataFrame) -> bool:
+    if len(df) != 1:
+        return False
+    row = df.iloc[0]
+    return (
+        _to_bool(row.get("Active"), default=False)
+        and str(row.get("Case Name") or "").strip() == "ULS-G1"
+        and _to_float(row.get("Mux")) == 1000.0
+        and _to_float(row.get("Vuy")) == 250.0
+        and "Flexure/shear/torsion design resultant" in str(row.get("Note") or "")
+    )
+
+
+def _is_safe_placeholder_beam_uls_table(df: pd.DataFrame) -> bool:
+    if df.empty:
+        return True
+    if len(df) > 10:
+        return False
+    for _, row in df.iterrows():
+        if _to_bool(row.get("Active"), default=False):
+            return False
+        note = str(row.get("Note") or "")
+        if "Template" not in note and "Primary" not in note and "Governing-only" not in note and "Envelope" not in note and "AASHTO" not in note and "U =" not in note:
+            return False
+        for column in ["Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"]:
+            value = _to_float(row.get(column))
+            if value is not None and abs(value) > 1.0e-12:
+                return False
+    return True
+
+
+def _ensure_beam_uls_default_template_for_workflow(workflow_key: str) -> None:
+    """Migrate old fake default rows to a safe inactive workflow-specific template."""
+
+    current = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
+    if _is_old_fake_beam_uls_default(current):
+        st.session_state["beam_uls_loads_table"] = _default_beam_uls_load_table(workflow_key)
+        return
+    if _is_safe_placeholder_beam_uls_table(current) and len(current) <= 1:
+        current_case = str(current.iloc[0].get("Case Name") if not current.empty else "")
+        expected_case = _beam_uls_primary_case_name(workflow_key)
+        primary_cases = {"Strength I", "ACI19-ULS-2", ""}
+        if current_case in primary_cases and current_case != expected_case:
+            st.session_state["beam_uls_loads_table"] = _default_beam_uls_load_table(workflow_key)
+
+
+def _beam_uls_mode_guidance(workflow_key: str, mode: str) -> tuple[str, str]:
+    primary = _beam_uls_primary_case_name(workflow_key)
+    if mode == BEAM_ULS_INPUT_MODE_MINIMUM:
+        return (
+            "Minimum design input",
+            f"Default combo is {primary}. Use this for ordinary gravity-controlled girder design; add more combinations if wind, seismic, torsion, uplift, special loads, or support-region checks may govern.",
+        )
+    if mode == BEAM_ULS_INPUT_MODE_ENVELOPE:
+        return (
+            "Governing envelope input",
+            "Use this when CSiBridge/SAP/ETABS/Excel has already enveloped factored station resultants separately for Mu, Vu, and Tu.",
+        )
+    if mode == BEAM_ULS_INPUT_MODE_FULL:
+        return (
+            "Full combination input",
+            "Use this when the project requires explicit review of multiple strength combinations. Analysis will read all Active rows and find governing demand.",
+        )
+    return (
+        "Governing-only input — engineering review",
+        "Use only when an external model/report has already proven the selected combination governs all relevant flexure, shear, torsion, and station checks.",
+    )
+
+
+def _render_beam_uls_input_mode_panel(*, workflow_key: str, key_prefix: str, span_length_m: float | None) -> tuple[str, pd.DataFrame]:
+    stored_mode = st.session_state.get(f"{key_prefix}_{BEAM_ULS_INPUT_MODE_STATE_KEY}") or st.session_state.get(BEAM_ULS_INPUT_MODE_STATE_KEY)
+    mode = st.selectbox(
+        "ULS input mode",
+        BEAM_ULS_INPUT_MODE_OPTIONS,
+        index=_beam_uls_mode_index(stored_mode),
+        key=f"{key_prefix}_{BEAM_ULS_INPUT_MODE_STATE_KEY}",
+        help="Controls the default/downloadable ULS station-resultant template. The editable table still allows adding rows manually.",
+    )
+    st.session_state[BEAM_ULS_INPUT_MODE_STATE_KEY] = mode
+    title, detail = _beam_uls_mode_guidance(workflow_key, mode)
+    if mode == BEAM_ULS_INPUT_MODE_REVIEW:
+        st.warning(f"{title}: {detail}")
+    else:
+        st.info(f"{title}: {detail}")
+    st.caption(
+        "ULS Loads require factored station resultants from strength load combinations. "
+        "Do not enter LL-only effects here unless the row is clearly marked as audit-only."
+    )
+    template = _beam_uls_template_table(workflow_key, mode, span_length_m=span_length_m, compact=False)
+    reset_cols = st.columns([1, 3])
+    with reset_cols[0]:
+        if st.button("Reset to selected template", use_container_width=True, key=f"{key_prefix}_reset_uls_template"):
+            st.session_state["beam_uls_loads_table"] = _beam_uls_template_table(workflow_key, mode, span_length_m=span_length_m, compact=True)
+            st.success("ULS table reset to the selected safe inactive template. Enter factored demands and set Active when verified.")
+            st.rerun()
+    with reset_cols[1]:
+        st.caption("Template rows are inactive by default to prevent fake design demand. Set Active only after entering verified factored Mu/Vu/Tu values.")
+    return mode, template
 
 
 def _split_mixed_editor_table_to_column_tables(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -842,11 +1049,11 @@ def _workflow_template_instructions(columns: list[str]) -> list[dict[str, str]]:
     instructions: list[dict[str, str]] = []
     for column in columns:
         if column == "Active":
-            text = "TRUE/FALSE. Blank is treated as TRUE during import."
+            text = "TRUE/FALSE. Beam/Girder ULS template rows are FALSE by default; set TRUE only after entering verified factored demands. Blank is treated as TRUE during import."
         elif column == "Station x (m)":
             text = "Girder station along member length in metres. Required for Beam/Girder station-based loads."
         elif column == "Case Name":
-            text = "Load case / combination name. For station-based girder tables, the same case name may repeat at different stations."
+            text = "Load case / combination name. For Beam/Girder ULS use factored strength-combination/resultant names such as Strength I or ACI19-ULS-2. The same case may repeat at different stations."
         elif column in {"Pu", "P", "N", "Nu", "Vux", "Vuy", "Vx", "Vy"}:
             text = "Force in the selected force unit. Compression is positive for axial force columns."
         elif column in {"Mux", "Muy", "Mx", "My", "Tu", "T"}:
@@ -870,10 +1077,7 @@ def _sample_workflow_template(table_name: str, columns: list[str], *, stage_labe
             {"Active": True, "Case Name": "SLS-02", "P": 850.0, "Mx": -40.0, "My": 55.0, "Note": "Alternate service case"},
         ]
     elif table_name == "Beam/Girder ULS":
-        rows = [
-            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 0.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "End station"},
-            {"Active": True, "Station x (m)": 10.0, "Case Name": "ULS-G1", "Mux": 1500.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "Midspan station"},
-        ]
+        return _beam_uls_template_table("bridge", BEAM_ULS_INPUT_MODE_MINIMUM, span_length_m=20.0, compact=False)
     elif table_name == "Beam/Girder SLS":
         spec = _beam_sls_stage_spec(stage_label or "Service stage")
         stage = spec["stage"]
@@ -1407,10 +1611,11 @@ def _render_workflow_import_tools(
     stage_label: str | None = None,
     replace_callback: Any | None = None,
     append_callback: Any | None = None,
+    template_df: pd.DataFrame | None = None,
 ) -> None:
     """Render download/import/apply controls for workflow-specific load inputs."""
 
-    template = _sample_workflow_template(table_name, columns, stage_label=stage_label)
+    template = _stringify_table(template_df, columns) if template_df is not None else _sample_workflow_template(table_name, columns, stage_label=stage_label)
     st.markdown(f"**{title}**")
     st.caption("Download the template, fill it in Excel, upload it, validate, then replace or append rows.")
     st.dataframe(template, use_container_width=True, hide_index=True)
@@ -1957,19 +2162,30 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     # LOADS.COMPACT1 — keep Beam/Girder load input decision-first by separating strength and service workflows.
     uls_tab, sls_tab = st.tabs(["ULS Loads", "SLS Loads"])
     with uls_tab:
+        _ensure_beam_uls_default_template_for_workflow("bridge")
         st.markdown("#### ULS Bridge Beam/Girder Design Loads")
-        st.caption("Use station-based factored resultants for future flexural, shear, and torsion design along the girder length. Mux, Vuy, and Tu are the primary girder ULS actions.")
-        with st.expander("Import Beam/Girder ULS station loads from Excel / CSV", expanded=False):
-            st.caption("Beam/Girder ULS loads are station-based. The same case name may repeat at different Station x values.")
+        st.caption(
+            "Input factored station resultants from AASHTO LRFD strength combinations. "
+            "Default combo is Strength I for ordinary gravity-controlled girder design, but users may add more combinations or import an envelope."
+        )
+        system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+        _, uls_template = _render_beam_uls_input_mode_panel(
+            workflow_key="bridge",
+            key_prefix="bridge_beam_uls",
+            span_length_m=system.span_length_m,
+        )
+        with st.expander("Import Bridge Beam/Girder ULS station loads from Excel / CSV", expanded=False):
+            st.caption("Bridge ULS loads are station-based factored resultants. The same case name may repeat at different Station x values.")
             _render_workflow_import_tools(
-                title="Beam/Girder ULS station-load import",
+                title="Bridge Beam/Girder ULS station-load import",
                 table_name="Beam/Girder ULS",
                 columns=BEAM_ULS_LOAD_COLUMNS,
                 numeric_columns=["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"],
                 state_key="beam_uls_loads_table",
                 editor_key="beam_uls_loads_editor",
-                key_prefix="beam_uls_station_loads",
+                key_prefix="bridge_beam_uls_station_loads",
                 unique_key_columns=["Case Name", "Station x (m)"],
+                template_df=uls_template,
             )
         uls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
         edited_uls = st.data_editor(
@@ -2148,10 +2364,17 @@ def _render_building_beam_girder_load_tables(force_unit: str, moment_unit: str) 
     # LOADS.COMPACT1 — Building uses the same compact ULS/SLS split without bridge-only SDL tools.
     uls_tab, sls_tab = st.tabs(["ULS Loads", "SLS Loads"])
     with uls_tab:
+        _ensure_beam_uls_default_template_for_workflow("building")
         st.markdown("#### ULS Building Beam/Girder Design Loads")
         st.caption(
-            "Use factored station-based resultants for future ACI flexure, shear, torsion, and prestressed girder strength checks. "
-            "This table is preserved from the existing ULS workflow and is not mixed with SLS service inputs below."
+            "Input factored station resultants from ACI 318-19 strength combinations. "
+            "Default combo is ACI19-ULS-2 for ordinary gravity-controlled beam/girder design, but users may add more combinations or import an envelope."
+        )
+        system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+        _, uls_template = _render_beam_uls_input_mode_panel(
+            workflow_key="building",
+            key_prefix="building_beam_uls",
+            span_length_m=system.span_length_m,
         )
         with st.expander("Import Building Beam/Girder ULS station loads from Excel / CSV", expanded=False):
             _render_workflow_import_tools(
@@ -2163,6 +2386,7 @@ def _render_building_beam_girder_load_tables(force_unit: str, moment_unit: str) 
                 editor_key="building_beam_uls_loads_editor",
                 key_prefix="building_beam_uls_station_loads",
                 unique_key_columns=["Case Name", "Station x (m)"],
+                template_df=uls_template,
             )
         uls_df = _stringify_table(pd.DataFrame(st.session_state.get("beam_uls_loads_table")), BEAM_ULS_LOAD_COLUMNS)
         edited_uls = st.data_editor(

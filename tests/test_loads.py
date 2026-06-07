@@ -17,9 +17,14 @@ from concrete_pmm_pro.ui.loads_page import (
     _beam_sls_stage_input_specs,
     _beam_sls_stage_editor_rows,
     _beam_sls_table_after_stage_edit,
+    _beam_uls_template_table,
     _column_workflow_tables_to_legacy_editor_table,
     _default_beam_sls_load_table,
     _default_beam_uls_load_table,
+    BEAM_ULS_INPUT_MODE_ENVELOPE,
+    BEAM_ULS_INPUT_MODE_FULL,
+    BEAM_ULS_INPUT_MODE_MINIMUM,
+    BEAM_ULS_INPUT_MODE_REVIEW,
     _excel_template_bytes,
     _normalize_editor_dataframe,
     prepare_imported_workflow_load_table,
@@ -313,6 +318,9 @@ def test_beam_girder_workflow_default_tables_use_three_stage_sls_model() -> None
     assert list(uls.columns) == BEAM_ULS_LOAD_COLUMNS
     assert ["Mux", "Vuy", "Tu"] == list(uls.columns[3:6])
     assert "Station x (m)" in uls.columns
+    assert uls.loc[0, "Active"] == False
+    assert uls.loc[0, "Case Name"] == "Strength I"
+    assert float(uls.loc[0, "Mux"]) == pytest.approx(0.0)
     assert list(sls.columns) == BEAM_SLS_LOAD_COLUMNS
     assert "Station x (m)" in sls.columns
     assert "Stage" in sls.columns
@@ -322,6 +330,32 @@ def test_beam_girder_workflow_default_tables_use_three_stage_sls_model() -> None
     assert list(sls["Load Component"]) == ["Girder self-weight", "Girder self-weight + wet deck/topping", "Total SLS resultant"]
     assert list(sls["Section Basis"]) == ["Precast gross", "Precast gross", "Composite transformed"]
     assert "SDL and LL+IM" in sls.loc[2, "Note"]
+
+
+def test_loads_template1_building_minimum_template_uses_aci19_uls2() -> None:
+    template = _beam_uls_template_table("building", BEAM_ULS_INPUT_MODE_MINIMUM, span_length_m=20.0)
+
+    assert set(template["Case Name"]) == {"ACI19-ULS-2"}
+    assert set(template["Active"]) == {False}
+    assert "1.2D + 1.6L" in str(template.iloc[0]["Note"])
+
+
+def test_loads_template1_bridge_full_template_includes_strength_cases() -> None:
+    template = _beam_uls_template_table("bridge", BEAM_ULS_INPUT_MODE_FULL, span_length_m=20.0, compact=True)
+
+    assert "Strength I" in set(template["Case Name"])
+    assert "Strength V" in set(template["Case Name"])
+    assert set(template["Active"]) == {False}
+
+
+def test_loads_template1_envelope_and_review_modes_are_safe_inactive() -> None:
+    envelope = _beam_uls_template_table("bridge", BEAM_ULS_INPUT_MODE_ENVELOPE, span_length_m=20.0, compact=True)
+    review = _beam_uls_template_table("building", BEAM_ULS_INPUT_MODE_REVIEW, span_length_m=20.0, compact=True)
+
+    assert "ULS Envelope Mu+" in set(envelope["Case Name"])
+    assert set(envelope["Active"]) == {False}
+    assert set(review["Case Name"]) == {"ACI19-ULS-2"}
+    assert set(review["Active"]) == {False}
 
 
 def test_beam_girder_service_stage_basis_follows_selected_section_family() -> None:
@@ -476,6 +510,11 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
     assert "ULS Building Beam/Girder Design Loads" in source
     assert "SLS Girder Service Loads" in source
     assert "LOADS.COMPACT1" in source
+    assert "LOADS.TEMPLATE1" in source
+    assert "Minimum design input — primary gravity combo" in source
+    assert "Strength I" in source
+    assert "ACI19-ULS-2" in source
+    assert "factored station resultants" in source
     assert 'st.tabs(["ULS Loads", "SLS Loads"])' in source
     assert 'st.expander("Axis convention for load input", expanded=False)' in source
     assert 'st.expander("Load input status", expanded=validation_has_issues)' in source
@@ -571,5 +610,5 @@ def test_loads_workflow1c_source_reflects_sls_preview_connection_and_basis_guida
     assert "detailed load-component dropdown" in source
     assert "Combined SLS backend table used by Analysis" in source
     assert "station-based" in source
-    assert "Import Beam/Girder ULS station loads" in source
+    assert "Import Bridge Beam/Girder ULS station loads" in source or "Import Bridge Beam/Girder ULS station" in source
     assert "full staged summation" in source

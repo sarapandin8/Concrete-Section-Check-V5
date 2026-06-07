@@ -216,6 +216,7 @@ PMM_3D_LAYER_DEFAULTS = {
 # Loads page remains the source of truth; Analysis consumes the station-based
 # beam_uls_loads_table read-only and does not duplicate ULS input.
 BEAM_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
+SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
 _BEAM_ULS_DEMAND_TOL = 1.0e-9
 _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS = 24
 _GIRDER_STRAND_FPU_MPA_DEFAULT = 1860.0
@@ -2922,7 +2923,7 @@ def _beam_uls_flexure_preview_dataframe(
                     "Governing x": station,
                     "Case": case,
                     "Demand": _format_beam_uls_demand(demand, "kN-m"),
-                    "Capacity": "-",
+                    "Capacity": capacity_note if check == "Shear" and default_status == "LAYOUT READY" else "-",
                     "Utilization": "-",
                     "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
                     "Capacity kN-m": float("nan"),
@@ -3027,7 +3028,27 @@ def _beam_uls_governing_flexure_preview_row(flexure_preview_df: pd.DataFrame | N
     return valid.loc[idx].to_dict()
 
 
-def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None = None) -> pd.DataFrame:
+
+
+def _beam_uls_active_shear_reinforcement_zone_count(state: Mapping[str, object]) -> int:
+    raw = _beam_uls_get_state_value(state, SHEAR_REINFORCEMENT_TABLE_KEY, None)
+    if raw is None:
+        raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get(SHEAR_REINFORCEMENT_TABLE_KEY)
+    df = pd.DataFrame(raw if raw is not None else [])
+    if df.empty or "Active" not in df.columns:
+        return 0
+    return int(sum(_beam_uls_active_value(value) for value in df["Active"].tolist()))
+
+
+def _beam_uls_shear_layout_status(state: Mapping[str, object]) -> tuple[str, str]:
+    if not state:
+        return "PLANNED", "-"
+    active_zones = _beam_uls_active_shear_reinforcement_zone_count(state)
+    if active_zones > 0:
+        return "LAYOUT READY", f"{active_zones} active stirrup zone(s); φVn engine planned"
+    return "LAYOUT REQUIRED", "Define active stirrup zones in Sections → Rebar → Shear Reinforcement"
+
+def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None = None, *, state: Mapping[str, object] | None = None) -> pd.DataFrame:
     flexure = _beam_uls_governing_action(active_df, "Mux")
     shear = _beam_uls_governing_action(active_df, "Vuy")
     torsion = _beam_uls_governing_action(active_df, "Tu")
@@ -3071,11 +3092,12 @@ def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFr
             }
         )
 
+    shear_status, shear_capacity_note = _beam_uls_shear_layout_status(state or {})
     specs = [
-        ("Shear", "PLANNED", shear, "kN"),
-        ("Torsion", "PLANNED", torsion, "kN-m"),
+        ("Shear", shear_status, shear, "kN", shear_capacity_note),
+        ("Torsion", "PLANNED", torsion, "kN-m", "-"),
     ]
-    for check, default_status, governing, unit in specs:
+    for check, default_status, governing, unit, capacity_note in specs:
         if governing is None or float(governing["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
             status = "OPTIONAL" if check == "Torsion" else "NOT READY"
             rows.append(
@@ -3097,7 +3119,7 @@ def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFr
                 "Governing x": _format_beam_uls_x(governing["x_m"]),
                 "Case": str(governing["case"]),
                 "Demand": _format_beam_uls_demand(governing["demand"], unit),
-                "Capacity": "-",
+                "Capacity": capacity_note if check == "Shear" and default_status == "LAYOUT READY" else "-",
                 "Utilization": "-",
             }
         )
@@ -3336,7 +3358,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         return
 
     st.markdown("#### Compact ULS check table")
-    st.dataframe(_beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df), use_container_width=True, hide_index=True)
+    st.dataframe(_beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, state=st.session_state), use_container_width=True, hide_index=True)
 
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(

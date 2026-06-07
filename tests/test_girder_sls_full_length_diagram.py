@@ -286,6 +286,7 @@ def test_uls_girder1_uses_primary_actions_only_in_default_decision_display() -> 
     assert "Critical flexure demand" in SOURCE
     assert "Critical shear demand" in SOURCE
     assert "φMn" in SOURCE
-    assert '("Shear", "PLANNED", shear, "kN")' in SOURCE
-    assert '("Torsion", "PLANNED", torsion, "kN-m")' in SOURCE
+    assert "_beam_uls_shear_layout_status" in SOURCE
+    assert "LAYOUT READY" in SOURCE
+    assert '("Torsion", "PLANNED", torsion, "kN-m", "-")' in SOURCE
     assert "Secondary actions Muy, Vux, and Nu are kept here for audit" in SOURCE

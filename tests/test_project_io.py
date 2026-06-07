@@ -523,3 +523,32 @@ def test_project_io_preserves_section_reinforcement_system_flags() -> None:
     assert restored["section_has_ordinary_rebar"] is False
     assert restored["section_has_prestressing_steel"] is True
     assert restored["reinforcement_flags_preset_key"] == "parametric_i_girder"
+
+
+
+def test_project_io_preserves_beam_girder_shear_reinforcement_layout() -> None:
+    session = {
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Left support",
+                "x_start_m": 0.0,
+                "x_end_m": 3.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 100.0,
+                "fy_MPa": 400.0,
+                "Note": "provided support zone",
+            }
+        ]
+    }
+
+    project = project_from_session_state(session)
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert "beam_girder_shear_reinforcement_table" in project.metadata
+    assert project.metadata["beam_girder_shear_reinforcement_table"][0]["Bar Size"] == "DB12"
+    assert "beam_girder_shear_reinforcement_table" in restored
+    assert restored["beam_girder_shear_reinforcement_table"].iloc[0]["Spacing_mm"] == 100.0

@@ -15,6 +15,7 @@ from concrete_pmm_pro.core.models import Rebar, SectionGeometry
 from concrete_pmm_pro.core.reinforcement_system import ordinary_rebar_enabled, prestressing_steel_enabled
 from concrete_pmm_pro.geometry.rebar_layout import PerimeterRebarLayoutResult, generate_perimeter_rebar_layout
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
+from concrete_pmm_pro.serviceability.girder_sls_load_components import BEAM_GIRDER_SYSTEM_SETTINGS_KEY, system_settings_from_mapping
 from concrete_pmm_pro.visualization import create_section_preview
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,31 @@ REBAR_DEFAULT_MATERIAL_BY_SIZE = {
 # used when creating the default table, normalizing data_editor output, comparing
 # edited rows, and feeding the Rebar parser.  This avoids subtle Streamlit rerun
 # bugs caused by missing columns or inconsistent column order.
+
+
+# SHEAR.REINF1 — Beam/Girder transverse reinforcement layout used by future
+# ULS shear design.  It is deliberately zone-based because commercial girder
+# design is detailed by stirrup regions, not by per-station manual entries.
+SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
+SHEAR_REINFORCEMENT_VALID_KEY = "beam_girder_shear_reinforcement_valid"
+SHEAR_REINFORCEMENT_COLUMNS = [
+    "Active",
+    "Zone",
+    "x_start_m",
+    "x_end_m",
+    "Bar Size",
+    "Diameter_mm",
+    "Legs",
+    "Spacing_mm",
+    "fy_MPa",
+    "Note",
+]
+SHEAR_STIRRUP_BAR_OPTIONS = ["DB10", "DB12", "DB16", "DB20", "DB25"]
+DEFAULT_SHEAR_STIRRUP_BAR = "DB12"
+DEFAULT_SHEAR_STIRRUP_LEGS = 2
+DEFAULT_SHEAR_STIRRUP_SPACING_MM = 150.0
+DEFAULT_SHEAR_STIRRUP_FY_MPA = 400.0
+
 REBAR_TABLE_COLUMNS = [
     "Active",
     "Label",
@@ -717,6 +743,266 @@ def _render_rebar_editor(table: pd.DataFrame, bar_size_options: list[str], edito
     )
 
 
+
+
+def _beam_girder_span_length_for_shear_layout() -> float:
+    settings = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    try:
+        span = float(settings.span_length_m)
+    except (TypeError, ValueError):
+        span = 20.0
+    return span if span > 0.0 else 20.0
+
+
+def _default_shear_reinforcement_table(span_length_m: float | None = None) -> pd.DataFrame:
+    span = float(span_length_m or 20.0)
+    if span <= 0.0:
+        span = 20.0
+    # Keep the default compact and safe.  The rows are inactive until the
+    # engineer confirms the provided layout.  DB12 is the default bar as
+    # requested, with symmetric support/transition/midspan zones.
+    left_support = min(0.15 * span, 3.0)
+    left_transition = min(0.30 * span, max(left_support, 6.0))
+    right_transition = span - left_transition
+    right_support = span - left_support
+    if right_transition < left_transition:
+        left_transition = 0.40 * span
+        right_transition = 0.60 * span
+    rows = [
+        ("Left support", 0.0, left_support, 100.0, "Template zone — verify support shear demand before activating."),
+        ("Left transition", left_support, left_transition, 150.0, "Template zone — adjust spacing after shear design."),
+        ("Midspan", left_transition, right_transition, 250.0, "Template zone — usually governed by minimum transverse reinforcement."),
+        ("Right transition", right_transition, right_support, 150.0, "Template zone — adjust spacing after shear design."),
+        ("Right support", right_support, span, 100.0, "Template zone — verify support shear demand before activating."),
+    ]
+    return pd.DataFrame(
+        [
+            {
+                "Active": False,
+                "Zone": zone,
+                "x_start_m": round(float(x0), 3),
+                "x_end_m": round(float(x1), 3),
+                "Bar Size": DEFAULT_SHEAR_STIRRUP_BAR,
+                "Diameter_mm": 12.0,
+                "Legs": DEFAULT_SHEAR_STIRRUP_LEGS,
+                "Spacing_mm": float(spacing),
+                "fy_MPa": DEFAULT_SHEAR_STIRRUP_FY_MPA,
+                "Note": note,
+            }
+            for zone, x0, x1, spacing, note in rows
+        ],
+        columns=SHEAR_REINFORCEMENT_COLUMNS,
+    )
+
+
+def _ensure_shear_reinforcement_columns(df: pd.DataFrame) -> pd.DataFrame:
+    table = df.copy()
+    for column in SHEAR_REINFORCEMENT_COLUMNS:
+        if column not in table.columns:
+            table[column] = None
+    return table[SHEAR_REINFORCEMENT_COLUMNS]
+
+
+def _shear_stirrup_bar_area_mm2(bar_size: str, rebar_db: pd.DataFrame) -> float | None:
+    matches = rebar_db.loc[rebar_db["name"] == str(bar_size).strip(), "area_mm2"]
+    if matches.empty:
+        return None
+    try:
+        return float(matches.iloc[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_shear_reinforcement_table(edited_df: pd.DataFrame, previous_df: pd.DataFrame | None, rebar_db: pd.DataFrame) -> pd.DataFrame:
+    table = _ensure_shear_reinforcement_columns(edited_df)
+    previous = _ensure_shear_reinforcement_columns(previous_df) if previous_df is not None else pd.DataFrame(columns=SHEAR_REINFORCEMENT_COLUMNS)
+    for index, row in table.iterrows():
+        bar_size = _normalized_bar_size(row.get("Bar Size")) or DEFAULT_SHEAR_STIRRUP_BAR
+        if bar_size not in SHEAR_STIRRUP_BAR_OPTIONS:
+            bar_size = DEFAULT_SHEAR_STIRRUP_BAR
+            table.at[index, "Bar Size"] = bar_size
+        default_diameter = _diameter_from_database(bar_size, rebar_db) or 12.0
+        previous_bar = _previous_bar_size(previous, index)
+        if bar_size != previous_bar or _is_blank(row.get("Diameter_mm")):
+            table.at[index, "Diameter_mm"] = default_diameter
+        if _is_blank(row.get("Legs")):
+            table.at[index, "Legs"] = DEFAULT_SHEAR_STIRRUP_LEGS
+        if _is_blank(row.get("Spacing_mm")):
+            table.at[index, "Spacing_mm"] = DEFAULT_SHEAR_STIRRUP_SPACING_MM
+        if _is_blank(row.get("fy_MPa")):
+            table.at[index, "fy_MPa"] = DEFAULT_SHEAR_STIRRUP_FY_MPA
+        if _is_blank(row.get("Active")):
+            table.at[index, "Active"] = False
+    return table
+
+
+def _shear_reinforcement_preview_dataframe(df: pd.DataFrame, rebar_db: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
+    table = _ensure_shear_reinforcement_columns(df)
+    rows: list[dict[str, object]] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    active_count = 0
+    for index, row in table.iterrows():
+        row_number = int(index) + 1
+        if all(_is_blank(row.get(column)) for column in ["Zone", "x_start_m", "x_end_m", "Bar Size", "Legs", "Spacing_mm", "Note"]):
+            continue
+        active = _to_bool(row.get("Active"))
+        if active:
+            active_count += 1
+        x0 = _to_float(row.get("x_start_m"))
+        x1 = _to_float(row.get("x_end_m"))
+        legs = _to_count(row.get("Legs"))
+        spacing = _to_float(row.get("Spacing_mm"))
+        fy = _to_float(row.get("fy_MPa"))
+        bar_size = str(row.get("Bar Size") or DEFAULT_SHEAR_STIRRUP_BAR).strip()
+        area = _shear_stirrup_bar_area_mm2(bar_size, rebar_db)
+        row_errors: list[str] = []
+        if x0 is None or x1 is None:
+            row_errors.append("x start/end must be numeric")
+        elif x1 <= x0:
+            row_errors.append("x end must be greater than x start")
+        if bar_size not in SHEAR_STIRRUP_BAR_OPTIONS:
+            row_errors.append("bar size must be DB10, DB12, DB16, DB20, or DB25")
+        if area is None:
+            row_errors.append("bar area not found")
+        if legs is None or legs < 1:
+            row_errors.append("legs must be an integer ≥ 1")
+        if spacing is None or spacing <= 0:
+            row_errors.append("spacing must be positive")
+        if fy is None or fy <= 0:
+            row_errors.append("fy must be positive")
+        if row_errors:
+            errors.append(f"Row {row_number}: " + "; ".join(row_errors) + ".")
+            avs_mm2_per_mm = None
+            avs_mm2_per_m = None
+        else:
+            avs_mm2_per_mm = float(area) * float(legs) / float(spacing)
+            avs_mm2_per_m = avs_mm2_per_mm * 1000.0
+        rows.append(
+            {
+                "Active": active,
+                "Zone": str(row.get("Zone") or f"Zone {row_number}"),
+                "x start (m)": x0 if x0 is not None else "-",
+                "x end (m)": x1 if x1 is not None else "-",
+                "Stirrup": f"{bar_size} × {legs or '-'} legs @ {spacing if spacing is not None else '-'} mm",
+                "fy (MPa)": fy if fy is not None else "-",
+                "Av/s (mm²/mm)": avs_mm2_per_mm if avs_mm2_per_mm is not None else "-",
+                "Av/s (mm²/m)": avs_mm2_per_m if avs_mm2_per_m is not None else "-",
+                "Note": str(row.get("Note") or ""),
+            }
+        )
+    if active_count == 0:
+        warnings.append("No active shear reinforcement zones are confirmed yet. Future φVn check will remain NOT READY until provided stirrup zones are activated.")
+    return pd.DataFrame(rows), errors, warnings
+
+
+def _shear_reinforcement_column_config() -> dict[str, Any]:
+    return {
+        "Active": st.column_config.CheckboxColumn("Active", width="small", help="Activate only after the zone is verified as provided reinforcement."),
+        "Zone": st.column_config.TextColumn("Zone", width="medium"),
+        "x_start_m": st.column_config.NumberColumn("x start (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
+        "x_end_m": st.column_config.NumberColumn("x end (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
+        "Bar Size": st.column_config.SelectboxColumn("Bar Size", options=SHEAR_STIRRUP_BAR_OPTIONS, width="small"),
+        "Diameter_mm": st.column_config.NumberColumn("Diameter (mm)", min_value=1.0, step=1.0, format="%.1f", width="small", help="Auto-filled from selected bar size."),
+        "Legs": st.column_config.NumberColumn("Legs", min_value=1, step=1, width="small"),
+        "Spacing_mm": st.column_config.NumberColumn("Spacing (mm)", min_value=1.0, step=25.0, format="%.1f", width="small"),
+        "fy_MPa": st.column_config.NumberColumn("fy (MPa)", min_value=1.0, step=10.0, format="%.1f", width="small"),
+        "Note": st.column_config.TextColumn("Note", width="large"),
+    }
+
+
+def _store_shear_reinforcement_metadata(table: pd.DataFrame) -> None:
+    metadata = dict(st.session_state.get("project_metadata", {}) or {})
+    metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(table).to_dict(orient="records")
+    st.session_state["project_metadata"] = metadata
+
+
+def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
+    st.markdown("#### Beam/Girder Shear Reinforcement Layout")
+    st.caption(
+        "Define provided stirrup zones along the member for future ULS shear checks. "
+        "This is a layout/input milestone only: it previews Av/s provided but does not calculate φVn yet."
+    )
+    span_m = _beam_girder_span_length_for_shear_layout()
+    if SHEAR_REINFORCEMENT_TABLE_KEY not in st.session_state:
+        existing = (st.session_state.get("project_metadata", {}) or {}).get(SHEAR_REINFORCEMENT_TABLE_KEY)
+        if isinstance(existing, list):
+            st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(pd.DataFrame(existing))
+        else:
+            st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _default_shear_reinforcement_table(span_m)
+    st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY]))
+
+    cards = [
+        RebarMetric("Input method", "Zone table", "Commercial girder detailing"),
+        RebarMetric("Default stirrup", DEFAULT_SHEAR_STIRRUP_BAR, "Dropdown: DB10/DB12/DB16/DB20/DB25"),
+        RebarMetric("Span basis", f"{span_m:.3f} m", "From Setup when available"),
+        RebarMetric("Shear check", "Planned", "φVn engine follows after layout"),
+        RebarMetric("Final use", "Provided layout", "Auto minimum will be a design aid only"),
+    ]
+    st.markdown(_strip_html(cards), unsafe_allow_html=True)
+
+    action_cols = st.columns([1.0, 1.0, 3.0], gap="small")
+    with action_cols[0]:
+        if st.button("Reset to DB12 zone template", use_container_width=True, key="shear_reinf_reset_template"):
+            st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _default_shear_reinforcement_table(span_m)
+            _store_shear_reinforcement_metadata(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY])
+            st.rerun()
+    with action_cols[1]:
+        if st.button("Activate all zones", use_container_width=True, key="shear_reinf_activate_all"):
+            table = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY]))
+            table["Active"] = True
+            st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = table
+            _store_shear_reinforcement_metadata(table)
+            st.rerun()
+    with action_cols[2]:
+        st.info(
+            "Use Active only for reinforcement that is actually provided/accepted. "
+            "Future shear analysis will read active zones as the provided stirrup layout; it will not silently assume minimum stirrups."
+        )
+
+    previous = st.session_state.get(SHEAR_REINFORCEMENT_TABLE_KEY)
+    edited = st.data_editor(
+        _ensure_shear_reinforcement_columns(pd.DataFrame(previous)),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=_shear_reinforcement_column_config(),
+        key="beam_girder_shear_reinforcement_editor",
+    )
+    normalized = _normalize_shear_reinforcement_table(edited, pd.DataFrame(previous), rebar_db)
+    st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = normalized
+    _store_shear_reinforcement_metadata(normalized)
+
+    preview_df, errors, warnings = _shear_reinforcement_preview_dataframe(normalized, rebar_db)
+    st.session_state[SHEAR_REINFORCEMENT_VALID_KEY] = not errors and not warnings
+
+    with st.expander("Shear reinforcement status", expanded=bool(errors or warnings)):
+        active_rows = int(sum(_to_bool(value) for value in normalized.get("Active", []))) if not normalized.empty else 0
+        cols = st.columns(4)
+        cols[0].metric("Zones", f"{len(normalized):,}")
+        cols[1].metric("Active zones", f"{active_rows:,}")
+        cols[2].metric("Errors", f"{len(errors):,}")
+        cols[3].metric("Default bar", DEFAULT_SHEAR_STIRRUP_BAR)
+        for error in errors:
+            st.error(error)
+        for warning in warnings:
+            st.warning(warning)
+        if not errors and not warnings:
+            st.success("Shear reinforcement layout is ready as provided-zone input for the future φVn engine.")
+
+    st.markdown("##### Av/s provided preview")
+    st.caption("Preview only. Final φVn, φVc, φVs, maximum spacing, and minimum shear reinforcement checks will be added in the next shear milestone.")
+    if preview_df.empty:
+        st.info("No shear reinforcement zones are defined yet.")
+    else:
+        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+    with st.expander("Shear reinforcement workflow notes", expanded=False):
+        st.write("- Provided stirrup layout is the future source of truth for φVn checks.")
+        st.write("- DB12 is the default stirrup size; users can select DB10, DB12, DB16, DB20, or DB25 by zone.")
+        st.write("- Auto required/minimum stirrup design should be a design assistant only; the final check must use the provided active layout.")
+        st.write("- No shear strength formula is calculated in SHEAR.REINF1.")
+
 def render_rebar_page() -> None:
     st.markdown(_REBAR_PAGE_CSS, unsafe_allow_html=True)
     st.subheader("Rebar")
@@ -738,6 +1024,8 @@ def render_rebar_page() -> None:
             else:
                 st.dataframe(_ensure_rebar_table_columns(pd.DataFrame(table)), use_container_width=True, hide_index=True)
         st.session_state["rebars_valid_for_analysis"] = True
+        st.divider()
+        _render_shear_reinforcement_layout(rebar_db)
         return
 
     if "rebar_table" not in st.session_state:
@@ -853,3 +1141,6 @@ def render_rebar_page() -> None:
 
     st.subheader("Rebar Summary")
     st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
+
+    st.divider()
+    _render_shear_reinforcement_layout(rebar_db)

@@ -15,6 +15,10 @@ from concrete_pmm_pro.ui.rebar_page import (
     rebar_summary_dataframe,
     rebars_valid_for_analysis,
     validate_rebars_against_geometry,
+    _default_shear_reinforcement_table,
+    _normalize_shear_reinforcement_table,
+    _shear_reinforcement_preview_dataframe,
+    SHEAR_STIRRUP_BAR_OPTIONS,
 )
 
 
@@ -304,3 +308,30 @@ def test_rebars_from_dataframe_empty_active_rows_does_not_emit_presence_warning(
 
     assert result.rebars == []
     assert not any("No active" in warning for warning in result.warnings)
+
+
+
+def test_shear_reinforcement_default_template_uses_db12_and_allowed_dropdown_sizes() -> None:
+    table = _default_shear_reinforcement_table(20.0)
+
+    assert not table.empty
+    assert set(table["Bar Size"]) == {"DB12"}
+    assert table["Active"].eq(False).all()
+    assert SHEAR_STIRRUP_BAR_OPTIONS == ["DB10", "DB12", "DB16", "DB20", "DB25"]
+
+
+def test_shear_reinforcement_preview_calculates_avs_for_active_zone() -> None:
+    rebar_db = load_rebar_database()
+    table = _default_shear_reinforcement_table(20.0).head(1).copy()
+    table.loc[0, "Active"] = True
+    table.loc[0, "Bar Size"] = "DB12"
+    table.loc[0, "Legs"] = 2
+    table.loc[0, "Spacing_mm"] = 100.0
+
+    normalized = _normalize_shear_reinforcement_table(table, table, rebar_db)
+    preview, errors, warnings = _shear_reinforcement_preview_dataframe(normalized, rebar_db)
+
+    assert not errors
+    assert not warnings
+    assert preview.iloc[0]["Av/s (mm²/mm)"] == pytest.approx(2 * 113.1 / 100.0, rel=1e-3)
+    assert preview.iloc[0]["Av/s (mm²/m)"] == pytest.approx(2 * 113.1 / 100.0 * 1000.0, rel=1e-3)

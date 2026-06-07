@@ -2831,14 +2831,54 @@ def _beam_uls_flexure_preview_dataframe(
         return pd.DataFrame(columns=columns), ["No active ULS rows available for flexure preview."]
     rows: list[dict[str, object]] = []
     messages: list[str] = []
-    demand_rows = active_df.copy()
-    demand_rows = demand_rows[pd.to_numeric(demand_rows["Mux"], errors="coerce").abs() > _BEAM_ULS_DEMAND_TOL]
-    if len(demand_rows.index) > _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS:
+    source_rows = active_df.copy()
+    source_rows["__station_m"] = pd.to_numeric(source_rows["Station x (m)"], errors="coerce")
+    source_rows["__mux_kNm"] = pd.to_numeric(source_rows["Mux"], errors="coerce")
+    nonzero_rows = source_rows[source_rows["__mux_kNm"].abs() > _BEAM_ULS_DEMAND_TOL].copy()
+    if len(nonzero_rows.index) > _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS:
         messages.append(
             f"Flexure preview limited to the first {_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS} nonzero Mux rows for responsiveness. Use envelope input for large imports."
         )
-        demand_rows = demand_rows.head(_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS)
+        nonzero_rows = nonzero_rows.head(_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS)
+
+    endpoint_rows = pd.DataFrame(columns=source_rows.columns)
+    finite_station_rows = source_rows[source_rows["__station_m"].notna()].copy()
+    if not finite_station_rows.empty:
+        end_stations = {float(finite_station_rows["__station_m"].min()), float(finite_station_rows["__station_m"].max())}
+        endpoint_rows = finite_station_rows[
+            finite_station_rows["__station_m"].map(lambda value: float(value) in end_stations)
+            & finite_station_rows["__mux_kNm"].notna()
+            & (finite_station_rows["__mux_kNm"].abs() <= _BEAM_ULS_DEMAND_TOL)
+            & ~finite_station_rows.index.isin(nonzero_rows.index)
+        ].copy()
+        if not endpoint_rows.empty:
+            messages.append(
+                "Zero-Mux end station(s) are shown as REVIEW markers only; end-zone/development flexure capacity is not certified in this preview."
+            )
+
+    demand_rows = pd.concat([nonzero_rows, endpoint_rows], axis=0).sort_values(["Case Name", "__station_m"], kind="stable")
     for _, demand_row in demand_rows.iterrows():
+        demand = _beam_uls_float(demand_row.get("Mux"))
+        station = _format_beam_uls_x(demand_row.get("Station x (m)"))
+        case = str(demand_row.get("Case Name") or "-")
+        if math.isfinite(demand) and abs(demand) <= _BEAM_ULS_DEMAND_TOL:
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": "-",
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": 0.0,
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Method": "zero-demand endpoint review",
+                    "Notes": "Zero Mux endpoint; φMn preview is not plotted. End-zone/development capacity is not certified in this preview.",
+                }
+            )
+            continue
         analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(
             state,
             row=demand_row,
@@ -2846,9 +2886,6 @@ def _beam_uls_flexure_preview_dataframe(
             is_building=is_building,
         )
         messages.extend(input_messages)
-        demand = _beam_uls_float(demand_row.get("Mux"))
-        station = _format_beam_uls_x(demand_row.get("Station x (m)"))
-        case = str(demand_row.get("Case Name") or "-")
         if analysis_input is None:
             rows.append(
                 {
@@ -3046,9 +3083,12 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
         dc_value = str(flex_preview.get("Utilization") or "-")
         flexure_card_value = f"{flexure_value} · D/C {dc_value}" if dc_value != "-" else flexure_value
         flexure_card_detail = f"{flexure_detail}; {flex_preview.get('Capacity', '-')}"
-        overall_value = "FLEXURE PREVIEW"
-        overall_detail = f"{len(active_df):,} active demand row(s). Flexure φMn preview is available; shear/torsion remain planned, so no overall ULS PASS/FAIL is issued."
-        overall_status = "warning" if status_text == "FAIL" else "info"
+        overall_value = f"FLEXURE PREVIEW — {status_text}"
+        overall_detail = (
+            f"{len(active_df):,} active demand row(s). Flexure φMn preview is {status_text}; "
+            "shear/torsion remain planned, so no overall ULS PASS/FAIL is issued."
+        )
+        overall_status = "danger" if status_text == "FAIL" else ("ready" if status_text == "PASS" else "warning")
     else:
         flexure_card_value = flexure_value
         flexure_card_detail = flexure_detail + "; φMn preview not ready"
@@ -3137,42 +3177,81 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
     if flexure_preview_df is None or flexure_preview_df.empty:
         fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand only — φMn preview not ready</sup>"})
         return fig
-    plot_df = flexure_preview_df.copy()
-    plot_df = plot_df[pd.to_numeric(plot_df["Capacity kN-m"], errors="coerce").notna()]
-    plot_df = plot_df[pd.to_numeric(plot_df["Demand kN-m"], errors="coerce").notna()]
-    if plot_df.empty:
+
+    preview_df = flexure_preview_df.copy()
+    preview_df["__x_m"] = preview_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+    preview_df["__x_m"] = pd.to_numeric(preview_df["__x_m"], errors="coerce")
+    preview_df["__demand_kNm"] = pd.to_numeric(preview_df["Demand kN-m"], errors="coerce")
+    preview_df["__capacity_kNm"] = pd.to_numeric(preview_df["Capacity kN-m"], errors="coerce")
+    preview_df["__utilization"] = pd.to_numeric(preview_df["Utilization value"], errors="coerce")
+
+    capacity_df = preview_df[preview_df["__x_m"].notna() & preview_df["__demand_kNm"].notna() & preview_df["__capacity_kNm"].notna()].copy()
+    if capacity_df.empty:
         fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand only — φMn preview not ready</sup>"})
         return fig
-    x_values: list[float] = []
-    y_values: list[float] = []
-    text_values: list[str] = []
-    for _, row in plot_df.iterrows():
-        x_text = str(row.get("Governing x") or "").replace(" m", "")
-        try:
-            x_val = float(x_text)
-        except (TypeError, ValueError):
-            continue
-        demand = float(row["Demand kN-m"])
-        capacity = float(row["Capacity kN-m"])
-        sign = -1.0 if demand < 0.0 else 1.0
-        x_values.append(x_val)
-        y_values.append(sign * capacity)
-        text_values.append(str(row.get("Status") or ""))
-    if x_values:
+
+    capacity_df = capacity_df.sort_values(["Case", "__x_m"], kind="stable")
+    for case_name, case_df in capacity_df.groupby("Case", sort=False):
+        x_values: list[float] = []
+        y_values: list[float] = []
+        for _, row in case_df.iterrows():
+            demand = float(row["__demand_kNm"])
+            capacity = float(row["__capacity_kNm"])
+            sign = -1.0 if demand < 0.0 else 1.0
+            x_values.append(float(row["__x_m"]))
+            y_values.append(sign * capacity)
         fig.add_trace(
             go.Scatter(
                 x=x_values,
                 y=y_values,
-                mode="markers+lines+text",
-                text=text_values,
-                textposition="top center",
-                name="φMn preview at station",
+                mode="markers+lines",
+                name=f"φMn preview — {case_name}",
                 hovertemplate="x=%{x:.3f} m<br>φMn preview=%{y:.3f} kN-m<extra></extra>",
             )
         )
+
+    governing_candidates = capacity_df[capacity_df["__utilization"].notna()].copy()
+    if not governing_candidates.empty:
+        idx = governing_candidates["__utilization"].astype(float).idxmax()
+        row = governing_candidates.loc[idx]
+        demand = float(row["__demand_kNm"])
+        capacity = float(row["__capacity_kNm"])
+        sign = -1.0 if demand < 0.0 else 1.0
+        utilization = float(row["__utilization"])
+        status = str(row.get("Status") or "REVIEW")
+        fig.add_trace(
+            go.Scatter(
+                x=[float(row["__x_m"])],
+                y=[sign * capacity],
+                mode="markers+text",
+                text=[f"{status} · D/C {utilization:.3f}"],
+                textposition="top center",
+                name="Governing flexure preview",
+                hovertemplate="x=%{x:.3f} m<br>Governing φMn preview=%{y:.3f} kN-m<extra></extra>",
+            )
+        )
+
+    endpoint_review_df = preview_df[
+        preview_df["__x_m"].notna()
+        & preview_df["__demand_kNm"].notna()
+        & preview_df["__capacity_kNm"].isna()
+        & preview_df["Method"].astype(str).str.contains("zero-demand endpoint", case=False, na=False)
+    ].copy()
+    if not endpoint_review_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=endpoint_review_df["__x_m"],
+                y=endpoint_review_df["__demand_kNm"],
+                mode="markers+text",
+                text=["end-zone review"] * len(endpoint_review_df.index),
+                textposition="bottom center",
+                name="Endpoint review — φMn not shown",
+                hovertemplate="x=%{x:.3f} m<br>φMn preview not shown at zero-Mux end station<extra></extra>",
+            )
+        )
+
     fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs φMn preview</sup>"})
     return fig
-
 
 def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
     """Render compact ULS demand/flexure-preview workspace for Bridge/Building Beam/Girder.
@@ -3232,6 +3311,10 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.plotly_chart(
                 _make_beam_uls_flexure_preview_figure(active_df, flexure_preview_df, code_label=code_label),
                 use_container_width=True,
+            )
+            st.caption(
+                "φMn preview is omitted at zero-Mux end stations and at stations where capacity cannot be interpolated. "
+                "Those stations are treated as REVIEW; end-zone/development capacity is not certified in this preview."
             )
         with shear_tab:
             st.plotly_chart(

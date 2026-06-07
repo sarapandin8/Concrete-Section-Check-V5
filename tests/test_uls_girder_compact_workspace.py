@@ -117,7 +117,7 @@ def test_uls_flex1_summary_reports_partial_flexure_preview_not_overall_pass() ->
 
     cards = _beam_uls_summary_cards(active, workflow_label="Building Beam/Girder", code_label="ACI 318", flexure_preview_df=preview)
 
-    assert cards[0]["value"] == "FLEXURE PREVIEW"
+    assert cards[0]["value"] == "FLEXURE PREVIEW — PASS"
     assert "no overall ULS PASS/FAIL" in cards[0]["detail"]
     assert cards[1]["title"] == "Critical flexure demand / D/C preview"
     assert "D/C 0.500" in cards[1]["value"]
@@ -160,3 +160,66 @@ def test_uls_flex1_preview_engine_returns_phi_mn_for_simple_rc_section() -> None
     assert row["Capacity kN-m"] > 0.0
     assert row["Utilization value"] > 0.0
     assert "Primary Mux flexure only" in row["Notes"]
+
+
+def test_uls_flex1_1_summary_status_includes_flexure_preview_result() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "Strength I", "Mux": 5000.0, "Vuy": 120.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    preview = pd.DataFrame(
+        [
+            {
+                "Check": "Flexure",
+                "Status": "FAIL",
+                "Governing x": "10.000 m",
+                "Case": "Strength I",
+                "Demand": "5,000.00 kN-m",
+                "Capacity": "φMn preview = 3,580.44 kN-m",
+                "Utilization": "1.396",
+                "Demand kN-m": 5000.0,
+                "Capacity kN-m": 3580.44,
+                "Utilization value": 1.396,
+                "Method": "slice_envelope",
+                "Notes": "Primary Mux flexure only",
+            }
+        ]
+    )
+
+    cards = _beam_uls_summary_cards(active, workflow_label="Bridge Beam/Girder", code_label="AASHTO LRFD", flexure_preview_df=preview)
+
+    assert cards[0]["value"] == "FLEXURE PREVIEW — FAIL"
+    assert cards[0]["status"] == "danger"
+    assert "no overall ULS PASS/FAIL" in cards[0]["detail"]
+
+
+def test_uls_flex1_1_flexure_figure_labels_only_governing_preview_not_every_station() -> None:
+    from concrete_pmm_pro.ui.analysis_page import _make_beam_uls_flexure_preview_figure
+
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 2500.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "Strength I", "Mux": 5000.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 20.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    preview = pd.DataFrame(
+        [
+            {"Check": "Flexure", "Status": "REVIEW", "Governing x": "0.000 m", "Case": "Strength I", "Demand": "-", "Capacity": "-", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": float("nan"), "Utilization value": float("nan"), "Method": "zero-demand endpoint review", "Notes": "Zero Mux endpoint"},
+            {"Check": "Flexure", "Status": "PASS", "Governing x": "5.000 m", "Case": "Strength I", "Demand": "2,500.00 kN-m", "Capacity": "φMn preview = 3,500.00 kN-m", "Utilization": "0.714", "Demand kN-m": 2500.0, "Capacity kN-m": 3500.0, "Utilization value": 0.714, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
+            {"Check": "Flexure", "Status": "FAIL", "Governing x": "10.000 m", "Case": "Strength I", "Demand": "5,000.00 kN-m", "Capacity": "φMn preview = 3,580.44 kN-m", "Utilization": "1.396", "Demand kN-m": 5000.0, "Capacity kN-m": 3580.44, "Utilization value": 1.396, "Method": "slice_envelope", "Notes": "Primary Mux flexure only"},
+            {"Check": "Flexure", "Status": "REVIEW", "Governing x": "20.000 m", "Case": "Strength I", "Demand": "-", "Capacity": "-", "Utilization": "-", "Demand kN-m": 0.0, "Capacity kN-m": float("nan"), "Utilization value": float("nan"), "Method": "zero-demand endpoint review", "Notes": "Zero Mux endpoint"},
+        ]
+    )
+
+    fig = _make_beam_uls_flexure_preview_figure(active, preview, code_label="AASHTO LRFD")
+    trace_names = [trace.name for trace in fig.data]
+    text_by_trace = {trace.name: list(trace.text) if getattr(trace, "text", None) is not None else [] for trace in fig.data}
+
+    assert "Governing flexure preview" in trace_names
+    assert text_by_trace["Governing flexure preview"] == ["FAIL · D/C 1.396"]
+    assert all("PASS" not in text for values in text_by_trace.values() for text in values)
+    assert "Endpoint review — φMn not shown" in trace_names
+    assert text_by_trace["Endpoint review — φMn not shown"] == ["end-zone review", "end-zone review"]

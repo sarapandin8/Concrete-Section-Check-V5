@@ -8,6 +8,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_shear_audit_dataframe,
     _beam_uls_shear_check_dataframe,
     _beam_uls_shear_detailing_guard,
+    _beam_uls_shear_reinforcement_status_dataframe,
     _beam_uls_summary_cards,
     _beam_uls_torsion_interaction_status,
 )
@@ -745,6 +746,35 @@ def test_uls_shear2_audit_dataframe_exposes_detailing_guard_columns() -> None:
     assert row["Av/s min"] == "300.00 mm²/m"
     assert row["s max"] == "250.00 mm"
     assert row["Spacing D/C"] == "1.500"
+
+
+
+def test_uls_shear2_1_status_dataframe_explains_inactive_stirrup_zones() -> None:
+    state = {
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": False,
+                "Zone": "Support",
+                "x_start_m": 0.0,
+                "x_end_m": 4.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "template",
+            }
+        ]
+    }
+
+    status = _beam_uls_shear_reinforcement_status_dataframe(state)
+
+    assert len(status) == 1
+    row = status.iloc[0]
+    assert row["Active"] == "No"
+    assert row["Readiness"] == "INACTIVE — not used for φVn"
+    assert row["Av/s provided"].endswith("mm²/m")
+
 
 def test_uls_ui2_check_tabs_are_main_workspace_labels() -> None:
     assert BEAM_ULS_CHECK_TAB_LABELS == ["Flexure", "Shear", "Torsion", "Shear + Torsion"]

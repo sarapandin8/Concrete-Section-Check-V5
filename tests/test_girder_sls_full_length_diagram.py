@@ -290,6 +290,9 @@ def test_uls_girder1_uses_primary_actions_only_in_default_decision_display() -> 
     assert "Critical shear demand" in SOURCE
     assert "φMn" in SOURCE
     assert "_beam_uls_shear_layout_status" in SOURCE
+    assert "Why no φVn line?" in SOURCE
+    assert "Provided stirrup layout read from Sections → Rebar" in SOURCE
+    assert "φVn is not plotted because" in SOURCE
     assert "LAYOUT READY" in SOURCE
     assert '"Check": "Torsion"' in SOURCE
     assert '"Status": "PLANNED"' in SOURCE

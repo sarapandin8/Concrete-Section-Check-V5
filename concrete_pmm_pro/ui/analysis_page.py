@@ -3379,6 +3379,96 @@ def _beam_uls_shear_reinforcement_dataframe_from_state(state: Mapping[str, objec
     return df
 
 
+
+
+def _beam_uls_shear_reinforcement_status_dataframe(state: Mapping[str, object]) -> pd.DataFrame:
+    """Return a compact read-only view of the stirrup layout consumed by Analysis.
+
+    The Shear tab is not an input owner.  This table makes the source-of-truth
+    visible when φVn is not plotted, so users can see whether the issue is a
+    missing table, inactive zones, or incomplete bar/spacing data.
+    """
+
+    columns = ["Active", "Zone", "Range", "Stirrup", "Av/s provided", "Readiness", "Note"]
+    df = _beam_uls_shear_reinforcement_dataframe_from_state(state)
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for _, row in df.iterrows():
+        active = bool(row.get("Active"))
+        x_start = _beam_uls_float(row.get("x_start_m"))
+        x_end = _beam_uls_float(row.get("x_end_m"))
+        legs = _beam_uls_float(row.get("Legs"))
+        spacing = _beam_uls_float(row.get("Spacing_mm"))
+        fy = _beam_uls_float(row.get("fy_MPa"))
+        bar = str(row.get("Bar Size") or "-").strip() or "-"
+        area = _beam_uls_stirrup_area_mm2(row)
+        avs_m = area * legs / spacing * 1000.0 if all(math.isfinite(value) and value > 0.0 for value in [area, legs, spacing]) else float("nan")
+        complete = all(math.isfinite(value) and value > 0.0 for value in [area, legs, spacing, fy]) and math.isfinite(x_start) and math.isfinite(x_end) and x_end >= x_start
+        if active and complete:
+            readiness = "ACTIVE / READY"
+        elif active:
+            readiness = "ACTIVE / INCOMPLETE"
+        else:
+            readiness = "INACTIVE — not used for φVn"
+        range_text = f"{x_start:.3f}–{x_end:.3f} m" if math.isfinite(x_start) and math.isfinite(x_end) else "-"
+        stirrup_text = f"{bar} × {int(legs) if math.isfinite(legs) and legs > 0 else '-'} legs @ {spacing:.0f} mm" if math.isfinite(spacing) and spacing > 0 else f"{bar} × {int(legs) if math.isfinite(legs) and legs > 0 else '-'} legs @ -"
+        rows.append(
+            {
+                "Active": "Yes" if active else "No",
+                "Zone": str(row.get("Zone") or "-"),
+                "Range": range_text,
+                "Stirrup": stirrup_text,
+                "Av/s provided": _format_beam_uls_audit_number(avs_m, unit="mm²/m"),
+                "Readiness": readiness,
+                "Note": str(row.get("Note") or ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _render_beam_uls_shear_layout_readiness_panel(state: Mapping[str, object]) -> None:
+    """Show why φVn is hidden and where the provided stirrup input lives."""
+
+    layout_df = _beam_uls_shear_reinforcement_status_dataframe(state)
+    if layout_df.empty:
+        st.warning(
+            "φVn is not plotted because no Beam/Girder shear reinforcement table is available yet. "
+            "Analysis is read-only: create the provided stirrup zones in Sections → Rebar → Beam/Girder Shear Reinforcement Layout, then activate the accepted zones."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Active": "No",
+                        "Zone": "Support / Midspan / custom",
+                        "Range": "x start–x end",
+                        "Stirrup": "DB12 × 2 legs @ 150 mm",
+                        "Av/s provided": "-",
+                        "Readiness": "Define in Sections → Rebar",
+                        "Note": "Template only — not used for capacity",
+                    }
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        return
+
+    active_count = int((layout_df["Active"] == "Yes").sum()) if "Active" in layout_df.columns else 0
+    if active_count <= 0:
+        st.warning(
+            "φVn is not plotted because the provided stirrup table exists but no stirrup zone is Active. "
+            "Go to Sections → Rebar → Beam/Girder Shear Reinforcement Layout and activate the zones that are actually provided."
+        )
+    else:
+        st.info(
+            "Provided stirrup layout is read from Sections → Rebar. If φVn is still not plotted, check that active zones have valid range, bar size, legs, spacing, and fy."
+        )
+    st.markdown("##### Provided stirrup layout read from Sections → Rebar")
+    st.dataframe(layout_df, use_container_width=True, hide_index=True)
+
 def _beam_uls_active_shear_zone_for_station(state: Mapping[str, object], x_m: float) -> dict[str, object] | None:
     zones = _beam_uls_shear_reinforcement_dataframe_from_state(state)
     if zones.empty:
@@ -4386,10 +4476,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             shear_cards = [
                 {"title": "Shear status", "value": shear_status if shear else "NOT READY", "detail": "φVn check needs active Vuy rows and active stirrup zones.", "status": "warning", "strong": True},
                 {"title": "Governing Vu", "value": _format_beam_uls_demand(shear["demand"], "kN") if shear else "-", "detail": f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy", "status": "info"},
-                {"title": "Shear capacity", "value": shear_capacity_note if shear else "-", "detail": "No fake minimum stirrup is assumed", "status": "neutral"},
-                {"title": "Method", "value": "Provided stirrup φVn", "detail": strength_route.shear_engine_label, "status": "neutral"},
+                {"title": "Why no φVn line?", "value": "No active stirrup zone" if shear else "No Vuy demand", "detail": shear_capacity_note if shear else "No fake minimum stirrup is assumed", "status": "warning"},
+                {"title": "Input owner", "value": "Sections → Rebar", "detail": "Analysis only reads provided stirrup zones", "status": "neutral"},
             ]
         _render_analysis_summary_strip(shear_cards, columns=4)
+        if shear_result is None:
+            _render_beam_uls_shear_layout_readiness_panel(st.session_state)
         st.plotly_chart(
             _make_beam_uls_shear_capacity_figure(active_df, shear_check_df, code_label=code_label),
             use_container_width=True,

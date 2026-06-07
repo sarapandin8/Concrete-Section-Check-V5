@@ -920,8 +920,8 @@ def _store_shear_reinforcement_metadata(table: pd.DataFrame) -> None:
 def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
     st.markdown("#### Beam/Girder Shear Reinforcement Layout")
     st.caption(
-        "Define provided stirrup zones along the member for future ULS shear checks. "
-        "This is a layout/input milestone only: it previews Av/s provided but does not calculate φVn yet."
+        "Define provided stirrup zones along the member for the Analysis → ULS Shear tab. "
+        "Analysis reads Active zones as the provided stirrup layout for φVn; inactive zones are shown here but are not used for capacity."
     )
     span_m = _beam_girder_span_length_for_shear_layout()
     if SHEAR_REINFORCEMENT_TABLE_KEY not in st.session_state:
@@ -936,7 +936,7 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
         RebarMetric("Input method", "Zone table", "Commercial girder detailing"),
         RebarMetric("Default stirrup", DEFAULT_SHEAR_STIRRUP_BAR, "Dropdown: DB10/DB12/DB16/DB20/DB25"),
         RebarMetric("Span basis", f"{span_m:.3f} m", "From Setup when available"),
-        RebarMetric("Shear check", "Planned", "φVn engine follows after layout"),
+        RebarMetric("Shear check", "Analysis ULS", "Active zones feed provided-stirrup φVn"),
         RebarMetric("Final use", "Provided layout", "Auto minimum will be a design aid only"),
     ]
     st.markdown(_strip_html(cards), unsafe_allow_html=True)

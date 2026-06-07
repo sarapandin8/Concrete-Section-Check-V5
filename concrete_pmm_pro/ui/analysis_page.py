@@ -31,6 +31,11 @@ from concrete_pmm_pro.analysis.uls_strength_routing import (
     BeamGirderUlsStrengthRoute,
     beam_girder_uls_strength_route,
 )
+from concrete_pmm_pro.analysis.uls_flexure_code_basis import (
+    BeamGirderFlexureCodeBasis,
+    apply_flexure_code_basis,
+    beam_girder_flexure_code_basis,
+)
 from concrete_pmm_pro.analysis.runtime import (
     ACCURACY_PRESET_RESOLUTIONS,
     RuntimeTiming,
@@ -2819,6 +2824,39 @@ def _beam_uls_flexure_analysis_input_for_station(
     )
 
 
+
+def _beam_uls_has_bonded_prestress(analysis_input: AnalysisInput | None) -> bool:
+    if analysis_input is None:
+        return False
+    for element in analysis_input.prestress_elements:
+        if getattr(element, "bonded", True) and getattr(element, "count", 0) > 0 and getattr(element, "area_mm2", 0.0) > 0.0:
+            return True
+    return False
+
+
+def _beam_uls_nominal_flexure_capacity_for_input(analysis_input: AnalysisInput) -> tuple[float | None, list[str]]:
+    """Return nominal Mn from the shared strain engine by temporarily removing φ.
+
+    This is used only by code-specific layers that need to apply their own
+    workflow resistance factor above the common strain-compatibility section
+    response.
+    """
+
+    messages: list[str] = []
+    try:
+        nominal_settings = analysis_input.settings.model_copy(update={"use_phi_factor": False})
+        nominal_input = analysis_input.model_copy(update={"settings": nominal_settings})
+        nominal_pmm = run_rc_pmm_solver(nominal_input)
+        nominal_summary = check_uls_demands_against_rc_pmm(nominal_pmm, nominal_input.load_cases)
+        nominal_result = nominal_summary.results[0] if nominal_summary.results else None
+    except Exception as exc:
+        return None, [f"Nominal flexure capacity solve failed: {exc}"]
+    if nominal_result is None or nominal_result.capacity_phiMn_Nmm is None:
+        return None, ["Nominal flexure capacity could not be interpolated for code-specific φ layer."]
+    if nominal_result.warning_count:
+        messages.append(f"Nominal-capacity interpolation carried {nominal_result.warning_count} warning(s).")
+    return float(nominal_result.capacity_phiMn_Nmm), messages
+
 def _beam_uls_flexure_preview_dataframe(
     state: Mapping[str, object],
     active_df: pd.DataFrame,
@@ -2856,6 +2894,8 @@ def _beam_uls_flexure_preview_dataframe(
         "Capacity kN-m",
         "Utilization value",
         "Capacity plot sign",
+        "Capacity basis",
+        "Route φ",
         "Method",
         "Notes",
     ]
@@ -2927,6 +2967,8 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity kN-m": 0.0,
                     "Utilization value": float("nan"),
                     "Capacity plot sign": capacity_direction if capacity_direction is not None else 1.0,
+                    "Capacity basis": "diagram boundary",
+                    "Route φ": "-",
                     "Method": "section boundary",
                     "Notes": "Zero-Mux endpoint plotted as φMn = 0 for flexure diagram boundary; D/C is not applicable at zero demand",
                 }
@@ -2953,6 +2995,8 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
                     "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
+                    "Capacity basis": "-",
+                    "Route φ": "-",
                     "Method": "not ready",
                     "Notes": "; ".join(input_messages[-3:]),
                 }
@@ -2976,6 +3020,8 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
                     "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
+                    "Capacity basis": "-",
+                    "Route φ": "-",
                     "Method": "solver error",
                     "Notes": f"Flexure check solver error: {exc}",
                 }
@@ -2995,15 +3041,54 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity kN-m": float("nan"),
                     "Utilization value": float("nan"),
                     "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
+                    "Capacity basis": "-",
+                    "Route φ": "-",
                     "Method": "not checked",
                     "Notes": "Flexure capacity could not be interpolated from PMM results.",
                 }
             )
             continue
-        capacity_kNm = float(result.capacity_phiMn_Nmm) / 1_000_000.0
-        utilization = float(result.dcr)
-        method = result.capacity_method or "PMM strain compatibility"
-        note_parts = ["Primary Mux flexure only", strength_route.flexure_engine_label, strength_route.flexure_basis_note]
+        flexure_basis = beam_girder_flexure_code_basis(
+            strength_route,
+            has_bonded_prestress=_beam_uls_has_bonded_prestress(analysis_input),
+        )
+        nominal_capacity_nmm: float | None = None
+        nominal_messages: list[str] = []
+        if flexure_basis.requires_nominal_capacity:
+            nominal_capacity_nmm, nominal_messages = _beam_uls_nominal_flexure_capacity_for_input(analysis_input)
+            messages.extend(nominal_messages)
+        routed_capacity_nmm, routed_basis_note = apply_flexure_code_basis(
+            phi_capacity_nmm=float(result.capacity_phiMn_Nmm),
+            nominal_capacity_nmm=nominal_capacity_nmm,
+            basis=flexure_basis,
+        )
+        if routed_capacity_nmm is None or routed_capacity_nmm <= 0.0:
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
+                    "Capacity basis": flexure_basis.display_label,
+                    "Route φ": flexure_basis.resistance_factor_text,
+                    "Method": flexure_basis.method_label,
+                    "Notes": routed_basis_note,
+                }
+            )
+            continue
+        capacity_kNm = float(routed_capacity_nmm) / 1_000_000.0
+        utilization = abs(float(demand)) * 1_000_000.0 / float(routed_capacity_nmm)
+        method = flexure_basis.method_label
+        note_parts = ["Primary Mux flexure only", flexure_basis.route_label, routed_basis_note]
+        if nominal_messages:
+            note_parts.extend(nominal_messages)
         if zero_demand_endpoint:
             status = "SECTION PREVIEW"
             display_demand = "0.00 kN-m"
@@ -3035,6 +3120,8 @@ def _beam_uls_flexure_preview_dataframe(
                 "Capacity kN-m": capacity_kNm,
                 "Utilization value": utilization_value,
                 "Capacity plot sign": capacity_direction if zero_demand_endpoint else (-1.0 if demand < 0.0 else 1.0),
+                "Capacity basis": flexure_basis.display_label if not zero_demand_endpoint else "diagram boundary",
+                "Route φ": flexure_basis.resistance_factor_text if not zero_demand_endpoint else "-",
                 "Method": method,
                 "Notes": "; ".join(note_parts),
             }
@@ -3356,7 +3443,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.CODE.ROUTE1 routes strength checks by workflow before formulas are added: Bridge → AASHTO LRFD, Building → ACI 318. Flexure uses the current shared section-capacity engine; shear/torsion remain route-ready but not calculated."
+        "ULS.FLEX.CODE1 routes flexure resistance by workflow: Bridge → AASHTO LRFD resistance-factor layer, Building → ACI 318 strain-based φ. Shear/torsion remain route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -3388,7 +3475,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            f"Flexure uses {strength_route.flexure_engine_label} with the current shared strain-compatibility engine. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
+            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific resistance-factor basis above the shared strain-compatibility section engine. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
         )
         flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
         with flex_tab:
@@ -3397,8 +3484,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 use_container_width=True,
             )
             st.caption(
-                "Section φMn is plotted at active station points; zero-demand endpoints are plotted as φMn = 0 diagram boundary points. "
-                "Development length, debonding, anchorage, and end-zone detailing checks are separate from this section-strength curve."
+                "Section φMn is plotted using the active workflow flexure route; zero-demand endpoints are plotted as φMn = 0 diagram boundary points. "
+                "Development length, debonding, anchorage, and end-zone detailing checks are separate from this flexure strength curve."
             )
         with shear_tab:
             st.plotly_chart(

@@ -337,3 +337,50 @@ def test_uls_code_route1_analysis_uses_route_basis_notes_in_flexure_rows() -> No
     notes = str(preview.iloc[0]["Notes"])
     assert "AASHTO LRFD flexure route" in notes
     assert "shared strain-compatibility" in notes
+
+
+def test_uls_flex_code1_basis_separates_bridge_prestressed_and_building_aci() -> None:
+    from concrete_pmm_pro.analysis.uls_flexure_code_basis import beam_girder_flexure_code_basis
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+
+    bridge = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD 9th Edition")
+    building = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+
+    bridge_basis = beam_girder_flexure_code_basis(bridge, has_bonded_prestress=True)
+    building_basis = beam_girder_flexure_code_basis(building, has_bonded_prestress=True)
+
+    assert bridge_basis.requires_nominal_capacity
+    assert bridge_basis.resistance_factor == 1.0
+    assert "AASHTO LRFD" in bridge_basis.capacity_label
+    assert "nominal strain-compatibility" in bridge_basis.method_label
+
+    assert not building_basis.requires_nominal_capacity
+    assert building_basis.resistance_factor is None
+    assert "ACI 318" in building_basis.capacity_label
+    assert "strain-based φ" in building_basis.method_label
+
+
+def test_uls_flex_code1_apply_bridge_phi_layer_to_nominal_capacity() -> None:
+    from concrete_pmm_pro.analysis.uls_flexure_code_basis import apply_flexure_code_basis, beam_girder_flexure_code_basis
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+
+    bridge = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD 9th Edition")
+    bridge_basis = beam_girder_flexure_code_basis(bridge, has_bonded_prestress=True)
+
+    routed, note = apply_flexure_code_basis(phi_capacity_nmm=900.0, nominal_capacity_nmm=1000.0, basis=bridge_basis)
+
+    assert routed == 1000.0
+    assert "φ = 1.00" in note
+
+
+def test_uls_flex_code1_apply_building_aci_keeps_strain_phi_capacity() -> None:
+    from concrete_pmm_pro.analysis.uls_flexure_code_basis import apply_flexure_code_basis, beam_girder_flexure_code_basis
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+
+    building = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+    building_basis = beam_girder_flexure_code_basis(building, has_bonded_prestress=True)
+
+    routed, note = apply_flexure_code_basis(phi_capacity_nmm=900.0, nominal_capacity_nmm=1000.0, basis=building_basis)
+
+    assert routed == 900.0
+    assert "ACI 318" in note

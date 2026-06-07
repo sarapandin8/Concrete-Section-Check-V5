@@ -43,6 +43,7 @@ class BeamGirderUlsStrengthRoute:
     torsion_basis_note: str
     overall_guard_note: str
     is_code_specific_flexure_final: bool = False
+    is_code_specific_flexure_layer_ready: bool = True
     is_code_specific_shear_ready: bool = False
     is_code_specific_torsion_ready: bool = False
 
@@ -71,9 +72,9 @@ def bridge_beam_girder_uls_strength_route(code_edition: object | None = None) ->
         default_combo_label="Strength I",
         flexure_engine_label="AASHTO LRFD flexure route",
         flexure_basis_note=(
-            "Bridge route selected. Current φMn comes from the shared strain-compatibility "
-            "section-capacity engine; dedicated AASHTO LRFD flexural resistance calibration "
-            "remains a future formula milestone."
+            "Bridge route selected. φMn is routed through an AASHTO LRFD resistance-factor "
+            "layer above the shared strain-compatibility section-capacity engine. Dedicated "
+            "AASHTO LRFD flexural detailing/development calibration remains a future milestone."
         ),
         shear_engine_label="AASHTO LRFD shear route",
         shear_basis_note=(
@@ -105,9 +106,9 @@ def building_beam_girder_uls_strength_route(code_edition: object | None = None) 
         default_combo_label="ACI19-ULS-2" if edition == "ACI 318-19" else "ACI-ULS gravity combo",
         flexure_engine_label="ACI 318 flexure route",
         flexure_basis_note=(
-            "Building route selected. Current φMn comes from the shared strain-compatibility "
-            "section-capacity engine; dedicated ACI 318 beam flexural strength calibration "
-            "remains a future formula milestone."
+            "Building route selected. φMn uses the ACI 318 strain-based strength-reduction "
+            "factor logic from the shared strain-compatibility section-capacity engine. Dedicated "
+            "ACI 318 detailing/development calibration remains a future milestone."
         ),
         shear_engine_label="ACI 318 shear route",
         shear_basis_note=(

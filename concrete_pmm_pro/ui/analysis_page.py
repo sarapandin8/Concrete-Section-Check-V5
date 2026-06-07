@@ -3411,6 +3411,86 @@ def _beam_uls_stirrup_area_mm2(zone: Mapping[str, object]) -> float:
     return math.pi * diameter * diameter / 4.0
 
 
+def _beam_uls_shear_detailing_guard(
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+    fc_MPa: float,
+    bw_mm: float,
+    d_eff_mm: float,
+    dv_mm: float | None,
+    spacing_mm: float,
+    avs_mm2_per_mm: float,
+    fy_MPa: float,
+) -> dict[str, object]:
+    """Return first-pass stirrup minimum and spacing guard values.
+
+    This is intentionally a compact design guard, not the final shear design
+    engine.  It prevents a provided-stirrup φVn pass from being read as a
+    complete shear detailing pass when Av/s or spacing is obviously outside the
+    current route's first-pass limits.
+    """
+
+    notes: list[str] = []
+    if not all(
+        math.isfinite(value) and value > 0.0
+        for value in [fc_MPa, bw_mm, d_eff_mm, spacing_mm, avs_mm2_per_mm, fy_MPa]
+    ):
+        return {
+            "Detailing status": "REVIEW",
+            "Av/s required mm2/mm": float("nan"),
+            "Av/s required mm2/m": float("nan"),
+            "Av/s min D/C": float("nan"),
+            "s max mm": float("nan"),
+            "Spacing D/C": float("nan"),
+            "Detailing D/C value": float("nan"),
+            "Detailing notes": "Detailing guard needs finite f'c, bw, d/dv, spacing, Av/s, and fy.",
+        }
+
+    sqrt_fc = math.sqrt(float(fc_MPa))
+    if strength_route.is_bridge:
+        # First-pass AASHTO-compatible screen.  Detailed MCFT β/θ, high-shear
+        # spacing triggers, and code-calibrated exceptions remain future work.
+        depth_for_spacing = float(dv_mm) if dv_mm is not None and math.isfinite(float(dv_mm)) and float(dv_mm) > 0.0 else float(d_eff_mm)
+        avs_required = 0.083 * sqrt_fc * float(bw_mm) / float(fy_MPa)
+        s_max = min(0.80 * depth_for_spacing, 600.0)
+        basis = "AASHTO first-pass Av/s and spacing guard"
+        notes.append("AASHTO guard is first-pass only; detailed MCFT β/θ and high-shear spacing calibration are pending.")
+    else:
+        avs_required = max(0.062 * sqrt_fc * float(bw_mm) / float(fy_MPa), 0.35 * float(bw_mm) / float(fy_MPa))
+        s_max = min(0.50 * float(d_eff_mm), 600.0)
+        basis = "ACI 318 first-pass Av/s and spacing guard"
+        notes.append("ACI guard checks minimum Av/s and maximum spacing for the provided stirrup zone.")
+
+    avs_dc = float(avs_required) / float(avs_mm2_per_mm) if avs_mm2_per_mm > 0.0 else float("nan")
+    spacing_dc = float(spacing_mm) / float(s_max) if s_max > 0.0 else float("nan")
+    finite_dcs = [value for value in [avs_dc, spacing_dc] if math.isfinite(value)]
+    detailing_dc = max(finite_dcs) if finite_dcs else float("nan")
+
+    if not finite_dcs:
+        status = "REVIEW"
+        notes.append("Could not evaluate Av/s or spacing guard.")
+    elif detailing_dc <= 1.0 + 1.0e-9:
+        status = "PASS"
+    else:
+        status = "FAIL"
+        if math.isfinite(avs_dc) and avs_dc > 1.0 + 1.0e-9:
+            notes.append("Provided Av/s is less than the first-pass minimum guard.")
+        if math.isfinite(spacing_dc) and spacing_dc > 1.0 + 1.0e-9:
+            notes.append("Provided stirrup spacing exceeds the first-pass maximum spacing guard.")
+
+    return {
+        "Detailing status": status,
+        "Av/s required mm2/mm": float(avs_required),
+        "Av/s required mm2/m": float(avs_required) * 1000.0,
+        "Av/s min D/C": avs_dc,
+        "s max mm": float(s_max),
+        "Spacing D/C": spacing_dc,
+        "Detailing D/C value": detailing_dc,
+        "Detailing basis": basis,
+        "Detailing notes": " ".join(notes),
+    }
+
+
 def _beam_uls_shear_result_for_row(
     state: Mapping[str, object],
     row: Mapping[str, object],
@@ -3528,21 +3608,48 @@ def _beam_uls_shear_result_for_row(
         code_basis = "φVn — ACI 318"
         phi_policy = "ACI 318 shear strength-reduction factor φ = 0.75"
         depth_label = "d"
-        notes.append("Minimum shear reinforcement and maximum spacing checks are pending.")
+        notes.append("First-pass minimum Av/s and maximum spacing guard evaluated for active provided stirrup zone.")
     vc_n = vc_factor * math.sqrt(fc) * float(bw_mm) * float(depth_for_vs)
     vs_n = avs_mm2_per_mm * float(fy) * float(depth_for_vs)
     vn_n = max(0.0, vc_n + vs_n)
     phi_vn_kN = phi * vn_n / 1000.0
-    utilization = abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
-    status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 else "FAIL"
+    strength_utilization = abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
+    strength_status = "PASS" if math.isfinite(strength_utilization) and strength_utilization <= 1.0 else "FAIL"
+    detailing = _beam_uls_shear_detailing_guard(
+        strength_route=strength_route,
+        fc_MPa=fc,
+        bw_mm=float(bw_mm),
+        d_eff_mm=float(d_eff_mm),
+        dv_mm=float(depth_for_vs) if depth_label == "dv" else float("nan"),
+        spacing_mm=float(spacing),
+        avs_mm2_per_mm=float(avs_mm2_per_mm),
+        fy_MPa=float(fy),
+    )
+    detailing_status = str(detailing.get("Detailing status") or "REVIEW")
+    detailing_dc = _beam_uls_float(detailing.get("Detailing D/C value"))
+    finite_dcs = [value for value in [strength_utilization, detailing_dc] if math.isfinite(value)]
+    governing_dc = max(finite_dcs) if finite_dcs else float("nan")
+    if strength_status == "FAIL" or detailing_status == "FAIL":
+        status = "FAIL"
+    elif detailing_status == "REVIEW":
+        status = "REVIEW"
+    else:
+        status = "PASS"
+    if detailing.get("Detailing notes"):
+        notes.append(str(detailing.get("Detailing notes")))
+    utilization_text = _format_beam_uls_ratio(strength_utilization)
+    if math.isfinite(detailing_dc):
+        utilization_text = f"{utilization_text} / det {_format_beam_uls_ratio(detailing_dc)}"
     return {
         "Check": "Shear",
         "Status": status,
+        "Strength status": strength_status,
+        "Detailing status": detailing_status,
         "Governing x": _format_beam_uls_x(x_m),
         "Case": case,
         "Demand": _format_beam_uls_demand(vu_kN, "kN"),
         "Capacity": f"φVn = {phi_vn_kN:,.2f} kN",
-        "Utilization": _format_beam_uls_ratio(utilization),
+        "Utilization": utilization_text,
         "Demand kN": float(vu_kN),
         "Abs demand kN": abs(float(vu_kN)),
         "φVn kN": phi_vn_kN,
@@ -3551,11 +3658,20 @@ def _beam_uls_shear_result_for_row(
         "Vc kN": vc_n / 1000.0,
         "Vs kN": vs_n / 1000.0,
         "Vn kN": vn_n / 1000.0,
-        "D/C value": utilization,
+        "D/C value": strength_utilization,
+        "Strength D/C value": strength_utilization,
+        "Detailing D/C value": detailing_dc,
+        "Governing D/C value": governing_dc,
         "Zone": str(zone.get("Zone") or "Zone"),
         "Stirrup": f"{zone.get('Bar Size') or '-'} × {int(float(legs))} legs @ {float(spacing):.0f} mm",
         "Av/s mm2/mm": avs_mm2_per_mm,
         "Av/s mm2/m": avs_mm2_per_mm * 1000.0,
+        "Av/s required mm2/mm": detailing.get("Av/s required mm2/mm", float("nan")),
+        "Av/s required mm2/m": detailing.get("Av/s required mm2/m", float("nan")),
+        "Av/s min D/C": detailing.get("Av/s min D/C", float("nan")),
+        "s max mm": detailing.get("s max mm", float("nan")),
+        "Spacing D/C": detailing.get("Spacing D/C", float("nan")),
+        "Detailing basis": detailing.get("Detailing basis", "-"),
         "bw mm": float(bw_mm),
         f"{depth_label} mm": float(depth_for_vs),
         "d mm": float(d_eff_mm),
@@ -3575,9 +3691,11 @@ def _beam_uls_shear_check_dataframe(
     strength_route: BeamGirderUlsStrengthRoute,
 ) -> pd.DataFrame:
     columns = [
-        "Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
-        "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN", "D/C value",
-        "Zone", "Stirrup", "Av/s mm2/mm", "Av/s mm2/m", "bw mm", "d mm", "dv mm", "Tension face", "φ", "Code basis", "φ policy", "Method", "Notes",
+        "Check", "Status", "Strength status", "Detailing status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
+        "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN",
+        "D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value",
+        "Zone", "Stirrup", "Av/s mm2/mm", "Av/s mm2/m", "Av/s required mm2/mm", "Av/s required mm2/m",
+        "Av/s min D/C", "s max mm", "Spacing D/C", "Detailing basis", "bw mm", "d mm", "dv mm", "Tension face", "φ", "Code basis", "φ policy", "Method", "Notes",
     ]
     if active_df.empty:
         return pd.DataFrame(columns=columns)
@@ -3587,25 +3705,41 @@ def _beam_uls_shear_check_dataframe(
         if "dv mm" not in result and "dv mm" in columns:
             result["dv mm"] = float("nan")
         for column in columns:
-            result.setdefault(column, float("nan") if column.endswith("kN") or column.endswith("mm") or column in {"D/C value", "φ"} else "-")
+            result.setdefault(
+                column,
+                float("nan")
+                if column.endswith("kN")
+                or column.endswith("mm")
+                or column.endswith("mm2/mm")
+                or column.endswith("mm2/m")
+                or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "φ"}
+                else "-",
+            )
         rows.append(result)
     return pd.DataFrame(rows, columns=columns)
 
 
 def _beam_uls_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, object] | None:
-    if shear_df is None or shear_df.empty or "D/C value" not in shear_df.columns:
+    if shear_df is None or shear_df.empty:
         return None
-    valid = shear_df[pd.to_numeric(shear_df["D/C value"], errors="coerce").notna()].copy()
+    df = shear_df.copy()
+    governing_column = "Governing D/C value" if "Governing D/C value" in df.columns else "D/C value"
+    if governing_column not in df.columns:
+        return None
+    df["__governing_dc"] = pd.to_numeric(df[governing_column], errors="coerce")
+    valid = df[df["__governing_dc"].notna()].copy()
     if valid.empty:
         return None
-    idx = valid["D/C value"].astype(float).idxmax()
-    return valid.loc[idx].to_dict()
+    status_priority = {"FAIL": 3, "REVIEW": 2, "PASS": 1}
+    valid["__status_priority"] = valid.get("Status", pd.Series(index=valid.index, dtype=object)).map(lambda value: status_priority.get(str(value), 0))
+    idx = valid.sort_values(["__status_priority", "__governing_dc"], ascending=[False, False]).index[0]
+    return df.loc[idx].drop(labels=["__governing_dc"], errors="ignore").to_dict()
 
 
 def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFrame:
     columns = [
-        "Governing", "Station x", "Case", "Status", "Vu demand", "φVn", "D/C",
-        "φVc", "φVs", "Zone", "Stirrup", "Av/s", "bw", "d", "dv", "φ", "Code basis", "Method", "Notes",
+        "Governing", "Station x", "Case", "Status", "Strength", "Detailing", "Vu demand", "φVn", "D/C", "Strength D/C", "Detailing D/C",
+        "φVc", "φVs", "Zone", "Stirrup", "Av/s", "Av/s min", "s max", "Spacing D/C", "bw", "d", "dv", "φ", "Code basis", "Method", "Notes",
     ]
     if shear_df is None or shear_df.empty:
         return pd.DataFrame(columns=columns)
@@ -3620,14 +3754,21 @@ def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFra
                 "Station x": str(row.get("Governing x") or "-"),
                 "Case": str(row.get("Case") or "-"),
                 "Status": str(row.get("Status") or "-"),
+                "Strength": str(row.get("Strength status") or row.get("Status") or "-"),
+                "Detailing": str(row.get("Detailing status") or "-"),
                 "Vu demand": _format_beam_uls_audit_number(row.get("Demand kN"), unit="kN"),
                 "φVn": _format_beam_uls_audit_number(row.get("φVn kN"), unit="kN"),
                 "D/C": _format_beam_uls_ratio(row.get("D/C value")),
+                "Strength D/C": _format_beam_uls_ratio(row.get("Strength D/C value", row.get("D/C value"))),
+                "Detailing D/C": _format_beam_uls_ratio(row.get("Detailing D/C value")),
                 "φVc": _format_beam_uls_audit_number(row.get("φVc kN"), unit="kN"),
                 "φVs": _format_beam_uls_audit_number(row.get("φVs kN"), unit="kN"),
                 "Zone": str(row.get("Zone") or "-"),
                 "Stirrup": str(row.get("Stirrup") or "-"),
                 "Av/s": _format_beam_uls_audit_number(row.get("Av/s mm2/m"), unit="mm²/m"),
+                "Av/s min": _format_beam_uls_audit_number(row.get("Av/s required mm2/m"), unit="mm²/m"),
+                "s max": _format_beam_uls_audit_number(row.get("s max mm"), unit="mm"),
+                "Spacing D/C": _format_beam_uls_ratio(row.get("Spacing D/C")),
                 "bw": _format_beam_uls_audit_number(row.get("bw mm"), unit="mm"),
                 "d": _format_beam_uls_audit_number(row.get("d mm"), unit="mm"),
                 "dv": _format_beam_uls_audit_number(row.get("dv mm"), unit="mm"),
@@ -4098,7 +4239,7 @@ def _make_beam_uls_shear_capacity_figure(active_df: pd.DataFrame, shear_check_df
         x_text = str(governing.get("Governing x") or "").replace(" m", "")
         x_val = _beam_uls_float(x_text)
         cap = _beam_uls_float(governing.get("φVn kN"))
-        util = _beam_uls_float(governing.get("D/C value"))
+        util = _beam_uls_float(governing.get("Governing D/C value", governing.get("D/C value")))
         if math.isfinite(x_val) and math.isfinite(cap) and math.isfinite(util):
             fig.add_trace(
                 go.Scatter(
@@ -4235,10 +4376,10 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         if shear_result is not None:
             shear_status = str(shear_result.get("Status") or "REVIEW")
             shear_cards = [
-                {"title": "Shear status", "value": shear_status, "detail": "Provided-stirrup sectional check", "status": "danger" if shear_status == "FAIL" else ("ready" if shear_status == "PASS" else "warning"), "strong": True},
+                {"title": "Shear status", "value": shear_status, "detail": f"Strength {shear_result.get('Strength status', '-')} · Detailing {shear_result.get('Detailing status', '-')}", "status": "danger" if shear_status == "FAIL" else ("ready" if shear_status == "PASS" else "warning"), "strong": True},
                 {"title": "Governing Vu / D/C", "value": f"{shear_result.get('Demand', '-')} · {shear_result.get('Utilization', '-')}", "detail": f"{shear_result.get('Case', '-')} @ x={shear_result.get('Governing x', '-')}", "status": "info"},
                 {"title": "Shear capacity", "value": str(shear_result.get("Capacity") or "-"), "detail": str(shear_result.get("Stirrup") or "Active stirrup zone"), "status": "info"},
-                {"title": "Method", "value": "Provided stirrup φVn", "detail": strength_route.shear_engine_label, "status": "neutral"},
+                {"title": "Detailing guard", "value": str(shear_result.get("Detailing status") or "-"), "detail": f"Av/s min {_format_beam_uls_audit_number(shear_result.get('Av/s required mm2/m'), unit='mm²/m')} · smax {_format_beam_uls_audit_number(shear_result.get('s max mm'), unit='mm')}", "status": "danger" if str(shear_result.get("Detailing status")) == "FAIL" else ("ready" if str(shear_result.get("Detailing status")) == "PASS" else "warning")},
             ]
         else:
             shear_status, shear_capacity_note = _beam_uls_shear_layout_status(st.session_state)
@@ -4254,14 +4395,14 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             use_container_width=True,
         )
         st.caption(
-            "Shear capacity is from the active provided stirrup layout by zone. φVn is a first-pass sectional shear check; "
-            "minimum transverse reinforcement, maximum spacing, detailed AASHTO MCFT β/θ calibration, and benchmark certification remain separate QA/design steps."
+            "Shear capacity is from the active provided stirrup layout by zone. The status now combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
+            "Detailed AASHTO MCFT β/θ calibration, high-shear spacing triggers, and benchmark certification remain separate QA/design steps."
         )
         with st.expander("Shear strength audit / provided stirrup output", expanded=False):
             st.caption(
                 "First-pass sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
-                "Vu, φVc, φVs, φVn, D/C, Av/s, bw, d/dv, and code route. Minimum reinforcement, maximum spacing, "
-                "detailed AASHTO MCFT calibration, and benchmark certification remain follow-up QA milestones."
+                "Vu, φVc, φVs, φVn, strength D/C, Av/s, first-pass Av/s minimum, maximum spacing, bw, d/dv, and code route. "
+                "Detailed AASHTO MCFT calibration and benchmark certification remain follow-up QA milestones."
             )
             shear_audit_df = _beam_uls_shear_audit_dataframe(shear_check_df)
             if shear_audit_df.empty:
@@ -4271,7 +4412,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         with st.expander("Shear method notes", expanded=False):
             st.write(f"- Shear route: {strength_route.shear_basis_note}")
             st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
-            st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, minimum reinforcement, spacing, prestress shear effects, and benchmark calibration are added.")
+            st.write("- The detailing guard screens provided Av/s against a first-pass minimum and checks stirrup spacing against a first-pass maximum; failed guards downgrade the shear status.")
+            st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, high-shear spacing triggers, prestress shear effects, and benchmark calibration are added.")
 
     with torsion_tab:
         torsion = _beam_uls_governing_action(active_df, "Tu")

@@ -7,6 +7,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_flexure_audit_dataframe,
     _beam_uls_shear_audit_dataframe,
     _beam_uls_shear_check_dataframe,
+    _beam_uls_shear_detailing_guard,
     _beam_uls_summary_cards,
     _beam_uls_torsion_interaction_status,
 )
@@ -623,6 +624,127 @@ def test_uls_shear1_audit_dataframe_exposes_capacity_components() -> None:
     assert row["D/C"] == "1.125"
     assert "AASHTO" in row["Code basis"]
 
+
+
+def test_uls_shear2_detailing_guard_passes_reasonable_aci_stirrups() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+
+    guard = _beam_uls_shear_detailing_guard(
+        strength_route=route,
+        fc_MPa=30.0,
+        bw_mm=300.0,
+        d_eff_mm=550.0,
+        dv_mm=float("nan"),
+        spacing_mm=150.0,
+        avs_mm2_per_mm=2.0 * 3.141592653589793 * 12.0 * 12.0 / 4.0 / 150.0,
+        fy_MPa=400.0,
+    )
+
+    assert guard["Detailing status"] == "PASS"
+    assert guard["Av/s required mm2/m"] > 0.0
+    assert guard["s max mm"] == 275.0
+    assert guard["Detailing D/C value"] <= 1.0
+
+
+def test_uls_shear2_spacing_or_avs_failure_downgrades_shear_status() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Sparse",
+                "x_start_m": 0.0,
+                "x_end_m": 6.0,
+                "Bar Size": "DB10",
+                "Diameter_mm": 10.0,
+                "Legs": 2,
+                "Spacing_mm": 600.0,
+                "fy_MPa": 400.0,
+                "Note": "intentionally too sparse",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 20.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+
+    row = shear.iloc[0]
+    assert row["Status"] == "FAIL"
+    assert row["Strength status"] == "PASS"
+    assert row["Detailing status"] == "FAIL"
+    assert row["Detailing D/C value"] > 1.0
+    assert "spacing" in row["Notes"].lower() or "av/s" in row["Notes"].lower()
+
+
+def test_uls_shear2_audit_dataframe_exposes_detailing_guard_columns() -> None:
+    shear = pd.DataFrame(
+        [
+            {
+                "Check": "Shear",
+                "Status": "FAIL",
+                "Strength status": "PASS",
+                "Detailing status": "FAIL",
+                "Governing x": "1.000 m",
+                "Case": "Strength I",
+                "Demand kN": 100.0,
+                "φVn kN": 800.0,
+                "φVc kN": 200.0,
+                "φVs kN": 600.0,
+                "D/C value": 0.125,
+                "Strength D/C value": 0.125,
+                "Detailing D/C value": 1.50,
+                "Av/s required mm2/m": 300.0,
+                "s max mm": 250.0,
+                "Spacing D/C": 1.50,
+                "Zone": "Support",
+                "Stirrup": "DB10 × 2 legs @ 375 mm",
+                "Av/s mm2/m": 200.0,
+                "bw mm": 300.0,
+                "d mm": 550.0,
+                "dv mm": 500.0,
+                "φ": 0.75,
+                "Code basis": "φVn — ACI 318",
+                "Method": "ACI 318 simplified one-way shear with provided stirrups",
+                "Notes": "Provided stirrup spacing exceeds guard",
+            }
+        ]
+    )
+
+    audit = _beam_uls_shear_audit_dataframe(shear)
+
+    row = audit.iloc[0]
+    assert row["Strength"] == "PASS"
+    assert row["Detailing"] == "FAIL"
+    assert row["Strength D/C"] == "0.125"
+    assert row["Detailing D/C"] == "1.500"
+    assert row["Av/s min"] == "300.00 mm²/m"
+    assert row["s max"] == "250.00 mm"
+    assert row["Spacing D/C"] == "1.500"
 
 def test_uls_ui2_check_tabs_are_main_workspace_labels() -> None:
     assert BEAM_ULS_CHECK_TAB_LABELS == ["Flexure", "Shear", "Torsion", "Shear + Torsion"]

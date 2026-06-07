@@ -7,10 +7,12 @@ import math
 from collections.abc import Mapping
 from datetime import datetime
 from html import escape
+from typing import Any
 
 import plotly.graph_objects as go
 import pandas as pd
 import streamlit as st
+from shapely.geometry import LineString
 
 from concrete_pmm_pro.analysis.capacity_check import DemandCapacitySummary, check_uls_demands_against_rc_pmm
 from concrete_pmm_pro.analysis.preflight import build_analysis_input_from_session_state, check_analysis_readiness
@@ -3240,9 +3242,402 @@ def _beam_uls_shear_layout_status(state: Mapping[str, object]) -> tuple[str, str
         return "PLANNED", "-"
     active_zones = _beam_uls_active_shear_reinforcement_zone_count(state)
     if active_zones > 0:
-        return "LAYOUT READY", f"{active_zones} active stirrup zone(s); φVn engine planned"
+        return "LAYOUT READY", f"{active_zones} active stirrup zone(s); run provided-stirrup φVn check"
     return "LAYOUT REQUIRED", "Define active stirrup zones in Sections → Rebar → Shear Reinforcement"
 
+
+def _beam_uls_linework_length_mm(geometry: object) -> float:
+    """Return total line length from a Shapely line/multiline/collection."""
+
+    if geometry is None or getattr(geometry, "is_empty", True):
+        return 0.0
+    geom_type = getattr(geometry, "geom_type", "")
+    if geom_type in {"LineString", "LinearRing"}:
+        try:
+            return float(geometry.length)
+        except Exception:
+            return 0.0
+    if hasattr(geometry, "geoms"):
+        return sum(_beam_uls_linework_length_mm(item) for item in geometry.geoms)
+    return 0.0
+
+
+def _beam_uls_web_width_mm(geometry: SectionGeometry) -> tuple[float | None, str]:
+    """Estimate total shear web width from the active section polygon.
+
+    The function samples horizontal material widths through the central web
+    region and takes the minimum positive width. For I-girders this returns the
+    web thickness; for box sections it returns the total material intercepted by
+    both webs. It is intentionally an analysis helper, not a geometry generator.
+    """
+
+    try:
+        polygon = to_shapely_polygon(geometry)
+        minx, miny, maxx, maxy = polygon.bounds
+    except Exception:
+        return None, "Web width unavailable: section polygon could not be read."
+    h = float(maxy) - float(miny)
+    b = float(maxx) - float(minx)
+    if h <= 0.0 or b <= 0.0:
+        return None, "Web width unavailable: invalid section bounds."
+    widths: list[float] = []
+    # Avoid flange-only zones; sample through the likely web core.
+    for ratio in (0.25, 0.33, 0.40, 0.50, 0.60, 0.67, 0.75):
+        y = float(miny) + ratio * h
+        line = LineString([(float(minx) - b, y), (float(maxx) + b, y)])
+        try:
+            width = _beam_uls_linework_length_mm(polygon.intersection(line))
+        except Exception:
+            width = 0.0
+        if width > 1.0:
+            widths.append(width)
+    if not widths:
+        return None, "Web width unavailable: no positive horizontal material width found."
+    return float(min(widths)), "Web width estimated from minimum central horizontal material width."
+
+
+def _beam_uls_reinforcement_y_centroid_for_face(analysis_input: AnalysisInput, *, tension_face: str) -> float | None:
+    """Return area-weighted reinforcement centroid near the local tension face."""
+
+    try:
+        _, y_min, _, y_max = _beam_uls_section_bounds(analysis_input.section_geometry)
+    except Exception:
+        return None
+    h = float(y_max) - float(y_min)
+    if h <= 0.0:
+        return None
+    if tension_face == "top":
+        limit = float(y_min) + 0.55 * h
+        candidates = []
+        for bar in analysis_input.rebars:
+            if float(bar.y_mm) >= limit:
+                candidates.append((float(bar.y_mm), float(bar.area_mm2)))
+        for ps in analysis_input.prestress_elements:
+            if float(ps.y_mm) >= limit:
+                candidates.append((float(ps.y_mm), float(ps.area_mm2)))
+    else:
+        limit = float(y_min) + 0.45 * h
+        candidates = []
+        for bar in analysis_input.rebars:
+            if float(bar.y_mm) <= limit:
+                candidates.append((float(bar.y_mm), float(bar.area_mm2)))
+        for ps in analysis_input.prestress_elements:
+            if float(ps.y_mm) <= limit:
+                candidates.append((float(ps.y_mm), float(ps.area_mm2)))
+    area = sum(a for _, a in candidates if a > 0.0)
+    if area <= 0.0:
+        return None
+    return sum(y * a for y, a in candidates if a > 0.0) / area
+
+
+def _beam_uls_effective_shear_depth_mm(analysis_input: AnalysisInput, *, mux_kNm: float, strength_route: BeamGirderUlsStrengthRoute) -> tuple[float | None, str, str]:
+    """Estimate effective shear depth for the local station.
+
+    The estimate is derived from the local bending sign and active reinforcement
+    centroid where available; otherwise it falls back to 0.80h with a REVIEW
+    note.  This keeps the first shear engine usable while making assumptions
+    visible in the audit table.
+    """
+
+    try:
+        _, y_min, _, y_max = _beam_uls_section_bounds(analysis_input.section_geometry)
+    except Exception:
+        return None, "-", "Effective depth unavailable: section bounds could not be read."
+    h = float(y_max) - float(y_min)
+    if h <= 0.0:
+        return None, "-", "Effective depth unavailable: invalid section depth."
+    tension_face = "top" if _beam_uls_float(mux_kNm) < -_BEAM_ULS_DEMAND_TOL else "bottom"
+    y_tension = _beam_uls_reinforcement_y_centroid_for_face(analysis_input, tension_face=tension_face)
+    if y_tension is None:
+        d_eff = 0.80 * h
+        return float(d_eff), f"{tension_face} face", "Effective depth estimated as 0.80h because no active tension reinforcement centroid was available."
+    if tension_face == "top":
+        d_eff = float(y_tension) - float(y_min)
+    else:
+        d_eff = float(y_max) - float(y_tension)
+    # Guard against pathological centroids without hiding the basis.
+    d_eff = min(max(float(d_eff), 0.50 * h), 0.95 * h)
+    return d_eff, f"{tension_face} face", "Effective depth estimated from active reinforcement centroid at local tension face."
+
+
+def _beam_uls_shear_reinforcement_dataframe_from_state(state: Mapping[str, object]) -> pd.DataFrame:
+    raw = _beam_uls_get_state_value(state, SHEAR_REINFORCEMENT_TABLE_KEY, None)
+    if raw is None:
+        raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get(SHEAR_REINFORCEMENT_TABLE_KEY)
+    columns = ["Active", "Zone", "x_start_m", "x_end_m", "Bar Size", "Diameter_mm", "Legs", "Spacing_mm", "fy_MPa", "Note"]
+    df = pd.DataFrame(raw if raw is not None else [], columns=columns)
+    for column in columns:
+        if column not in df.columns:
+            df[column] = None
+    df = df[columns].copy()
+    df["Active"] = df["Active"].map(_beam_uls_active_value)
+    for column in ["x_start_m", "x_end_m", "Diameter_mm", "Legs", "Spacing_mm", "fy_MPa"]:
+        df[column] = df[column].map(_beam_uls_float)
+    df["Zone"] = df["Zone"].map(lambda value: str(value or "").strip())
+    df["Bar Size"] = df["Bar Size"].map(lambda value: str(value or "").strip())
+    df["Note"] = df["Note"].map(lambda value: str(value or "").strip())
+    return df
+
+
+def _beam_uls_active_shear_zone_for_station(state: Mapping[str, object], x_m: float) -> dict[str, object] | None:
+    zones = _beam_uls_shear_reinforcement_dataframe_from_state(state)
+    if zones.empty:
+        return None
+    active = zones[zones["Active"]].copy()
+    if active.empty:
+        return None
+    active = active[pd.to_numeric(active["x_start_m"], errors="coerce").notna() & pd.to_numeric(active["x_end_m"], errors="coerce").notna()]
+    if active.empty:
+        return None
+    active["__distance"] = active.apply(
+        lambda row: 0.0
+        if float(row["x_start_m"]) - 1.0e-9 <= float(x_m) <= float(row["x_end_m"]) + 1.0e-9
+        else min(abs(float(x_m) - float(row["x_start_m"])), abs(float(x_m) - float(row["x_end_m"]))),
+        axis=1,
+    )
+    covered = active[active["__distance"] <= 1.0e-8]
+    source = covered if not covered.empty else active
+    row = source.sort_values(["__distance", "x_start_m", "x_end_m"], kind="stable").iloc[0]
+    return row.to_dict()
+
+
+def _beam_uls_stirrup_area_mm2(zone: Mapping[str, object]) -> float:
+    diameter = _beam_uls_float(zone.get("Diameter_mm"))
+    if not math.isfinite(diameter) or diameter <= 0.0:
+        text = str(zone.get("Bar Size") or "").strip().upper().replace("DB", "")
+        diameter = _beam_uls_float(text)
+    if not math.isfinite(diameter) or diameter <= 0.0:
+        return float("nan")
+    return math.pi * diameter * diameter / 4.0
+
+
+def _beam_uls_shear_result_for_row(
+    state: Mapping[str, object],
+    row: Mapping[str, object],
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    x_m = _beam_uls_float(row.get("Station x (m)"))
+    vu_kN = _beam_uls_float(row.get("Vuy"))
+    mux_kNm = _beam_uls_float(row.get("Mux"))
+    case = str(row.get("Case Name") or "-")
+    notes: list[str] = []
+    if not math.isfinite(vu_kN) or abs(vu_kN) <= _BEAM_ULS_DEMAND_TOL:
+        return {
+            "Check": "Shear",
+            "Status": "NO DEMAND",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": "-",
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": 0.0,
+            "φVn kN": float("nan"),
+            "D/C value": float("nan"),
+            "Notes": "No finite Vuy demand.",
+        }
+    zone = _beam_uls_active_shear_zone_for_station(state, x_m)
+    if zone is None:
+        return {
+            "Check": "Shear",
+            "Status": "LAYOUT REQUIRED",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "φVn kN": float("nan"),
+            "D/C value": float("nan"),
+            "Zone": "-",
+            "Notes": "No active stirrup zone covers this station.",
+        }
+    analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(state, row=row, strength_route=strength_route)
+    if input_messages:
+        notes.extend(input_messages)
+    if analysis_input is None:
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "φVn kN": float("nan"),
+            "D/C value": float("nan"),
+            "Zone": str(zone.get("Zone") or "-"),
+            "Notes": "; ".join(notes) or "Section/material input not ready for shear check.",
+        }
+    concrete = analysis_input.concrete_material
+    fc = float(concrete.fc_MPa)
+    bw_mm, bw_note = _beam_uls_web_width_mm(analysis_input.section_geometry)
+    d_eff_mm, tension_face, d_note = _beam_uls_effective_shear_depth_mm(analysis_input, mux_kNm=mux_kNm, strength_route=strength_route)
+    notes.extend([bw_note, d_note])
+    if bw_mm is None or d_eff_mm is None or fc <= 0.0:
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "φVn kN": float("nan"),
+            "D/C value": float("nan"),
+            "Zone": str(zone.get("Zone") or "-"),
+            "Notes": "; ".join(notes),
+        }
+    stirrup_area = _beam_uls_stirrup_area_mm2(zone)
+    legs = _beam_uls_float(zone.get("Legs"))
+    spacing = _beam_uls_float(zone.get("Spacing_mm"))
+    fy = _beam_uls_float(zone.get("fy_MPa"))
+    if not all(math.isfinite(value) and value > 0.0 for value in [stirrup_area, legs, spacing, fy]):
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "φVn kN": float("nan"),
+            "D/C value": float("nan"),
+            "Zone": str(zone.get("Zone") or "-"),
+            "Notes": "Active stirrup zone has incomplete bar/leg/spacing/fy input.",
+        }
+    avs_mm2_per_mm = float(stirrup_area) * float(legs) / float(spacing)
+    if strength_route.is_bridge:
+        phi = 0.90
+        dv_mm = max(0.72 * (float(_beam_uls_section_bounds(analysis_input.section_geometry)[3]) - float(_beam_uls_section_bounds(analysis_input.section_geometry)[1])), min(0.90 * float(d_eff_mm), float(d_eff_mm)))
+        vc_factor = 0.17
+        method = "AASHTO LRFD-compatible simplified sectional shear (θ=45° first-pass)"
+        code_basis = "φVn — AASHTO LRFD-compatible"
+        phi_policy = "AASHTO LRFD shear resistance factor φ = 0.90"
+        depth_for_vs = dv_mm
+        depth_label = "dv"
+        notes.append("Detailed MCFT β/θ calibration and benchmark verification are pending.")
+    else:
+        phi = 0.75
+        depth_for_vs = float(d_eff_mm)
+        vc_factor = 0.17
+        method = "ACI 318 simplified one-way shear with provided stirrups"
+        code_basis = "φVn — ACI 318"
+        phi_policy = "ACI 318 shear strength-reduction factor φ = 0.75"
+        depth_label = "d"
+        notes.append("Minimum shear reinforcement and maximum spacing checks are pending.")
+    vc_n = vc_factor * math.sqrt(fc) * float(bw_mm) * float(depth_for_vs)
+    vs_n = avs_mm2_per_mm * float(fy) * float(depth_for_vs)
+    vn_n = max(0.0, vc_n + vs_n)
+    phi_vn_kN = phi * vn_n / 1000.0
+    utilization = abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
+    status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 else "FAIL"
+    return {
+        "Check": "Shear",
+        "Status": status,
+        "Governing x": _format_beam_uls_x(x_m),
+        "Case": case,
+        "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+        "Capacity": f"φVn = {phi_vn_kN:,.2f} kN",
+        "Utilization": _format_beam_uls_ratio(utilization),
+        "Demand kN": float(vu_kN),
+        "Abs demand kN": abs(float(vu_kN)),
+        "φVn kN": phi_vn_kN,
+        "φVc kN": phi * vc_n / 1000.0,
+        "φVs kN": phi * vs_n / 1000.0,
+        "Vc kN": vc_n / 1000.0,
+        "Vs kN": vs_n / 1000.0,
+        "Vn kN": vn_n / 1000.0,
+        "D/C value": utilization,
+        "Zone": str(zone.get("Zone") or "Zone"),
+        "Stirrup": f"{zone.get('Bar Size') or '-'} × {int(float(legs))} legs @ {float(spacing):.0f} mm",
+        "Av/s mm2/mm": avs_mm2_per_mm,
+        "Av/s mm2/m": avs_mm2_per_mm * 1000.0,
+        "bw mm": float(bw_mm),
+        f"{depth_label} mm": float(depth_for_vs),
+        "d mm": float(d_eff_mm),
+        "Tension face": tension_face,
+        "φ": phi,
+        "Code basis": code_basis,
+        "φ policy": phi_policy,
+        "Method": method,
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _beam_uls_shear_check_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
+        "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN", "D/C value",
+        "Zone", "Stirrup", "Av/s mm2/mm", "Av/s mm2/m", "bw mm", "d mm", "dv mm", "Tension face", "φ", "Code basis", "φ policy", "Method", "Notes",
+    ]
+    if active_df.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for _, demand_row in active_df.iterrows():
+        result = _beam_uls_shear_result_for_row(state, demand_row, strength_route=strength_route)
+        if "dv mm" not in result and "dv mm" in columns:
+            result["dv mm"] = float("nan")
+        for column in columns:
+            result.setdefault(column, float("nan") if column.endswith("kN") or column.endswith("mm") or column in {"D/C value", "φ"} else "-")
+        rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _beam_uls_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if shear_df is None or shear_df.empty or "D/C value" not in shear_df.columns:
+        return None
+    valid = shear_df[pd.to_numeric(shear_df["D/C value"], errors="coerce").notna()].copy()
+    if valid.empty:
+        return None
+    idx = valid["D/C value"].astype(float).idxmax()
+    return valid.loc[idx].to_dict()
+
+
+def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Governing", "Station x", "Case", "Status", "Vu demand", "φVn", "D/C",
+        "φVc", "φVs", "Zone", "Stirrup", "Av/s", "bw", "d", "dv", "φ", "Code basis", "Method", "Notes",
+    ]
+    if shear_df is None or shear_df.empty:
+        return pd.DataFrame(columns=columns)
+    df = shear_df.copy()
+    df["__util"] = pd.to_numeric(df.get("D/C value"), errors="coerce")
+    governing_idx = df["__util"].idxmax() if df["__util"].notna().any() else None
+    rows = []
+    for idx, row in df.iterrows():
+        rows.append(
+            {
+                "Governing": "Yes" if governing_idx is not None and idx == governing_idx else "",
+                "Station x": str(row.get("Governing x") or "-"),
+                "Case": str(row.get("Case") or "-"),
+                "Status": str(row.get("Status") or "-"),
+                "Vu demand": _format_beam_uls_audit_number(row.get("Demand kN"), unit="kN"),
+                "φVn": _format_beam_uls_audit_number(row.get("φVn kN"), unit="kN"),
+                "D/C": _format_beam_uls_ratio(row.get("D/C value")),
+                "φVc": _format_beam_uls_audit_number(row.get("φVc kN"), unit="kN"),
+                "φVs": _format_beam_uls_audit_number(row.get("φVs kN"), unit="kN"),
+                "Zone": str(row.get("Zone") or "-"),
+                "Stirrup": str(row.get("Stirrup") or "-"),
+                "Av/s": _format_beam_uls_audit_number(row.get("Av/s mm2/m"), unit="mm²/m"),
+                "bw": _format_beam_uls_audit_number(row.get("bw mm"), unit="mm"),
+                "d": _format_beam_uls_audit_number(row.get("d mm"), unit="mm"),
+                "dv": _format_beam_uls_audit_number(row.get("dv mm"), unit="mm"),
+                "φ": _format_beam_uls_ratio(row.get("φ")),
+                "Code basis": str(row.get("Code basis") or "-"),
+                "Method": str(row.get("Method") or "-"),
+                "Notes": str(row.get("Notes") or ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _format_beam_uls_audit_number(value: object, *, digits: int = 2, unit: str = "") -> str:
@@ -3332,9 +3727,14 @@ def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -
     return pd.DataFrame(audit_rows, columns=columns)
 
 
-def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None = None, *, state: Mapping[str, object] | None = None) -> pd.DataFrame:
+def _beam_uls_check_table(
+    active_df: pd.DataFrame,
+    flexure_preview_df: pd.DataFrame | None = None,
+    shear_check_df: pd.DataFrame | None = None,
+    *,
+    state: Mapping[str, object] | None = None,
+) -> pd.DataFrame:
     flexure = _beam_uls_governing_action(active_df, "Mux")
-    shear = _beam_uls_governing_action(active_df, "Vuy")
     torsion = _beam_uls_governing_action(active_df, "Tu")
     rows: list[dict[str, str]] = []
 
@@ -3376,41 +3776,55 @@ def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFr
             }
         )
 
-    shear_status, shear_capacity_note = _beam_uls_shear_layout_status(state or {})
-    specs = [
-        ("Shear", shear_status, shear, "kN", shear_capacity_note),
-        ("Torsion", "PLANNED", torsion, "kN-m", "-"),
-    ]
-    for check, default_status, governing, unit, capacity_note in specs:
-        if governing is None or float(governing["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
-            status = "OPTIONAL" if check == "Torsion" else "NOT READY"
+    shear_result = _beam_uls_governing_shear_row(shear_check_df)
+    if shear_result is not None:
+        rows.append(
+            {
+                "Check": "Shear",
+                "Status": str(shear_result.get("Status") or "REVIEW"),
+                "Governing x": str(shear_result.get("Governing x") or "-"),
+                "Case": str(shear_result.get("Case") or "-"),
+                "Demand": str(shear_result.get("Demand") or "-"),
+                "Capacity": str(shear_result.get("Capacity") or "-"),
+                "Utilization": str(shear_result.get("Utilization") or "-"),
+            }
+        )
+    else:
+        shear_status, shear_capacity_note = _beam_uls_shear_layout_status(state or {})
+        shear = _beam_uls_governing_action(active_df, "Vuy")
+        if shear is None or float(shear["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+            rows.append({"Check": "Shear", "Status": "NOT READY", "Governing x": "-", "Case": "-", "Demand": "-", "Capacity": "-", "Utilization": "-"})
+        else:
             rows.append(
                 {
-                    "Check": check,
-                    "Status": status,
-                    "Governing x": "-",
-                    "Case": "-",
-                    "Demand": "-",
-                    "Capacity": "-",
+                    "Check": "Shear",
+                    "Status": shear_status,
+                    "Governing x": _format_beam_uls_x(shear["x_m"]),
+                    "Case": str(shear["case"]),
+                    "Demand": _format_beam_uls_demand(shear["demand"], "kN"),
+                    "Capacity": shear_capacity_note if shear_status == "LAYOUT READY" else "-",
                     "Utilization": "-",
                 }
             )
-            continue
+
+    if torsion is None or float(torsion["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+        rows.append({"Check": "Torsion", "Status": "OPTIONAL", "Governing x": "-", "Case": "-", "Demand": "-", "Capacity": "-", "Utilization": "-"})
+    else:
         rows.append(
             {
-                "Check": check,
-                "Status": default_status,
-                "Governing x": _format_beam_uls_x(governing["x_m"]),
-                "Case": str(governing["case"]),
-                "Demand": _format_beam_uls_demand(governing["demand"], unit),
-                "Capacity": capacity_note if check == "Shear" and default_status == "LAYOUT READY" else "-",
+                "Check": "Torsion",
+                "Status": "PLANNED",
+                "Governing x": _format_beam_uls_x(torsion["x_m"]),
+                "Case": str(torsion["case"]),
+                "Demand": _format_beam_uls_demand(torsion["demand"], "kN-m"),
+                "Capacity": "-",
                 "Utilization": "-",
             }
         )
     return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
 
 
-def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str, flexure_preview_df: pd.DataFrame | None = None) -> list[dict[str, object]]:
+def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str, flexure_preview_df: pd.DataFrame | None = None, shear_check_df: pd.DataFrame | None = None) -> list[dict[str, object]]:
     if active_df.empty:
         return [
             {
@@ -3430,18 +3844,39 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
     flexure_detail = f"{flexure['case']} @ x={_format_beam_uls_x(flexure['x_m'])}" if flexure else "No finite Mux"
     shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
     shear_detail = f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy"
+    shear_result = _beam_uls_governing_shear_row(shear_check_df)
+    if shear_result is not None:
+        shear_dc = str(shear_result.get("Utilization") or "-")
+        shear_value = f"{shear_value} · D/C {shear_dc}" if shear_dc != "-" else shear_value
+        shear_detail = f"{shear_detail}; {shear_result.get('Capacity', '-')}"
     flex_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
     if flex_preview is not None:
         status_text = str(flex_preview.get("Status") or "REVIEW")
         dc_value = str(flex_preview.get("Utilization") or "-")
         flexure_card_value = f"{flexure_value} · D/C {dc_value}" if dc_value != "-" else flexure_value
         flexure_card_detail = f"{flexure_detail}; {flex_preview.get('Capacity', '-')}"
-        overall_value = f"FLEXURE CHECK — {status_text}"
-        overall_detail = (
-            f"{len(active_df):,} active demand row(s). Flexure φMn check is {status_text}; "
-            "shear/torsion remain planned, so no overall ULS PASS/FAIL is issued."
-        )
-        overall_status = "danger" if status_text == "FAIL" else ("ready" if status_text == "PASS" else "warning")
+        shear_status_text = str(shear_result.get("Status") or "REVIEW") if shear_result is not None else "NOT READY"
+        if shear_result is not None:
+            if status_text == "FAIL" or shear_status_text == "FAIL":
+                overall_value = "ULS PARTIAL CHECK — FAIL"
+                overall_status = "danger"
+            elif status_text == "PASS" and shear_status_text == "PASS":
+                overall_value = "ULS PARTIAL CHECK — PASS"
+                overall_status = "ready"
+            else:
+                overall_value = "ULS PARTIAL CHECK — REVIEW"
+                overall_status = "warning"
+            overall_detail = (
+                f"{len(active_df):,} active demand row(s). Flexure = {status_text}; shear = {shear_status_text}; "
+                "torsion/detailing remain incomplete, so no overall ULS certification is issued."
+            )
+        else:
+            overall_value = f"FLEXURE CHECK — {status_text}"
+            overall_detail = (
+                f"{len(active_df):,} active demand row(s). Flexure φMn check is {status_text}; "
+                "shear φVn is not ready, so no overall ULS PASS/FAIL is issued."
+            )
+            overall_status = "danger" if status_text == "FAIL" else ("ready" if status_text == "PASS" else "warning")
     else:
         flexure_card_value = flexure_value
         flexure_card_detail = flexure_detail + "; φMn not ready"
@@ -3457,11 +3892,11 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
             "strong": True,
         },
         {"title": "Critical flexure demand / D/C", "value": flexure_card_value, "detail": flexure_card_detail, "status": "warning" if flex_preview is not None and str(flex_preview.get("Status")) == "FAIL" else "info"},
-        {"title": "Critical shear demand", "value": shear_value, "detail": shear_detail, "status": "info"},
+        {"title": "Critical shear demand / D/C", "value": shear_value, "detail": shear_detail, "status": "warning" if shear_result is not None and str(shear_result.get("Status")) == "FAIL" else "info"},
         {
             "title": "Design action",
-            "value": "Run remaining checks later",
-            "detail": f"Review flexure check now; φVn / φTn, development, debonding strength, and full {code_label} ULS certification remain future milestones.",
+            "value": "Review partial ULS checks",
+            "detail": f"Flexure and provided-stirrup shear can be reviewed now; φTn, detailing/development, and full {code_label} ULS certification remain future milestones.",
             "status": "neutral",
         },
     ]
@@ -3596,6 +4031,57 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
     fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs φMn</sup>"})
     return fig
 
+
+def _make_beam_uls_shear_capacity_figure(active_df: pd.DataFrame, shear_check_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+    fig = _make_beam_uls_demand_figure(
+        active_df,
+        column="Vuy",
+        title=f"Shear Check — Strength ULS<br><sup>{code_label}</sup>",
+        y_label="Shear, Vu (kN)",
+    )
+    if shear_check_df is None or shear_check_df.empty:
+        fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
+        return fig
+    plot_df = shear_check_df.copy()
+    plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+    plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
+    plot_df["__phi_vn"] = pd.to_numeric(plot_df.get("φVn kN"), errors="coerce")
+    plot_df["__phi_vc"] = pd.to_numeric(plot_df.get("φVc kN"), errors="coerce")
+    plot_df = plot_df[plot_df["__x_m"].notna() & plot_df["__phi_vn"].notna()].copy()
+    if plot_df.empty:
+        fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
+        return fig
+    plot_df = plot_df.sort_values(["Case", "__x_m"], kind="stable")
+    for case_name, case_df in plot_df.groupby("Case", sort=False):
+        x_values = [float(value) for value in case_df["__x_m"].tolist()]
+        vn_values = [float(value) for value in case_df["__phi_vn"].tolist()]
+        fig.add_trace(go.Scatter(x=x_values, y=vn_values, mode="markers+lines", name="φVn", hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>"))
+        fig.add_trace(go.Scatter(x=x_values, y=[-v for v in vn_values], mode="lines", name="-φVn", hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>"))
+        vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
+        if any(math.isfinite(value) for value in vc_values):
+            fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))
+    governing = _beam_uls_governing_shear_row(shear_check_df)
+    if governing is not None:
+        x_text = str(governing.get("Governing x") or "").replace(" m", "")
+        x_val = _beam_uls_float(x_text)
+        cap = _beam_uls_float(governing.get("φVn kN"))
+        util = _beam_uls_float(governing.get("D/C value"))
+        if math.isfinite(x_val) and math.isfinite(cap) and math.isfinite(util):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val],
+                    y=[cap],
+                    mode="markers+text",
+                    text=[f"{governing.get('Status', 'REVIEW')} · D/C {util:.3f}"],
+                    textposition="top center",
+                    name="Governing shear check",
+                    hovertemplate="x=%{x:.3f} m<br>Governing φVn=%{y:.3f} kN<extra></extra>",
+                )
+            )
+    fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand vs φVn</sup>"})
+    return fig
+
+
 def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
     """Render compact ULS demand/flexure-check workspace for Bridge/Building Beam/Girder.
 
@@ -3616,7 +4102,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX.SC1 keeps the strain-compatibility section engine as the primary flexure method, but exposes code-compatible audit basis: Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. Shear/torsion remain route-ready but not calculated."
+        "ULS.FLEX.SC1 keeps the strain-compatibility section engine as the primary flexure method, but exposes code-compatible audit basis: Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. ULS.SHEAR1 adds first-pass provided-stirrup sectional φVn; torsion remains route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -3625,8 +4111,19 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         active_df,
         strength_route=strength_route,
     )
+    shear_check_df = _beam_uls_shear_check_dataframe(
+        st.session_state,
+        active_df,
+        strength_route=strength_route,
+    )
     _render_analysis_summary_strip(
-        _beam_uls_summary_cards(active_df, workflow_label=workflow_label, code_label=code_label, flexure_preview_df=flexure_preview_df),
+        _beam_uls_summary_cards(
+            active_df,
+            workflow_label=workflow_label,
+            code_label=code_label,
+            flexure_preview_df=flexure_preview_df,
+            shear_check_df=shear_check_df,
+        ),
         columns=4,
     )
 
@@ -3634,7 +4131,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         {"title": "Workflow", "value": workflow_label, "detail": "Selected in Setup", "status": "info"},
         {"title": "Strength route", "value": code_label, "detail": strength_route.flexure_engine_label, "status": "info"},
         {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
-        {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup layout required before φVn", "status": "warning"},
+        {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup φVn check", "status": "info"},
     ]
     _render_analysis_summary_strip(basis_cards, columns=4)
 
@@ -3643,7 +4140,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         return
 
     st.markdown("#### Compact ULS check table")
-    st.dataframe(_beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, state=st.session_state), use_container_width=True, hide_index=True)
+    st.dataframe(
+        _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, state=st.session_state),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     with st.expander("Flexure strength audit / benchmark output", expanded=False):
         st.caption(
@@ -3656,10 +4157,22 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         else:
             st.dataframe(audit_df, use_container_width=True, hide_index=True)
 
+    with st.expander("Shear strength audit / provided stirrup output", expanded=False):
+        st.caption(
+            "First-pass sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
+            "Vu, φVc, φVs, φVn, D/C, Av/s, bw, d/dv, and code route. Minimum reinforcement, maximum spacing, "
+            "detailed AASHTO MCFT calibration, and benchmark certification remain follow-up QA milestones."
+        )
+        shear_audit_df = _beam_uls_shear_audit_dataframe(shear_check_df)
+        if shear_audit_df.empty:
+            st.info("Shear audit output is not available until active ULS demand rows and active stirrup zones are ready.")
+        else:
+            st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
+
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific code-compatible strain-compatibility basis. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
+            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific code-compatible strain-compatibility basis. Shear uses active provided stirrup zones for first-pass φVn. φTn remains absent until a verified {strength_route.project_design_code} torsion engine is implemented."
         )
         flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
         with flex_tab:
@@ -3673,8 +4186,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             )
         with shear_tab:
             st.plotly_chart(
-                _make_beam_uls_demand_figure(active_df, column="Vuy", title=f"Shear Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Shear, Vu (kN)"),
+                _make_beam_uls_shear_capacity_figure(active_df, shear_check_df, code_label=code_label),
                 use_container_width=True,
+            )
+            st.caption(
+                "Shear capacity is from the active provided stirrup layout by zone. φVn is a first-pass sectional shear check; "
+                "minimum transverse reinforcement, maximum spacing, detailed AASHTO MCFT β/θ calibration, and benchmark certification remain separate QA/design steps."
             )
         with torsion_tab:
             st.plotly_chart(
@@ -3692,6 +4209,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.write("- Flexure audit output reports Mn nominal, route φ, φMn, D/C, bending direction, tension face, method, code-compatible strain-compatibility basis, and resistance-factor policy for benchmark comparison.")
         st.write("- Flexure φMn is plotted as a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
         st.write(f"- Shear route: {strength_route.shear_basis_note}")
+        st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
         st.write(f"- Torsion route: {strength_route.torsion_basis_note}")
         st.write(f"- Overall guard: {strength_route.overall_guard_note}")
         st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")

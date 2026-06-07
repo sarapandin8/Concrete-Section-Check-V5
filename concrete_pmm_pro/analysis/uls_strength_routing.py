@@ -76,17 +76,19 @@ def bridge_beam_girder_uls_strength_route(code_edition: object | None = None) ->
             "basis with workflow-specific resistance-factor policy. Detailing/development "
             "checks remain separate ULS milestones."
         ),
-        shear_engine_label="AASHTO LRFD shear route",
+        shear_engine_label="AASHTO LRFD-compatible shear route",
         shear_basis_note=(
-            "Bridge shear will route to AASHTO LRFD/MCFT-style φVn after the verified shear "
-            "engine is implemented. Current milestone only confirms provided stirrup layout readiness."
+            "Bridge shear uses a provided-stirrup sectional φVn check with an AASHTO LRFD-compatible "
+            "basis for first-pass girder ULS review. Detailed MCFT calibration, maximum spacing, minimum "
+            "transverse reinforcement, and benchmark certification remain follow-up QA milestones."
         ),
         torsion_engine_label="AASHTO LRFD torsion route",
         torsion_basis_note="Bridge torsion φTn is routed as a future AASHTO LRFD strength milestone.",
         overall_guard_note=(
-            "No overall Bridge ULS PASS/FAIL is issued until AASHTO LRFD shear/torsion and "
-            "required detailing checks are implemented."
+            "No overall Bridge ULS PASS/FAIL is issued until AASHTO LRFD torsion and required "
+            "detailing checks are implemented; flexure and first-pass sectional shear can be reviewed separately."
         ),
+        is_code_specific_shear_ready=True,
     )
 
 
@@ -112,15 +114,17 @@ def building_beam_girder_uls_strength_route(code_edition: object | None = None) 
         ),
         shear_engine_label="ACI 318 shear route",
         shear_basis_note=(
-            "Building shear will route to ACI 318 φVn after the verified shear engine is implemented. "
-            "Current milestone only confirms provided stirrup layout readiness."
+            "Building shear uses a provided-stirrup sectional φVn check with ACI 318 one-way shear "
+            "basis for first-pass beam/girder ULS review. Maximum spacing, minimum shear reinforcement, "
+            "and benchmark certification remain follow-up QA milestones."
         ),
         torsion_engine_label="ACI 318 torsion route",
         torsion_basis_note="Building torsion φTn is routed as a future ACI 318 strength milestone.",
         overall_guard_note=(
-            "No overall Building ULS PASS/FAIL is issued until ACI 318 shear/torsion and "
-            "required detailing checks are implemented."
+            "No overall Building ULS PASS/FAIL is issued until ACI 318 torsion and required detailing "
+            "checks are implemented; flexure and first-pass sectional shear can be reviewed separately."
         ),
+        is_code_specific_shear_ready=True,
     )
 
 

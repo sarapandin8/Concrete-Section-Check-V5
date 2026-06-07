@@ -4,6 +4,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _active_beam_uls_demand_dataframe_from_session,
     _beam_uls_check_table,
     _beam_uls_flexure_audit_dataframe,
+    _beam_uls_shear_audit_dataframe,
+    _beam_uls_shear_check_dataframe,
     _beam_uls_summary_cards,
 )
 
@@ -290,7 +292,7 @@ def test_uls_code_route1_bridge_and_building_routes_are_code_specific() -> None:
     assert bridge.display_code_label == "AASHTO LRFD 9th Edition"
     assert "AASHTO LRFD" in bridge.flexure_engine_label
     assert "AASHTO LRFD" in bridge.shear_engine_label
-    assert not bridge.is_code_specific_shear_ready
+    assert bridge.is_code_specific_shear_ready
 
     assert building.workflow_label == "Building Beam/Girder"
     assert building.project_design_code == "ACI 318"
@@ -298,7 +300,7 @@ def test_uls_code_route1_bridge_and_building_routes_are_code_specific() -> None:
     assert building.default_combo_label == "ACI19-ULS-2"
     assert "ACI 318" in building.flexure_engine_label
     assert "ACI 318" in building.shear_engine_label
-    assert not building.is_code_specific_shear_ready
+    assert building.is_code_specific_shear_ready
 
 
 def test_uls_code_route1_analysis_uses_route_basis_notes_in_flexure_rows() -> None:
@@ -492,3 +494,129 @@ def test_uls_flex_verify1_engine_populates_nominal_mn_and_effective_phi() -> Non
     assert "Benchmark" in row["Benchmark readiness"]
     assert row["Strain compatibility basis"] == "ACI 318-compatible strain compatibility"
     assert "strain-based φ" in row["φ policy"]
+
+
+
+def test_uls_shear1_provided_stirrup_layout_calculates_phi_vn_for_building() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Support",
+                "x_start_m": 0.0,
+                "x_end_m": 6.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 120.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+
+    assert len(shear) == 1
+    row = shear.iloc[0]
+    assert row["Status"] in {"PASS", "FAIL"}
+    assert row["φVn kN"] > 0.0
+    assert row["φVc kN"] > 0.0
+    assert row["φVs kN"] > 0.0
+    assert row["D/C value"] > 0.0
+    assert "ACI 318" in row["Code basis"]
+    assert "DB12" in row["Stirrup"]
+
+
+def test_uls_shear1_check_table_uses_governing_shear_capacity() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 120.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    shear = pd.DataFrame(
+        [
+            {
+                "Check": "Shear",
+                "Status": "PASS",
+                "Governing x": "3.000 m",
+                "Case": "ACI19-ULS-2",
+                "Demand": "120.00 kN",
+                "Capacity": "φVn = 450.00 kN",
+                "Utilization": "0.267",
+                "Demand kN": 120.0,
+                "φVn kN": 450.0,
+                "D/C value": 0.267,
+            }
+        ]
+    )
+
+    table = _beam_uls_check_table(active, shear_check_df=shear)
+
+    shear_row = table.loc[table["Check"] == "Shear"].iloc[0]
+    assert shear_row["Status"] == "PASS"
+    assert shear_row["Capacity"] == "φVn = 450.00 kN"
+    assert shear_row["Utilization"] == "0.267"
+
+
+def test_uls_shear1_audit_dataframe_exposes_capacity_components() -> None:
+    shear = pd.DataFrame(
+        [
+            {
+                "Check": "Shear",
+                "Status": "FAIL",
+                "Governing x": "1.000 m",
+                "Case": "Strength I",
+                "Demand kN": 900.0,
+                "φVn kN": 800.0,
+                "φVc kN": 200.0,
+                "φVs kN": 600.0,
+                "D/C value": 1.125,
+                "Zone": "Support",
+                "Stirrup": "DB12 × 2 legs @ 100 mm",
+                "Av/s mm2/m": 2262.0,
+                "bw mm": 300.0,
+                "d mm": 550.0,
+                "dv mm": 500.0,
+                "φ": 0.9,
+                "Code basis": "φVn — AASHTO LRFD-compatible",
+                "Method": "AASHTO LRFD-compatible simplified sectional shear (θ=45° first-pass)",
+                "Notes": "benchmark pending",
+            }
+        ]
+    )
+
+    audit = _beam_uls_shear_audit_dataframe(shear)
+
+    row = audit.iloc[0]
+    assert row["Governing"] == "Yes"
+    assert row["φVn"] == "800.00 kN"
+    assert row["φVc"] == "200.00 kN"
+    assert row["φVs"] == "600.00 kN"
+    assert row["D/C"] == "1.125"
+    assert "AASHTO" in row["Code basis"]

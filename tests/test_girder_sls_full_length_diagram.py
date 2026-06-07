@@ -259,3 +259,33 @@ def test_deflect_sls1_5_zero_display_and_camber_status_semantics() -> None:
     assert 'Down {down_text} · Up {up_text}' in SOURCE
     assert 'Down @ x={down_x_text}; Up @ x={up_x_text}' in SOURCE
     assert 'Transfer and Construction rows report response semantics (CAMBER / DEFLECTION / RESPONSE)' in SOURCE
+
+
+
+def test_uls_girder1_adds_compact_beam_girder_uls_workspace() -> None:
+    assert "ULS.GIRDER1" in SOURCE
+    assert "ULS Beam/Girder decision summary" in SOURCE
+    assert "Loads page is the source of truth" in SOURCE
+    assert "beam_uls_loads_table" in SOURCE
+    assert "Compact ULS check table" in SOURCE
+    assert "ULS demand table — audit / source data" in SOURCE
+    assert "ULS demand diagrams — preview / demand only" in SOURCE
+    assert "Capacity engine is planned; no PASS/FAIL is issued yet" in SOURCE
+
+
+def test_uls_girder1_routes_beam_workflows_away_from_pmm_solver_workspace() -> None:
+    uls_block = SOURCE[SOURCE.find("def render_analysis_uls_pmm"):SOURCE.find("def render_analysis_sls_stress")]
+    assert "is_beam_girder_future_workflow(mode_settings) or is_building_beam_girder_workflow(mode_settings)" in uls_block
+    assert "_render_beam_girder_uls_workspace(mode_settings)" in uls_block
+    assert "return" in uls_block
+    assert "_render_analysis_settings_panel()" in uls_block
+
+
+def test_uls_girder1_uses_primary_actions_only_in_default_decision_display() -> None:
+    assert "max |Mux|" not in SOURCE  # avoid user-facing mathematical clutter
+    assert "Critical flexure demand" in SOURCE
+    assert "Critical shear demand" in SOURCE
+    assert '("Flexure", "PLANNED", flexure, "kN-m")' in SOURCE
+    assert '("Shear", "PLANNED", shear, "kN")' in SOURCE
+    assert '("Torsion", "PLANNED", torsion, "kN-m")' in SOURCE
+    assert "Secondary actions Muy, Vux, and Nu are kept here for audit" in SOURCE

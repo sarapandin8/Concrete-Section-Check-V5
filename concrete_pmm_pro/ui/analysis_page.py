@@ -209,6 +209,13 @@ PMM_3D_LAYER_DEFAULTS = {
     "show_pmm_3d_all_load_points": False,
 }
 
+# ULS.GIRDER1 — compact Beam/Girder ULS demand workspace.
+# Loads page remains the source of truth; Analysis consumes the station-based
+# beam_uls_loads_table read-only and does not duplicate ULS input.
+BEAM_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
+_BEAM_ULS_DEMAND_TOL = 1.0e-9
+
+
 _ANALYSIS_DASHBOARD_CSS = """
 <style>
 .cpmm-analysis-strip {
@@ -2483,6 +2490,315 @@ def _render_governing_case_card(dc_summary: DemandCapacitySummary) -> None:
     st.markdown(html, unsafe_allow_html=True)
     if governing.message:
         st.caption(f"Governing case message: {governing.message}")
+
+
+
+def _beam_uls_active_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        try:
+            return bool(float(value)) and math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+    text = str(value).strip().casefold()
+    if text in {"", "0", "false", "f", "no", "n", "off", "unchecked"}:
+        return False
+    return True
+
+
+def _beam_uls_float(value: object) -> float:
+    if value is None:
+        return float("nan")
+    if isinstance(value, str):
+        value = value.strip().replace(",", "")
+        if not value or value in {"-", "—"}:
+            return float("nan")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return numeric if math.isfinite(numeric) else float("nan")
+
+
+def _beam_uls_demand_dataframe_from_session(state: Mapping[str, object]) -> pd.DataFrame:
+    """Return normalized Beam/Girder ULS station demand rows from Loads.
+
+    ULS.GIRDER1 rule: Loads is the single source of truth.  Analysis consumes
+    beam_uls_loads_table only, filters Active rows, and never creates a second
+    editable ULS demand table.
+    """
+
+    raw = state.get("beam_uls_loads_table")
+    df = pd.DataFrame(raw if raw is not None else [], columns=BEAM_ULS_LOAD_COLUMNS_ANALYSIS)
+    for column in BEAM_ULS_LOAD_COLUMNS_ANALYSIS:
+        if column not in df.columns:
+            df[column] = ""
+    df = df[BEAM_ULS_LOAD_COLUMNS_ANALYSIS].copy()
+    df["Active"] = df["Active"].map(_beam_uls_active_value)
+    for column in ["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"]:
+        df[column] = df[column].map(_beam_uls_float)
+    df["Case Name"] = df["Case Name"].map(lambda value: str(value or "").strip())
+    df["Note"] = df["Note"].map(lambda value: str(value or "").strip())
+    return df
+
+
+def _active_beam_uls_demand_dataframe_from_session(state: Mapping[str, object]) -> pd.DataFrame:
+    df = _beam_uls_demand_dataframe_from_session(state)
+    if df.empty:
+        return df
+    active = df[df["Active"]].copy()
+    active = active[active["Case Name"].astype(str).str.len() > 0]
+    return active.reset_index(drop=True)
+
+
+def _beam_uls_governing_action(active_df: pd.DataFrame, column: str) -> dict[str, object] | None:
+    if active_df.empty or column not in active_df.columns:
+        return None
+    candidate = active_df[pd.to_numeric(active_df[column], errors="coerce").notna()].copy()
+    if candidate.empty:
+        return None
+    candidate["__abs_demand"] = candidate[column].abs()
+    idx = candidate["__abs_demand"].idxmax()
+    row = candidate.loc[idx]
+    demand = float(row[column])
+    if not math.isfinite(demand):
+        return None
+    return {
+        "case": str(row.get("Case Name") or "-"),
+        "x_m": float(row.get("Station x (m)")) if math.isfinite(float(row.get("Station x (m)"))) else None,
+        "demand": demand,
+        "abs_demand": abs(demand),
+        "note": str(row.get("Note") or ""),
+    }
+
+
+def _format_beam_uls_x(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(numeric):
+        return "-"
+    return f"{numeric:.3f} m"
+
+
+def _format_beam_uls_demand(value: object, unit: str) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(numeric):
+        return "-"
+    if abs(numeric) <= _BEAM_ULS_DEMAND_TOL:
+        return "-"
+    return f"{numeric:,.2f} {unit}"
+
+
+def _beam_uls_check_table(active_df: pd.DataFrame) -> pd.DataFrame:
+    flexure = _beam_uls_governing_action(active_df, "Mux")
+    shear = _beam_uls_governing_action(active_df, "Vuy")
+    torsion = _beam_uls_governing_action(active_df, "Tu")
+    rows: list[dict[str, str]] = []
+    specs = [
+        ("Flexure", "PLANNED", flexure, "kN-m"),
+        ("Shear", "PLANNED", shear, "kN"),
+        ("Torsion", "PLANNED", torsion, "kN-m"),
+    ]
+    for check, default_status, governing, unit in specs:
+        if governing is None or float(governing["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+            status = "OPTIONAL" if check == "Torsion" else "NOT READY"
+            rows.append(
+                {
+                    "Check": check,
+                    "Status": status,
+                    "Governing x": "-",
+                    "Case": "-",
+                    "Demand": "-",
+                    "Capacity": "-",
+                    "Utilization": "-",
+                }
+            )
+            continue
+        rows.append(
+            {
+                "Check": check,
+                "Status": default_status,
+                "Governing x": _format_beam_uls_x(governing["x_m"]),
+                "Case": str(governing["case"]),
+                "Demand": _format_beam_uls_demand(governing["demand"], unit),
+                "Capacity": "planned",
+                "Utilization": "planned",
+            }
+        )
+    return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
+
+
+def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str) -> list[dict[str, object]]:
+    if active_df.empty:
+        return [
+            {
+                "title": "Overall ULS check",
+                "value": "NOT READY",
+                "detail": "Define or import Active ULS station demand rows in Loads.",
+                "status": "warning",
+                "strong": True,
+            },
+            {"title": "Critical flexure demand", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
+            {"title": "Critical shear demand", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
+            {"title": "Design action", "value": "Go to Loads", "detail": "Analysis is read-only for ULS demand input.", "status": "info"},
+        ]
+    flexure = _beam_uls_governing_action(active_df, "Mux")
+    shear = _beam_uls_governing_action(active_df, "Vuy")
+    flexure_value = _format_beam_uls_demand(flexure["demand"], "kN-m") if flexure else "-"
+    flexure_detail = f"{flexure['case']} @ x={_format_beam_uls_x(flexure['x_m'])}" if flexure else "No finite Mux"
+    shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
+    shear_detail = f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy"
+    return [
+        {
+            "title": "Overall ULS check",
+            "value": "NOT READY",
+            "detail": f"{len(active_df):,} active demand row(s). Capacity engine is planned; no PASS/FAIL is issued yet.",
+            "status": "warning",
+            "strong": True,
+        },
+        {"title": "Critical flexure demand", "value": flexure_value, "detail": flexure_detail, "status": "info"},
+        {"title": "Critical shear demand", "value": shear_value, "detail": shear_detail, "status": "info"},
+        {
+            "title": "Design action",
+            "value": "Capacity planned",
+            "detail": f"{workflow_label}; {code_label}. Flexure/shear/torsion strength checks are future milestones.",
+            "status": "neutral",
+        },
+    ]
+
+
+def _beam_uls_audit_dataframe(active_df: pd.DataFrame) -> pd.DataFrame:
+    if active_df.empty:
+        return pd.DataFrame(columns=BEAM_ULS_LOAD_COLUMNS_ANALYSIS)
+    df = active_df.copy()
+    for column in ["Station x (m)", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu"]:
+        df[column] = df[column].map(lambda value: "-" if pd.isna(value) else value)
+    return df[BEAM_ULS_LOAD_COLUMNS_ANALYSIS]
+
+
+def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title: str, y_label: str) -> go.Figure:
+    plot_df = active_df[["Station x (m)", "Case Name", column]].copy()
+    plot_df = plot_df[pd.to_numeric(plot_df["Station x (m)"], errors="coerce").notna()]
+    plot_df = plot_df[pd.to_numeric(plot_df[column], errors="coerce").notna()]
+    plot_df = plot_df.sort_values(["Case Name", "Station x (m)"], kind="stable")
+    fig = go.Figure()
+    if plot_df.empty:
+        fig.add_annotation(text="No active finite ULS demand rows", x=0.5, y=0.5, showarrow=False, xref="paper", yref="paper")
+    else:
+        for case_name, case_df in plot_df.groupby("Case Name", sort=False):
+            fig.add_trace(
+                go.Scatter(
+                    x=case_df["Station x (m)"],
+                    y=case_df[column],
+                    mode="lines+markers",
+                    name=f"Demand {column} — {case_name}",
+                    hovertemplate="x=%{x:.3f} m<br>Demand=%{y:.3f}<extra></extra>",
+                )
+            )
+        governing = _beam_uls_governing_action(plot_df.rename(columns={column: column}), column)
+        if governing is not None and float(governing["abs_demand"]) > _BEAM_ULS_DEMAND_TOL:
+            fig.add_trace(
+                go.Scatter(
+                    x=[governing["x_m"]],
+                    y=[governing["demand"]],
+                    mode="markers+text",
+                    text=["Governing demand"],
+                    textposition="top center",
+                    name="Governing demand",
+                    hovertemplate="x=%{x:.3f} m<br>Demand=%{y:.3f}<extra></extra>",
+                )
+            )
+    fig.update_layout(
+        title={"text": f"{title}<br><sup>Demand only — capacity curves planned</sup>"},
+        xaxis_title="Distance from left end of member (m)",
+        yaxis_title=y_label,
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.33, "xanchor": "center", "x": 0.5},
+        margin={"l": 60, "r": 30, "t": 70, "b": 85},
+    )
+    fig.add_hline(y=0.0, line_width=1)
+    return fig
+
+
+def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
+    """Render compact ULS demand workspace for Bridge/Building Beam/Girder.
+
+    This is intentionally decision-first and read-only.  ULS.GIRDER1 does not
+    implement φMn, φVn, φTn, development length, shear, torsion, or report
+    certification; it only surfaces governing factored demand from Loads.
+    """
+
+    is_bridge = is_beam_girder_future_workflow(mode_settings)
+    is_building = is_building_beam_girder_workflow(mode_settings)
+    workflow_label = "Bridge Beam/Girder" if is_bridge else "Building Beam/Girder"
+    code_label = "AASHTO LRFD" if is_bridge else "ACI 318"
+    source_label = "Loads → ULS Bridge Beam/Girder Design Loads" if is_bridge else "Loads → ULS Building Beam/Girder Design Loads"
+
+    st.markdown(_ANALYSIS_DASHBOARD_CSS, unsafe_allow_html=True)
+    st.markdown("### ULS Beam/Girder decision summary")
+    st.caption(
+        "Compact ULS demand workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
+        "Strength capacity curves and PASS/FAIL checks are planned milestones, so this page must not show a false PASS."
+    )
+
+    active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
+    _render_analysis_summary_strip(
+        _beam_uls_summary_cards(active_df, workflow_label=workflow_label, code_label=code_label),
+        columns=4,
+    )
+
+    basis_cards = [
+        {"title": "Workflow", "value": workflow_label, "detail": "Selected in Setup", "status": "info"},
+        {"title": "Design code", "value": code_label, "detail": "Workflow-locked code basis", "status": "info"},
+        {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
+    ]
+    _render_analysis_summary_strip(basis_cards, columns=3)
+
+    if active_df.empty:
+        st.warning("No Active Beam/Girder ULS station demand rows are available. Define or import them in Loads before ULS review.")
+        return
+
+    st.markdown("#### Compact ULS check table")
+    st.dataframe(_beam_uls_check_table(active_df), use_container_width=True, hide_index=True)
+
+    with st.expander("ULS demand diagrams — preview / demand only", expanded=False):
+        st.caption(
+            "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
+            "Capacity lines φMn, φVn, and φTn are intentionally absent until the named capacity-engine milestones are implemented."
+        )
+        flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand", "Shear demand", "Torsion demand"])
+        with flex_tab:
+            st.plotly_chart(
+                _make_beam_uls_demand_figure(active_df, column="Mux", title=f"Flexure Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Moment, Mu (kN-m)"),
+                use_container_width=True,
+            )
+        with shear_tab:
+            st.plotly_chart(
+                _make_beam_uls_demand_figure(active_df, column="Vuy", title=f"Shear Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Shear, Vu (kN)"),
+                use_container_width=True,
+            )
+        with torsion_tab:
+            st.plotly_chart(
+                _make_beam_uls_demand_figure(active_df, column="Tu", title=f"Torsion Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Torsion, Tu (kN-m)"),
+                use_container_width=True,
+            )
+
+    with st.expander("ULS demand table — audit / source data", expanded=False):
+        st.caption("Read-only normalized view of Active rows from Loads. Secondary actions Muy, Vux, and Nu are kept here for audit, not default decision display.")
+        st.dataframe(_beam_uls_audit_dataframe(active_df), use_container_width=True, hide_index=True)
+
+    with st.expander("ULS.GIRDER1 capability notes", expanded=False):
+        st.write("- Flexure, shear, and torsion capacity engines are not implemented in this milestone.")
+        st.write("- No φMn / φVn / φTn, development length, debonding strength, interface shear, or end-zone bursting check is claimed here.")
+        st.write("- Use this workspace to confirm governing factored demand before implementing capacity checks.")
+        st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are not changed by this ULS framework milestone.")
 
 
 def _analysis_card_html(title: str, value: str, detail: str = "", status: str = "info", strong: bool = False) -> str:
@@ -8435,6 +8751,11 @@ def _render_analysis_settings_panel() -> None:
 
 def render_analysis_uls_pmm() -> None:
     st.subheader("ULS / PMM")
+    mode_settings = _analysis_mode_from_session()
+    if is_beam_girder_future_workflow(mode_settings) or is_building_beam_girder_workflow(mode_settings):
+        _render_beam_girder_uls_workspace(mode_settings)
+        return
+
     _render_project_design_code_guard(workflow="pmm")
     st.info(
         "ULS compression Pu remains positive. Prestress is treated as internal prestress/reinforcement action "

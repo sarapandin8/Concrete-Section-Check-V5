@@ -472,7 +472,8 @@ def test_loads_page_source_contains_workflow_based_uls_sls_tables_and_double_cou
 
     assert "ULS PMM / Shear Loads" in source
     assert "SLS Stress Loads" in source
-    assert "ULS Girder Design Loads" in source
+    assert "ULS Bridge Beam/Girder Design Loads" in source
+    assert "ULS Building Beam/Girder Design Loads" in source
     assert "SLS Girder Service Loads" in source
     assert "Do not include prestress in the Loads resultant" in source
     assert "Load Component" in source

@@ -1954,7 +1954,7 @@ def _render_beam_girder_load_tables(force_unit: str, moment_unit: str) -> None:
     status_cols[2].metric("SLS Analysis", "Preview selectable")
     status_cols[3].metric("Final staged check", "Future")
 
-    st.markdown("#### ULS Girder Design Loads")
+    st.markdown("#### ULS Bridge Beam/Girder Design Loads")
     st.caption("Use station-based factored resultants for future flexural, shear, and torsion design along the girder length. Mux, Vuy, and Tu are the primary girder ULS actions.")
     with st.expander("Import Beam/Girder ULS station loads from Excel / CSV", expanded=False):
         st.caption("Beam/Girder ULS loads are station-based. The same case name may repeat at different Station x values.")
@@ -2139,7 +2139,7 @@ def _render_building_beam_girder_load_tables(force_unit: str, moment_unit: str) 
     status_cols[2].metric("Transfer/Construction SLS", "Auto basis")
     status_cols[3].metric("Service SLS", "SDL/LL input")
 
-    st.markdown("#### ULS Building Girder Design Loads")
+    st.markdown("#### ULS Building Beam/Girder Design Loads")
     st.caption(
         "Use factored station-based resultants for future ACI flexure, shear, torsion, and prestressed girder strength checks. "
         "This table is preserved from the existing ULS workflow and is not mixed with SLS service inputs below."

@@ -237,3 +237,12 @@ def test_deflect_sls1_adds_short_term_deflection_camber_workspace() -> None:
     assert "Prestress camber uses a simplified constant equivalent moment Pe·e at midspan" in SOURCE
     assert "not change the SLS stress solver" in SOURCE
     assert "Pe(x) station engine" in SOURCE
+
+def test_deflect_sls1_4_polishes_decision_cards_and_limit_label() -> None:
+    assert "Downward Deflection Limit / utilization" in SOURCE
+    assert "Max deflection / camber" in SOURCE
+    assert "Down @ x=" in SOURCE
+    assert "Up @ x=" in SOURCE
+    assert "governing_x = x_down if down_mag > 1.0e-6 else x_up" in SOURCE
+    assert 'limit_text = f"{limit_label} = {float(limit_value):.2f} mm"' in SOURCE
+

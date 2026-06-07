@@ -5533,7 +5533,7 @@ def _girder_deflection_summary_rows(curve_df: pd.DataFrame, *, limit_mm: float |
     return pd.DataFrame(rows)
 
 
-def _girder_deflection_overall_cards(summary_df: pd.DataFrame) -> list[dict[str, object]]:
+def _girder_deflection_overall_cards(summary_df: pd.DataFrame, *, limit_label: str) -> list[dict[str, object]]:
     if summary_df.empty:
         return [
             {"title": "Deflection check", "value": "No data", "detail": "Build a valid girder section and Pe/load basis first", "status": "warning"}
@@ -5542,14 +5542,28 @@ def _girder_deflection_overall_cards(summary_df: pd.DataFrame) -> list[dict[str,
     service_rows = summary_df[summary_df["Stage"] == "Service stage"].copy()
     governing = service_rows if not service_rows.empty else summary_df.copy()
     util_numeric = pd.to_numeric(governing["Utilization"].replace("—", math.nan), errors="coerce")
-    if util_numeric.notna().any():
+    if util_numeric.notna().any() and (util_numeric.fillna(0.0).abs() > 1.0e-9).any():
         gov_idx = util_numeric.idxmax()
     else:
-        gov_idx = governing["Max downward deflection (mm)"].abs().idxmax()
+        up_numeric = pd.to_numeric(governing["Max upward camber (mm)"], errors="coerce").abs()
+        down_numeric = pd.to_numeric(governing["Max downward deflection (mm)"], errors="coerce").clip(upper=0.0).abs()
+        response_numeric = pd.concat([up_numeric, down_numeric], axis=1).max(axis=1)
+        gov_idx = response_numeric.idxmax()
     row = governing.loc[gov_idx]
     status = "FAIL" if fail_count else "PASS" if str(row.get("Check status")) == "PASS" else "REVIEW"
     limit_value = row.get("Limit (mm)")
     util_value = row.get("Utilization")
+    max_down = float(row.get("Max downward deflection (mm)", 0.0) or 0.0)
+    max_up = float(row.get("Max upward camber (mm)", 0.0) or 0.0)
+    down_mag = abs(min(max_down, 0.0))
+    up_mag = max(max_up, 0.0)
+    x_down = float(row.get("x down (m)", 0.0) or 0.0)
+    x_up = float(row.get("x up (m)", 0.0) or 0.0)
+    governing_x = x_down if down_mag > 1.0e-6 else x_up
+    if isinstance(limit_value, str):
+        limit_text = "Review only"
+    else:
+        limit_text = f"{limit_label} = {float(limit_value):.2f} mm"
     return [
         {
             "title": "Overall deflection check",
@@ -5560,18 +5574,18 @@ def _girder_deflection_overall_cards(summary_df: pd.DataFrame) -> list[dict[str,
         {
             "title": "Governing case",
             "value": str(row.get("Case", "—")),
-            "detail": f"{row.get('Stage', '—')} @ x={float(row.get('x down (m)', 0.0) or 0.0):.3f} m",
+            "detail": f"{row.get('Stage', '—')} @ x={governing_x:.3f} m",
             "status": "info",
         },
         {
-            "title": "Max downward deflection",
-            "value": f"{float(row.get('Max downward deflection (mm)', 0.0) or 0.0):.2f} mm",
-            "detail": f"Max upward camber {float(row.get('Max upward camber (mm)', 0.0) or 0.0):.2f} mm",
+            "title": "Max deflection / camber",
+            "value": f"Down {down_mag:.2f} mm · Up {up_mag:.2f} mm",
+            "detail": f"Down @ x={x_down:.3f} m; Up @ x={x_up:.3f} m",
             "status": "info",
         },
         {
-            "title": "Limit / utilization",
-            "value": "Review only" if isinstance(limit_value, str) else f"{float(limit_value):.2f} mm",
+            "title": "Downward Deflection Limit / utilization",
+            "value": limit_text,
             "detail": "Utilization —" if util_value == "—" else f"Utilization {float(util_value):.3f}",
             "status": "danger" if status == "FAIL" else "ready" if status == "PASS" else "warning",
         },
@@ -5665,7 +5679,7 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
         return
     summary_df = _girder_deflection_summary_rows(curve_df, limit_mm=limit_mm)
     st.markdown("**Deflection / Camber decision summary**")
-    _render_analysis_summary_strip(_girder_deflection_overall_cards(summary_df), columns=4)
+    _render_analysis_summary_strip(_girder_deflection_overall_cards(summary_df, limit_label=_limit_label), columns=4)
     if not summary_df.empty:
         display_df = summary_df.copy()
         for col in ("Max upward camber (mm)", "Max downward deflection (mm)", "Limit (mm)", "Utilization"):

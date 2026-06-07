@@ -243,6 +243,19 @@ def test_deflect_sls1_4_polishes_decision_cards_and_limit_label() -> None:
     assert "Max deflection / camber" in SOURCE
     assert "Down @ x=" in SOURCE
     assert "Up @ x=" in SOURCE
-    assert "governing_x = x_down if down_mag > 1.0e-6 else x_up" in SOURCE
+    assert "governing_x = x_down if down_mag >= _DEFLECTION_DISPLAY_TOL_MM else x_up if up_mag >= _DEFLECTION_DISPLAY_TOL_MM else None" in SOURCE
     assert 'limit_text = f"{limit_label} = {float(limit_value):.2f} mm"' in SOURCE
 
+
+
+def test_deflect_sls1_5_zero_display_and_camber_status_semantics() -> None:
+    assert "_DEFLECTION_DISPLAY_TOL_MM = 0.005" in SOURCE
+    assert "def _girder_deflection_response_status" in SOURCE
+    assert 'return "CAMBER"' in SOURCE
+    assert 'return "DEFLECTION"' in SOURCE
+    assert 'return "RESPONSE"' in SOURCE
+    assert 'status = _girder_deflection_response_status(max_up, max_down)' in SOURCE
+    assert 'return "-"' in SOURCE
+    assert 'Down {down_text} · Up {up_text}' in SOURCE
+    assert 'Down @ x={down_x_text}; Up @ x={up_x_text}' in SOURCE
+    assert 'Transfer and Construction rows report response semantics (CAMBER / DEFLECTION / RESPONSE)' in SOURCE

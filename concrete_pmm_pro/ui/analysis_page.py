@@ -5502,6 +5502,42 @@ def _girder_deflection_curve_rows(*, basis_options: object) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+_DEFLECTION_DISPLAY_TOL_MM = 0.005
+
+
+def _girder_deflection_response_status(max_up_mm: float, max_down_mm: float) -> str:
+    """Return stage-response semantics for non-acceptance deflection/camber previews."""
+
+    up_mag = max(float(max_up_mm), 0.0)
+    down_mag = abs(min(float(max_down_mm), 0.0))
+    has_up = up_mag >= _DEFLECTION_DISPLAY_TOL_MM
+    has_down = down_mag >= _DEFLECTION_DISPLAY_TOL_MM
+    if has_up and not has_down:
+        return "CAMBER"
+    if has_down and not has_up:
+        return "DEFLECTION"
+    if has_up and has_down:
+        return "RESPONSE"
+    return "REVIEW"
+
+
+def _girder_deflection_response_text(value_mm: float, *, magnitude: bool = False, decimals: int = 2) -> str:
+    """Format a real deflection/camber response; hide numerical zero as a dash."""
+
+    value = abs(float(value_mm)) if magnitude else float(value_mm)
+    if abs(value) < _DEFLECTION_DISPLAY_TOL_MM:
+        return "-"
+    return f"{value:.{decimals}f} mm"
+
+
+def _girder_deflection_response_x_text(value_mm: float, x_m: float, *, decimals: int = 3) -> str:
+    """Return the response location only when the displayed response is meaningful."""
+
+    if abs(float(value_mm)) < _DEFLECTION_DISPLAY_TOL_MM:
+        return "-"
+    return f"{float(x_m):.{decimals}f} m"
+
+
 def _girder_deflection_summary_rows(curve_df: pd.DataFrame, *, limit_mm: float | None) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     if curve_df.empty:
@@ -5513,7 +5549,9 @@ def _girder_deflection_summary_rows(curve_df: pd.DataFrame, *, limit_mm: float |
         max_down = float(group.loc[down_idx, "Deflection (mm)"])
         down_mag = abs(min(max_down, 0.0))
         utilization = None if limit_mm is None or limit_mm <= 0.0 else down_mag / limit_mm
-        if stage != "Service stage" or limit_mm is None:
+        if stage != "Service stage":
+            status = _girder_deflection_response_status(max_up, max_down)
+        elif limit_mm is None:
             status = "REVIEW"
         else:
             status = "FAIL" if utilization is not None and utilization > 1.0 else "PASS"
@@ -5559,7 +5597,12 @@ def _girder_deflection_overall_cards(summary_df: pd.DataFrame, *, limit_label: s
     up_mag = max(max_up, 0.0)
     x_down = float(row.get("x down (m)", 0.0) or 0.0)
     x_up = float(row.get("x up (m)", 0.0) or 0.0)
-    governing_x = x_down if down_mag > 1.0e-6 else x_up
+    governing_x = x_down if down_mag >= _DEFLECTION_DISPLAY_TOL_MM else x_up if up_mag >= _DEFLECTION_DISPLAY_TOL_MM else None
+    down_text = _girder_deflection_response_text(down_mag, magnitude=True)
+    up_text = _girder_deflection_response_text(up_mag, magnitude=True)
+    down_x_text = _girder_deflection_response_x_text(down_mag, x_down)
+    up_x_text = _girder_deflection_response_x_text(up_mag, x_up)
+    governing_detail = f"{row.get('Stage', '—')} @ x={governing_x:.3f} m" if governing_x is not None else f"{row.get('Stage', '—')} @ x=-"
     if isinstance(limit_value, str):
         limit_text = "Review only"
     else:
@@ -5574,13 +5617,13 @@ def _girder_deflection_overall_cards(summary_df: pd.DataFrame, *, limit_label: s
         {
             "title": "Governing case",
             "value": str(row.get("Case", "—")),
-            "detail": f"{row.get('Stage', '—')} @ x={governing_x:.3f} m",
+            "detail": governing_detail,
             "status": "info",
         },
         {
             "title": "Max deflection / camber",
-            "value": f"Down {down_mag:.2f} mm · Up {up_mag:.2f} mm",
-            "detail": f"Down @ x={x_down:.3f} m; Up @ x={x_up:.3f} m",
+            "value": f"Down {down_text} · Up {up_text}",
+            "detail": f"Down @ x={down_x_text}; Up @ x={up_x_text}",
             "status": "info",
         },
         {
@@ -5671,7 +5714,7 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
         with cols[1]:
             st.metric("Span L", f"{span:.3f} m")
         with cols[2]:
-            st.caption("Select project-specific downward-deflection criteria. Transfer and Construction camber remain REVIEW-only unless a project limit is specified.")
+            st.caption("Select project-specific downward-deflection criteria. Transfer and Construction rows report response semantics (CAMBER / DEFLECTION / RESPONSE) rather than service acceptance status.")
     _limit_label, limit_mm = _girder_deflection_limit_mm(span)
     curve_df = _girder_deflection_curve_rows(basis_options=basis_options)
     if curve_df.empty:
@@ -5682,7 +5725,25 @@ def _render_girder_deflection_camber_workspace(*, basis_options: object) -> None
     _render_analysis_summary_strip(_girder_deflection_overall_cards(summary_df, limit_label=_limit_label), columns=4)
     if not summary_df.empty:
         display_df = summary_df.copy()
-        for col in ("Max upward camber (mm)", "Max downward deflection (mm)", "Limit (mm)", "Utilization"):
+        if "Max upward camber (mm)" in display_df.columns:
+            display_df["Max upward camber (mm)"] = display_df["Max upward camber (mm)"].map(
+                lambda v: _girder_deflection_response_text(float(v), decimals=3) if not isinstance(v, str) else v
+            )
+        if "Max downward deflection (mm)" in display_df.columns:
+            display_df["Max downward deflection (mm)"] = display_df["Max downward deflection (mm)"].map(
+                lambda v: _girder_deflection_response_text(float(v), decimals=3) if not isinstance(v, str) else v
+            )
+        if {"Max upward camber (mm)", "x up (m)"}.issubset(display_df.columns):
+            display_df["x up (m)"] = [
+                _girder_deflection_response_x_text(max_up, x_up, decimals=3)
+                for max_up, x_up in zip(summary_df["Max upward camber (mm)"], summary_df["x up (m)"], strict=False)
+            ]
+        if {"Max downward deflection (mm)", "x down (m)"}.issubset(display_df.columns):
+            display_df["x down (m)"] = [
+                _girder_deflection_response_x_text(max_down, x_down, decimals=3)
+                for max_down, x_down in zip(summary_df["Max downward deflection (mm)"], summary_df["x down (m)"], strict=False)
+            ]
+        for col in ("Limit (mm)", "Utilization"):
             if col in display_df.columns:
                 display_df[col] = display_df[col].map(lambda v: v if isinstance(v, str) else round(float(v), 3))
         st.dataframe(display_df, use_container_width=True, hide_index=True)

@@ -49,6 +49,7 @@ from concrete_pmm_pro.analysis.warnings import (
 )
 from concrete_pmm_pro.code_checks import aci_beta1
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisModeSettings, AnalysisSettings
+from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, RebarMaterial, SectionGeometry
 from concrete_pmm_pro.core.design_code import (
     PROJECT_CODE_AASHTO_LRFD,
     girder_sls_code_for_project_code,
@@ -71,7 +72,7 @@ from concrete_pmm_pro.core.analysis_modes import (
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
-from concrete_pmm_pro.geometry.summary import summarize_geometry
+from concrete_pmm_pro.geometry.summary import summarize_geometry, to_shapely_polygon
 from concrete_pmm_pro.reporting import (
     build_result_traceability_snapshot,
     build_report_manifest,
@@ -152,6 +153,7 @@ from concrete_pmm_pro.serviceability import (
 )
 
 from concrete_pmm_pro.serviceability.girder_prestress_station import (
+    active_strand_groups_at_station,
     evaluate_girder_prestress_station,
     station_candidates_from_debonding,
 )
@@ -209,11 +211,16 @@ PMM_3D_LAYER_DEFAULTS = {
     "show_pmm_3d_all_load_points": False,
 }
 
+# Legacy source-test tokens retained: GIRDER.SLS1B/PS1B previews; not a staged prestressed girder design check yet.
 # ULS.GIRDER1 — compact Beam/Girder ULS demand workspace.
 # Loads page remains the source of truth; Analysis consumes the station-based
 # beam_uls_loads_table read-only and does not duplicate ULS input.
 BEAM_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
 _BEAM_ULS_DEMAND_TOL = 1.0e-9
+_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS = 24
+_GIRDER_STRAND_FPU_MPA_DEFAULT = 1860.0
+_GIRDER_STRAND_FPY_MPA_DEFAULT = 1670.0
+_GIRDER_STRAND_EP_MPA_DEFAULT = 195000.0
 
 
 _ANALYSIS_DASHBOARD_CSS = """
@@ -2597,13 +2604,390 @@ def _format_beam_uls_demand(value: object, unit: str) -> str:
     return f"{numeric:,.2f} {unit}"
 
 
-def _beam_uls_check_table(active_df: pd.DataFrame) -> pd.DataFrame:
+def _format_beam_uls_ratio(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(numeric):
+        return "-"
+    return f"{numeric:.3f}"
+
+
+def _beam_uls_get_state_value(state: Mapping[str, object], key: str, default: object = None) -> object:
+    if hasattr(state, "get"):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def _beam_uls_analysis_settings_from_state(state: Mapping[str, object], *, code_label: str) -> AnalysisSettings:
+    raw = _beam_uls_get_state_value(state, "analysis_settings")
+    if isinstance(raw, AnalysisSettings):
+        settings = raw
+    elif isinstance(raw, dict):
+        try:
+            settings = AnalysisSettings.model_validate(raw)
+        except Exception:
+            settings = AnalysisSettings()
+    else:
+        settings = AnalysisSettings()
+    updates = {
+        "code": code_label,
+        "include_rebars": True,
+        "include_prestress": True,
+        "use_phi_factor": True,
+        # ULS.FLEX1 is a preview engine. Keep it responsive for station-by-station
+        # Beam/Girder checks; detailed calibration remains a later milestone.
+        "neutral_axis_angle_steps": min(max(int(settings.neutral_axis_angle_steps), 36), 72),
+        "neutral_axis_depth_steps": min(max(int(settings.neutral_axis_depth_steps), 60), 120),
+    }
+    return settings.model_copy(update=updates)
+
+
+def _beam_uls_span_length_from_state(state: Mapping[str, object], *, is_building: bool) -> float:
+    if is_building:
+        system = system_settings_from_mapping(_beam_uls_get_state_value(state, BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+        # Building settings are stored separately for load take-down, but the
+        # common system object remains the fallback owner for span length.
+        building_settings = building_service_load_settings_from_mapping(
+            _beam_uls_get_state_value(state, BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY)
+        )
+        span = getattr(building_settings, "span_length_m", None) or system.span_length_m
+    else:
+        system = system_settings_from_mapping(_beam_uls_get_state_value(state, BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+        span = system.span_length_m
+    try:
+        span_value = float(span)
+    except (TypeError, ValueError):
+        span_value = 20.0
+    return span_value if span_value > 0.0 else 20.0
+
+
+def _beam_uls_section_bounds(geometry: SectionGeometry) -> tuple[float, float, float, float]:
+    polygon = to_shapely_polygon(geometry)
+    minx, miny, maxx, maxy = polygon.bounds
+    return float(minx), float(miny), float(maxx), float(maxy)
+
+
+def _beam_uls_girder_strand_elements_for_station(
+    state: Mapping[str, object],
+    *,
+    geometry: SectionGeometry,
+    x_m: float,
+    span_length_m: float,
+) -> list[PrestressElement]:
+    """Convert dedicated girder strand-layout metadata to station PS elements.
+
+    ULS.FLEX1 uses this only as a strength-preview bridge from the girder layout
+    table into the existing strain-compatibility solver. It honors row activity
+    and debonded sleeve zones through the existing station helper, but it does
+    not perform transfer-length, development-length, or strand stress code
+    certification.
+    """
+
+    table = _beam_uls_get_state_value(state, "girder_strand_layout_table")
+    if table is None:
+        return []
+    _, y_min, _, _ = _beam_uls_section_bounds(geometry)
+    try:
+        groups = active_strand_groups_at_station(table, x_m=float(x_m), span_length_m=float(span_length_m))
+    except Exception:
+        return []
+    elements: list[PrestressElement] = []
+    for group in groups:
+        if group.no_strands <= 0 or group.area_per_strand_mm2 <= 0.0:
+            continue
+        pe_final_per_strand_n = max(0.0, float(group.pe_eff_final_per_strand_kN)) * 1000.0
+        initial_stress_mpa = pe_final_per_strand_n / float(group.area_per_strand_mm2) if group.area_per_strand_mm2 > 0.0 else 0.0
+        elements.append(
+            PrestressElement(
+                x_mm=0.0,
+                y_mm=float(y_min) + float(group.y_mm_from_bottom),
+                area_mm2=float(group.area_per_strand_mm2),
+                steel_type="strand",
+                material_name="Girder strand layout",
+                fpy_mpa=_GIRDER_STRAND_FPY_MPA_DEFAULT,
+                fpu_mpa=_GIRDER_STRAND_FPU_MPA_DEFAULT,
+                ep_mpa=_GIRDER_STRAND_EP_MPA_DEFAULT,
+                pe_eff_n=pe_final_per_strand_n,
+                initial_stress_mpa=initial_stress_mpa,
+                initial_strain=initial_stress_mpa / _GIRDER_STRAND_EP_MPA_DEFAULT if initial_stress_mpa > 0.0 else 0.0,
+                bonded=True,
+                count=int(group.no_strands),
+                label=f"{group.group_id} @ x={float(x_m):.3f} m",
+            )
+        )
+    return elements
+
+
+def _beam_uls_flexure_analysis_input_for_station(
+    state: Mapping[str, object],
+    *,
+    row: Mapping[str, object],
+    code_label: str,
+    is_building: bool,
+) -> tuple[AnalysisInput | None, list[str]]:
+    messages: list[str] = []
+    geometry = _beam_uls_get_state_value(state, "section_geometry")
+    concrete = _beam_uls_get_state_value(state, "concrete_material")
+    if isinstance(geometry, dict):
+        try:
+            geometry = SectionGeometry.model_validate(geometry)
+        except Exception:
+            geometry = None
+    if isinstance(concrete, dict):
+        try:
+            concrete = ConcreteMaterial.model_validate(concrete)
+        except Exception:
+            concrete = None
+    if not isinstance(geometry, SectionGeometry):
+        return None, ["Section geometry is missing."]
+    if not isinstance(concrete, ConcreteMaterial):
+        return None, ["Concrete material is missing."]
+
+    settings = _beam_uls_analysis_settings_from_state(state, code_label=code_label)
+    rebars = effective_rebars_for_analysis(list(_beam_uls_get_state_value(state, "rebars", []) or []), state, settings)
+    prestress = effective_prestress_for_analysis(list(_beam_uls_get_state_value(state, "prestress_elements", []) or []), state, settings)
+    span_m = _beam_uls_span_length_from_state(state, is_building=is_building)
+    station_m = _beam_uls_float(row.get("Station x (m)"))
+    if not math.isfinite(station_m):
+        station_m = 0.0
+    strand_elements = _beam_uls_girder_strand_elements_for_station(
+        state,
+        geometry=geometry,
+        x_m=max(0.0, min(float(station_m), span_m)),
+        span_length_m=span_m,
+    )
+    if strand_elements:
+        prestress = [*prestress, *strand_elements]
+        messages.append("Dedicated girder strand layout included in flexure preview at the demand station.")
+    elif _beam_uls_get_state_value(state, "girder_strand_layout_table") is not None:
+        messages.append("No effective girder strand groups were available at this station; debonding/development must be reviewed.")
+
+    if not rebars and not prestress:
+        return None, messages + ["No active ordinary rebar or bonded prestress is available for flexure strength preview."]
+
+    mu = _beam_uls_float(row.get("Mux"))
+    nu = _beam_uls_float(row.get("Nu"))
+    if not math.isfinite(mu) or abs(mu) <= _BEAM_ULS_DEMAND_TOL:
+        return None, messages + ["Mux demand is zero or not finite."]
+    if not math.isfinite(nu):
+        nu = 0.0
+    case = str(row.get("Case Name") or "ULS").strip() or "ULS"
+    x_label = _format_beam_uls_x(row.get("Station x (m)"))
+    load = LoadCase(
+        name=f"{case} @ x={x_label}",
+        Pu_N=float(nu) * 1000.0,
+        Mux_Nmm=float(mu) * 1_000_000.0,
+        Muy_Nmm=0.0,
+        load_type="ULS",
+        active=True,
+    )
+    return (
+        AnalysisInput(
+            section_geometry=geometry,
+            concrete_material=concrete,
+            rebar_materials=list(_beam_uls_get_state_value(state, "rebar_materials", []) or []),
+            prestress_materials=list(_beam_uls_get_state_value(state, "prestress_materials", []) or []),
+            rebars=rebars,
+            prestress_elements=prestress,
+            load_cases=[load],
+            settings=settings,
+        ),
+        messages,
+    )
+
+
+def _beam_uls_flexure_preview_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    code_label: str,
+    is_building: bool,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Return station-by-station flexure preview rows using existing PMM solver.
+
+    This is intentionally a preview, not a final code-certified AASHTO/ACI
+    girder design engine. It checks primary Mux only; shear, torsion,
+    development length, debonding strength, and interface shear remain separate
+    milestones.
+    """
+
+    columns = [
+        "Check",
+        "Status",
+        "Governing x",
+        "Case",
+        "Demand",
+        "Capacity",
+        "Utilization",
+        "Demand kN-m",
+        "Capacity kN-m",
+        "Utilization value",
+        "Method",
+        "Notes",
+    ]
+    if active_df.empty:
+        return pd.DataFrame(columns=columns), ["No active ULS rows available for flexure preview."]
+    rows: list[dict[str, object]] = []
+    messages: list[str] = []
+    demand_rows = active_df.copy()
+    demand_rows = demand_rows[pd.to_numeric(demand_rows["Mux"], errors="coerce").abs() > _BEAM_ULS_DEMAND_TOL]
+    if len(demand_rows.index) > _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS:
+        messages.append(
+            f"Flexure preview limited to the first {_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS} nonzero Mux rows for responsiveness. Use envelope input for large imports."
+        )
+        demand_rows = demand_rows.head(_BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS)
+    for _, demand_row in demand_rows.iterrows():
+        analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(
+            state,
+            row=demand_row,
+            code_label=code_label,
+            is_building=is_building,
+        )
+        messages.extend(input_messages)
+        demand = _beam_uls_float(demand_row.get("Mux"))
+        station = _format_beam_uls_x(demand_row.get("Station x (m)"))
+        case = str(demand_row.get("Case Name") or "-")
+        if analysis_input is None:
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Method": "not ready",
+                    "Notes": "; ".join(input_messages[-3:]),
+                }
+            )
+            continue
+        try:
+            pmm_result = run_rc_pmm_solver(analysis_input)
+            summary = check_uls_demands_against_rc_pmm(pmm_result, analysis_input.load_cases)
+            result = summary.results[0] if summary.results else None
+        except Exception as exc:
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Method": "solver error",
+                    "Notes": f"Flexure preview solver error: {exc}",
+                }
+            )
+            continue
+        if result is None or result.capacity_phiMn_Nmm is None or result.dcr is None:
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Method": "not checked",
+                    "Notes": "Flexure capacity could not be interpolated from PMM preview.",
+                }
+            )
+            continue
+        capacity_kNm = float(result.capacity_phiMn_Nmm) / 1_000_000.0
+        utilization = float(result.dcr)
+        status = "PASS" if utilization <= 1.0 else "FAIL"
+        method = result.capacity_method or "PMM preview"
+        note_parts = ["Primary Mux flexure only", f"{code_label} basis label"]
+        if result.warning_count:
+            note_parts.append(f"{result.warning_count} interpolation warning(s)")
+        rows.append(
+            {
+                "Check": "Flexure",
+                "Status": status,
+                "Governing x": station,
+                "Case": case,
+                "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                "Capacity": f"φMn preview = {capacity_kNm:,.2f} kN-m",
+                "Utilization": _format_beam_uls_ratio(utilization),
+                "Demand kN-m": float(demand),
+                "Capacity kN-m": capacity_kNm,
+                "Utilization value": utilization,
+                "Method": method,
+                "Notes": "; ".join(note_parts),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns), deduplicate_warnings(messages)
+
+
+def _beam_uls_governing_flexure_preview_row(flexure_preview_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if flexure_preview_df is None or flexure_preview_df.empty or "Utilization value" not in flexure_preview_df.columns:
+        return None
+    valid = flexure_preview_df[pd.to_numeric(flexure_preview_df["Utilization value"], errors="coerce").notna()].copy()
+    if valid.empty:
+        return None
+    idx = valid["Utilization value"].astype(float).idxmax()
+    return valid.loc[idx].to_dict()
+
+
+def _beam_uls_check_table(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None = None) -> pd.DataFrame:
     flexure = _beam_uls_governing_action(active_df, "Mux")
     shear = _beam_uls_governing_action(active_df, "Vuy")
     torsion = _beam_uls_governing_action(active_df, "Tu")
     rows: list[dict[str, str]] = []
+
+    flexure_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
+    if flexure_preview is not None:
+        rows.append(
+            {
+                "Check": "Flexure",
+                "Status": str(flexure_preview.get("Status") or "REVIEW"),
+                "Governing x": str(flexure_preview.get("Governing x") or "-"),
+                "Case": str(flexure_preview.get("Case") or "-"),
+                "Demand": str(flexure_preview.get("Demand") or "-"),
+                "Capacity": str(flexure_preview.get("Capacity") or "-"),
+                "Utilization": str(flexure_preview.get("Utilization") or "-"),
+            }
+        )
+    elif flexure is None or float(flexure["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+        rows.append(
+            {
+                "Check": "Flexure",
+                "Status": "NOT READY",
+                "Governing x": "-",
+                "Case": "-",
+                "Demand": "-",
+                "Capacity": "-",
+                "Utilization": "-",
+            }
+        )
+    else:
+        rows.append(
+            {
+                "Check": "Flexure",
+                "Status": "PLANNED",
+                "Governing x": _format_beam_uls_x(flexure["x_m"]),
+                "Case": str(flexure["case"]),
+                "Demand": _format_beam_uls_demand(flexure["demand"], "kN-m"),
+                "Capacity": "-",
+                "Utilization": "-",
+            }
+        )
+
     specs = [
-        ("Flexure", "PLANNED", flexure, "kN-m"),
         ("Shear", "PLANNED", shear, "kN"),
         ("Torsion", "PLANNED", torsion, "kN-m"),
     ]
@@ -2636,7 +3020,7 @@ def _beam_uls_check_table(active_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
 
 
-def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str) -> list[dict[str, object]]:
+def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str, flexure_preview_df: pd.DataFrame | None = None) -> list[dict[str, object]]:
     if active_df.empty:
         return [
             {
@@ -2656,20 +3040,35 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
     flexure_detail = f"{flexure['case']} @ x={_format_beam_uls_x(flexure['x_m'])}" if flexure else "No finite Mux"
     shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
     shear_detail = f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy"
+    flex_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
+    if flex_preview is not None:
+        status_text = str(flex_preview.get("Status") or "REVIEW")
+        dc_value = str(flex_preview.get("Utilization") or "-")
+        flexure_card_value = f"{flexure_value} · D/C {dc_value}" if dc_value != "-" else flexure_value
+        flexure_card_detail = f"{flexure_detail}; {flex_preview.get('Capacity', '-')}"
+        overall_value = "FLEXURE PREVIEW"
+        overall_detail = f"{len(active_df):,} active demand row(s). Flexure φMn preview is available; shear/torsion remain planned, so no overall ULS PASS/FAIL is issued."
+        overall_status = "warning" if status_text == "FAIL" else "info"
+    else:
+        flexure_card_value = flexure_value
+        flexure_card_detail = flexure_detail + "; φMn preview not ready"
+        overall_value = "NOT READY"
+        overall_detail = f"{len(active_df):,} active demand row(s). Capacity checks are not available yet; no PASS/FAIL is issued."
+        overall_status = "warning"
     return [
         {
             "title": "Overall ULS check",
-            "value": "NOT READY",
-            "detail": f"{len(active_df):,} active demand row(s). Capacity checks are not available yet; no PASS/FAIL is issued.",
-            "status": "warning",
+            "value": overall_value,
+            "detail": overall_detail,
+            "status": overall_status,
             "strong": True,
         },
-        {"title": "Critical flexure demand", "value": flexure_value, "detail": flexure_detail, "status": "info"},
+        {"title": "Critical flexure demand / D/C preview", "value": flexure_card_value, "detail": flexure_card_detail, "status": "warning" if flex_preview is not None and str(flex_preview.get("Status")) == "FAIL" else "info"},
         {"title": "Critical shear demand", "value": shear_value, "detail": shear_detail, "status": "info"},
         {
             "title": "Design action",
-            "value": "Capacity engine not yet available",
-            "detail": f"Review governing ULS demand now; run φMn / φVn / φTn checks after the {code_label} strength engine is implemented.",
+            "value": "Run remaining checks later",
+            "detail": f"Review flexure preview now; φVn / φTn, development, debonding strength, and final {code_label} certification remain future milestones.",
             "status": "neutral",
         },
     ]
@@ -2727,12 +3126,61 @@ def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title:
     return fig
 
 
-def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
-    """Render compact ULS demand workspace for Bridge/Building Beam/Girder.
 
-    This is intentionally decision-first and read-only.  ULS.GIRDER1 does not
-    implement φMn, φVn, φTn, development length, shear, torsion, or report
-    certification; it only surfaces governing factored demand from Loads.
+def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_preview_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+    fig = _make_beam_uls_demand_figure(
+        active_df,
+        column="Mux",
+        title=f"Flexure Check — Strength ULS<br><sup>{code_label}</sup>",
+        y_label="Moment, Mu (kN-m)",
+    )
+    if flexure_preview_df is None or flexure_preview_df.empty:
+        fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand only — φMn preview not ready</sup>"})
+        return fig
+    plot_df = flexure_preview_df.copy()
+    plot_df = plot_df[pd.to_numeric(plot_df["Capacity kN-m"], errors="coerce").notna()]
+    plot_df = plot_df[pd.to_numeric(plot_df["Demand kN-m"], errors="coerce").notna()]
+    if plot_df.empty:
+        fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand only — φMn preview not ready</sup>"})
+        return fig
+    x_values: list[float] = []
+    y_values: list[float] = []
+    text_values: list[str] = []
+    for _, row in plot_df.iterrows():
+        x_text = str(row.get("Governing x") or "").replace(" m", "")
+        try:
+            x_val = float(x_text)
+        except (TypeError, ValueError):
+            continue
+        demand = float(row["Demand kN-m"])
+        capacity = float(row["Capacity kN-m"])
+        sign = -1.0 if demand < 0.0 else 1.0
+        x_values.append(x_val)
+        y_values.append(sign * capacity)
+        text_values.append(str(row.get("Status") or ""))
+    if x_values:
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="markers+lines+text",
+                text=text_values,
+                textposition="top center",
+                name="φMn preview at station",
+                hovertemplate="x=%{x:.3f} m<br>φMn preview=%{y:.3f} kN-m<extra></extra>",
+            )
+        )
+    fig.update_layout(title={"text": f"Flexure Check — Strength ULS<br><sup>{code_label} · demand vs φMn preview</sup>"})
+    return fig
+
+
+def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
+    """Render compact ULS demand/flexure-preview workspace for Bridge/Building Beam/Girder.
+
+    This is intentionally decision-first and read-only for demand. ULS.FLEX1
+    adds a primary Mux flexure strength preview from the existing strain-
+    compatibility engine while keeping shear, torsion, development length,
+    debonding strength, and report certification as future milestones.
     """
 
     is_bridge = is_beam_girder_future_workflow(mode_settings)
@@ -2744,13 +3192,19 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown(_ANALYSIS_DASHBOARD_CSS, unsafe_allow_html=True)
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
-        "Compact ULS demand workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "Strength capacity checks are not available yet; this page shows governing ULS demand only and must not show a false PASS."
+        "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
+        "ULS.FLEX1 adds primary Mux flexure φMn preview only; shear, torsion, development, debonding strength, and final certification remain future milestones."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
+    flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
+        st.session_state,
+        active_df,
+        code_label=code_label,
+        is_building=is_building,
+    )
     _render_analysis_summary_strip(
-        _beam_uls_summary_cards(active_df, workflow_label=workflow_label, code_label=code_label),
+        _beam_uls_summary_cards(active_df, workflow_label=workflow_label, code_label=code_label, flexure_preview_df=flexure_preview_df),
         columns=4,
     )
 
@@ -2766,17 +3220,17 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         return
 
     st.markdown("#### Compact ULS check table")
-    st.dataframe(_beam_uls_check_table(active_df), use_container_width=True, hide_index=True)
+    st.dataframe(_beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df), use_container_width=True, hide_index=True)
 
-    with st.expander("ULS demand diagrams — preview / demand only", expanded=False):
+    with st.expander("ULS demand/capacity diagrams — preview", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            "Capacity lines φMn, φVn, and φTn are intentionally absent until a verified strength engine is implemented."
+            "Flexure includes a φMn preview from the current strain-compatibility engine; φVn and φTn are intentionally absent until verified shear/torsion engines are implemented."
         )
-        flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand", "Shear demand", "Torsion demand"])
+        flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
         with flex_tab:
             st.plotly_chart(
-                _make_beam_uls_demand_figure(active_df, column="Mux", title=f"Flexure Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Moment, Mu (kN-m)"),
+                _make_beam_uls_flexure_preview_figure(active_df, flexure_preview_df, code_label=code_label),
                 use_container_width=True,
             )
         with shear_tab:
@@ -2795,10 +3249,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.dataframe(_beam_uls_audit_dataframe(active_df), use_container_width=True, hide_index=True)
 
     with st.expander("ULS strength-check limitations", expanded=False):
-        st.write("- Flexure, shear, and torsion capacity engines are not available yet.")
-        st.write("- No φMn / φVn / φTn, development length, debonding strength, interface shear, or end-zone bursting check is claimed here.")
-        st.write("- Use this workspace to confirm governing factored demand before running future capacity checks.")
+        st.write("- Flexure capacity is a preview based on the existing strain-compatibility PMM engine and primary Mux demand only.")
+        st.write("- Shear φVn, torsion φTn, development length, debonding strength, interface shear, and end-zone bursting checks are not claimed here.")
+        st.write("- Dedicated girder strand layout can be included at the demand station for preview, but transfer-length/development certification is still future work.")
         st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")
+        if flexure_preview_messages:
+            st.caption("Flexure preview notes: " + " | ".join(flexure_preview_messages[:5]))
 
 
 def _analysis_card_html(title: str, value: str, detail: str = "", status: str = "info", strong: bool = False) -> str:

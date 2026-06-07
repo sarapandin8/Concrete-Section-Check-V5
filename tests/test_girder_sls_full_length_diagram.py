@@ -269,7 +269,7 @@ def test_uls_girder1_adds_compact_beam_girder_uls_workspace() -> None:
     assert "beam_uls_loads_table" in SOURCE
     assert "Compact ULS check table" in SOURCE
     assert "ULS demand table — audit / source data" in SOURCE
-    assert "ULS demand diagrams — preview / demand only" in SOURCE
+    assert "ULS demand/capacity diagrams — preview" in SOURCE
     assert "Capacity checks are not available yet; no PASS/FAIL is issued" in SOURCE
 
 
@@ -285,7 +285,7 @@ def test_uls_girder1_uses_primary_actions_only_in_default_decision_display() -> 
     assert "max |Mux|" not in SOURCE  # avoid user-facing mathematical clutter
     assert "Critical flexure demand" in SOURCE
     assert "Critical shear demand" in SOURCE
-    assert '("Flexure", "PLANNED", flexure, "kN-m")' in SOURCE
+    assert "φMn preview" in SOURCE
     assert '("Shear", "PLANNED", shear, "kN")' in SOURCE
     assert '("Torsion", "PLANNED", torsion, "kN-m")' in SOURCE
     assert "Secondary actions Muy, Vux, and Nu are kept here for audit" in SOURCE

@@ -337,7 +337,8 @@ def test_uls_code_route1_analysis_uses_route_basis_notes_in_flexure_rows() -> No
     assert len(preview) == 1
     notes = str(preview.iloc[0]["Notes"])
     assert "AASHTO LRFD flexure route" in notes
-    assert "shared strain-compatibility" in notes
+    assert "AASHTO LRFD-compatible strain compatibility" in preview.iloc[0]["Strain compatibility basis"]
+    assert "AASHTO LRFD" in preview.iloc[0]["φ policy"]
 
 
 def test_uls_flex_code1_basis_separates_bridge_prestressed_and_building_aci() -> None:
@@ -354,11 +355,15 @@ def test_uls_flex_code1_basis_separates_bridge_prestressed_and_building_aci() ->
     assert bridge_basis.resistance_factor == 1.0
     assert "AASHTO LRFD" in bridge_basis.capacity_label
     assert "nominal strain-compatibility" in bridge_basis.method_label
+    assert bridge_basis.strain_compatibility_basis == "AASHTO LRFD-compatible strain compatibility"
+    assert "φ = 1.00" in bridge_basis.resistance_factor_policy
 
     assert not building_basis.requires_nominal_capacity
     assert building_basis.resistance_factor is None
     assert "ACI 318" in building_basis.capacity_label
     assert "strain-based φ" in building_basis.method_label
+    assert building_basis.strain_compatibility_basis == "ACI 318-compatible strain compatibility"
+    assert "strain-based φ" in building_basis.resistance_factor_policy
 
 
 def test_uls_flex_code1_apply_bridge_phi_layer_to_nominal_capacity() -> None:
@@ -409,8 +414,11 @@ def test_uls_flex_verify1_audit_dataframe_exposes_benchmark_values() -> None:
                 "Bending direction": "Sagging (+Mux)",
                 "Tension face": "Bottom face",
                 "Code basis": "φMn — AASHTO LRFD",
+                "Strain compatibility basis": "AASHTO LRFD-compatible strain compatibility",
+                "φ policy": "AASHTO LRFD prestressed flexure: φ = 1.00 applied to nominal Mn",
+                "Solver basis": "Nominal Mn from section equilibrium / strain compatibility",
                 "Method": "AASHTO LRFD φ × nominal strain-compatibility Mn",
-                "Benchmark readiness": "Benchmark-ready flexure row",
+                "Benchmark readiness": "Benchmark against AASHTO/PCI or commercial girder software using Mn, φ, φMn, and D/C",
                 "Notes": "Primary Mux flexure only",
             }
         ]
@@ -438,6 +446,9 @@ def test_uls_flex_verify1_audit_dataframe_exposes_benchmark_values() -> None:
     assert row["φMn"] == "4,000.00 kN-m"
     assert row["D/C"] == "1.250"
     assert row["Code basis"] == "φMn — AASHTO LRFD"
+    assert row["SC basis"] == "AASHTO LRFD-compatible strain compatibility"
+    assert "φ = 1.00" in row["φ policy"]
+    assert row["Solver basis"] == "Nominal Mn from section equilibrium / strain compatibility"
     assert row["Tension face"] == "Bottom face"
 
 
@@ -478,4 +489,6 @@ def test_uls_flex_verify1_engine_populates_nominal_mn_and_effective_phi() -> Non
     assert row["Bending direction"] == "Sagging (+Mux)"
     assert row["Tension face"] == "Bottom face"
     assert "ACI 318" in row["Code basis"]
-    assert row["Benchmark readiness"] == "Benchmark-ready flexure row"
+    assert "Benchmark" in row["Benchmark readiness"]
+    assert row["Strain compatibility basis"] == "ACI 318-compatible strain compatibility"
+    assert "strain-based φ" in row["φ policy"]

@@ -2932,6 +2932,10 @@ def _beam_uls_flexure_preview_dataframe(
         "Bending direction",
         "Tension face",
         "Code basis",
+        "Strain compatibility basis",
+        "φ policy",
+        "Solver basis",
+        "Material model scope",
         "Route",
         "Benchmark readiness",
         "Notes",
@@ -3014,6 +3018,10 @@ def _beam_uls_flexure_preview_dataframe(
                     "Bending direction": _beam_uls_flexure_direction_label(0.0),
                     "Tension face": _beam_uls_flexure_tension_face_label(0.0),
                     "Code basis": "diagram boundary",
+                    "Strain compatibility basis": "diagram boundary",
+                    "φ policy": "-",
+                    "Solver basis": "diagram boundary",
+                    "Material model scope": "-",
                     "Route": "section boundary",
                     "Benchmark readiness": "Boundary point; not used for D/C",
                     "Notes": "Zero-Mux endpoint plotted as φMn = 0 for flexure diagram boundary; D/C is not applicable at zero demand",
@@ -3136,6 +3144,10 @@ def _beam_uls_flexure_preview_dataframe(
                     "Bending direction": _beam_uls_flexure_direction_label(demand),
                     "Tension face": _beam_uls_flexure_tension_face_label(demand),
                     "Code basis": flexure_basis.capacity_label,
+                    "Strain compatibility basis": flexure_basis.strain_compatibility_basis,
+                    "φ policy": flexure_basis.resistance_factor_policy,
+                    "Solver basis": flexure_basis.solver_audit_label,
+                    "Material model scope": flexure_basis.material_model_scope,
                     "Route": flexure_basis.route_label,
                     "Benchmark readiness": "Needs review; routed φMn unavailable",
                     "Notes": routed_basis_note,
@@ -3189,8 +3201,12 @@ def _beam_uls_flexure_preview_dataframe(
                 "Bending direction": _beam_uls_flexure_direction_label(demand),
                 "Tension face": _beam_uls_flexure_tension_face_label(demand),
                 "Code basis": flexure_basis.capacity_label if not zero_demand_endpoint else "diagram boundary",
+                "Strain compatibility basis": flexure_basis.strain_compatibility_basis if not zero_demand_endpoint else "diagram boundary",
+                "φ policy": flexure_basis.resistance_factor_policy if not zero_demand_endpoint else "-",
+                "Solver basis": flexure_basis.solver_audit_label if not zero_demand_endpoint else "diagram boundary",
+                "Material model scope": flexure_basis.material_model_scope if not zero_demand_endpoint else "-",
                 "Route": flexure_basis.route_label if not zero_demand_endpoint else "section boundary",
-                "Benchmark readiness": "Benchmark-ready flexure row" if not zero_demand_endpoint else "Boundary point; not used for D/C",
+                "Benchmark readiness": flexure_basis.benchmark_readiness_note if not zero_demand_endpoint else "Boundary point; not used for D/C",
                 "Notes": "; ".join(note_parts),
             }
         )
@@ -3243,8 +3259,9 @@ def _format_beam_uls_audit_number(value: object, *, digits: int = 2, unit: str =
 def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -> pd.DataFrame:
     """Return benchmark-ready flexure audit rows for the ULS workspace.
 
-    VERIFY1 keeps the default screen compact and moves intermediate values here:
-    demand, nominal Mn, route φ, φMn, D/C, bending direction, tension face, and
+    SC1 keeps the default screen compact and moves intermediate values here:
+    demand, nominal Mn, route φ, φMn, D/C, bending direction, tension face,
+    code-compatible strain-compatibility basis, resistance-factor policy, and
     code route.  It is intentionally display/audit only and does not change the
     strength solver.
     """
@@ -3262,6 +3279,9 @@ def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -
         "φMn",
         "D/C",
         "Code basis",
+        "SC basis",
+        "φ policy",
+        "Solver basis",
         "Method",
         "Benchmark readiness",
         "Notes",
@@ -3301,6 +3321,9 @@ def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -
                 "φMn": _format_beam_uls_audit_number(phi_mn, unit="kN-m"),
                 "D/C": _format_beam_uls_ratio(dc_value),
                 "Code basis": str(row.get("Code basis") or row.get("Capacity basis") or "-"),
+                "SC basis": str(row.get("Strain compatibility basis") or "-"),
+                "φ policy": str(row.get("φ policy") or row.get("Route φ") or "-"),
+                "Solver basis": str(row.get("Solver basis") or "-"),
                 "Method": str(row.get("Method") or "-"),
                 "Benchmark readiness": str(row.get("Benchmark readiness") or "-"),
                 "Notes": str(row.get("Notes") or ""),
@@ -3593,7 +3616,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX.VERIFY1 exposes benchmark-ready flexure audit values while keeping the default screen compact. Bridge → AASHTO LRFD resistance-factor layer; Building → ACI 318 strain-based φ. Shear/torsion remain route-ready but not calculated."
+        "ULS.FLEX.SC1 keeps the strain-compatibility section engine as the primary flexure method, but exposes code-compatible audit basis: Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. Shear/torsion remain route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -3624,8 +3647,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     with st.expander("Flexure strength audit / benchmark output", expanded=False):
         st.caption(
-            "VERIFY1 audit output for the governing flexure workflow: Mn nominal, route φ, φMn, D/C, "
-            "bending direction, tension face, and code basis. Use this table for independent spreadsheet/software comparison."
+            "SC1 audit output for the governing flexure workflow: Mn nominal, route φ, φMn, D/C, "
+            "bending direction, tension face, code-compatible strain-compatibility basis, and resistance-factor policy. Use this table for independent spreadsheet/software comparison."
         )
         audit_df = _beam_uls_flexure_audit_dataframe(flexure_preview_df)
         if audit_df.empty:
@@ -3636,7 +3659,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific resistance-factor basis above the shared strain-compatibility section engine. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
+            f"Flexure uses {strength_route.flexure_engine_label} with a workflow-specific code-compatible strain-compatibility basis. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
         )
         flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
         with flex_tab:
@@ -3666,7 +3689,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS strength-check limitations", expanded=False):
         st.write(f"- Active ULS strength route: {strength_route.workflow_label} → {strength_route.display_code_label}.")
         st.write(f"- Flexure route: {strength_route.flexure_basis_note}")
-        st.write("- Flexure audit output reports Mn nominal, route φ, φMn, D/C, bending direction, tension face, method, and code basis for benchmark comparison.")
+        st.write("- Flexure audit output reports Mn nominal, route φ, φMn, D/C, bending direction, tension face, method, code-compatible strain-compatibility basis, and resistance-factor policy for benchmark comparison.")
         st.write("- Flexure φMn is plotted as a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
         st.write(f"- Shear route: {strength_route.shear_basis_note}")
         st.write(f"- Torsion route: {strength_route.torsion_basis_note}")

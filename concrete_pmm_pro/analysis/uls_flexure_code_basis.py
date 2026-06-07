@@ -22,6 +22,11 @@ class BeamGirderFlexureCodeBasis:
     capacity_label: str
     method_label: str
     basis_note: str
+    strain_compatibility_basis: str
+    resistance_factor_policy: str
+    solver_audit_label: str
+    material_model_scope: str
+    benchmark_readiness_note: str
     resistance_factor: float | None = None
     requires_nominal_capacity: bool = False
     is_code_specific_layer_active: bool = True
@@ -54,10 +59,15 @@ def beam_girder_flexure_code_basis(
                 capacity_label="φMn — AASHTO LRFD",
                 method_label="AASHTO LRFD φ × nominal strain-compatibility Mn",
                 basis_note=(
-                    "Bridge prestressed concrete route: section nominal Mn is taken from the shared "
-                    "strain-compatibility engine with φ removed, then AASHTO LRFD flexure resistance "
+                    "Bridge prestressed concrete route: nominal Mn is solved from AASHTO LRFD-compatible "
+                    "section strain compatibility, then the AASHTO LRFD prestressed flexure resistance "
                     "factor φ = 1.00 is applied."
                 ),
+                strain_compatibility_basis="AASHTO LRFD-compatible strain compatibility",
+                resistance_factor_policy="AASHTO LRFD prestressed flexure: φ = 1.00 applied to nominal Mn",
+                solver_audit_label="Nominal Mn from section equilibrium / strain compatibility",
+                material_model_scope="Concrete, ordinary rebar, and bonded prestress use the current section material models",
+                benchmark_readiness_note="Benchmark against AASHTO/PCI or commercial girder software using Mn, φ, φMn, and D/C",
                 resistance_factor=1.00,
                 requires_nominal_capacity=True,
             )
@@ -67,10 +77,14 @@ def beam_girder_flexure_code_basis(
             capacity_label="φMn — AASHTO LRFD",
             method_label="AASHTO LRFD / strain-compatible φMn",
             basis_note=(
-                "Bridge nonprestressed concrete route: the active shared strain-compatibility "
-                "engine applies a tension-controlled φ basis consistent with the AASHTO LRFD "
-                "reinforced-concrete flexure route used in this preview layer."
+                "Bridge nonprestressed concrete route: φMn is solved using an AASHTO LRFD-compatible "
+                "strain-compatibility basis with the current reinforced-concrete φ logic."
             ),
+            strain_compatibility_basis="AASHTO LRFD-compatible strain compatibility",
+            resistance_factor_policy="AASHTO LRFD reinforced-concrete flexure: strain-compatible φ basis",
+            solver_audit_label="φMn from section equilibrium / strain compatibility",
+            material_model_scope="Concrete and ordinary rebar use the current section material models",
+            benchmark_readiness_note="Benchmark against AASHTO reinforced-concrete flexure examples before certification",
             resistance_factor=None,
             requires_nominal_capacity=False,
         )
@@ -81,9 +95,14 @@ def beam_girder_flexure_code_basis(
         capacity_label="φMn — ACI 318",
         method_label="ACI 318 strain-based φ from PMM engine",
         basis_note=(
-            "Building route: φMn is taken directly from the shared strain-compatibility PMM engine "
-            "using the ACI 318 strain-based strength-reduction factor logic."
+            "Building route: φMn is solved using an ACI 318-compatible strain-compatibility basis "
+            "with the ACI strain-based strength-reduction factor logic."
         ),
+        strain_compatibility_basis="ACI 318-compatible strain compatibility",
+        resistance_factor_policy="ACI 318 flexure: strain-based φ from section response",
+        solver_audit_label="φMn from section equilibrium / strain compatibility",
+        material_model_scope="Concrete, ordinary rebar, and prestress use the current section material models",
+        benchmark_readiness_note="Benchmark against ACI/prestressed concrete examples before certification",
         resistance_factor=None,
         requires_nominal_capacity=False,
     )

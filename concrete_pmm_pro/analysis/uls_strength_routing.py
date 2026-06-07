@@ -72,9 +72,9 @@ def bridge_beam_girder_uls_strength_route(code_edition: object | None = None) ->
         default_combo_label="Strength I",
         flexure_engine_label="AASHTO LRFD flexure route",
         flexure_basis_note=(
-            "Bridge route selected. φMn is routed through an AASHTO LRFD resistance-factor "
-            "layer above the shared strain-compatibility section-capacity engine. Dedicated "
-            "AASHTO LRFD flexural detailing/development calibration remains a future milestone."
+            "Bridge route selected. φMn uses an AASHTO LRFD-compatible strain-compatibility "
+            "basis with workflow-specific resistance-factor policy. Detailing/development "
+            "checks remain separate ULS milestones."
         ),
         shear_engine_label="AASHTO LRFD shear route",
         shear_basis_note=(
@@ -106,9 +106,9 @@ def building_beam_girder_uls_strength_route(code_edition: object | None = None) 
         default_combo_label="ACI19-ULS-2" if edition == "ACI 318-19" else "ACI-ULS gravity combo",
         flexure_engine_label="ACI 318 flexure route",
         flexure_basis_note=(
-            "Building route selected. φMn uses the ACI 318 strain-based strength-reduction "
-            "factor logic from the shared strain-compatibility section-capacity engine. Dedicated "
-            "ACI 318 detailing/development calibration remains a future milestone."
+            "Building route selected. φMn uses an ACI 318-compatible strain-compatibility "
+            "basis with ACI strain-based strength-reduction factor logic. Detailing/development "
+            "checks remain separate ULS milestones."
         ),
         shear_engine_label="ACI 318 shear route",
         shear_basis_note=(

@@ -27,6 +27,10 @@ from concrete_pmm_pro.analysis.result_models import (
     pmm_result_to_display_dataframe,
     summarize_pmm_result,
 )
+from concrete_pmm_pro.analysis.uls_strength_routing import (
+    BeamGirderUlsStrengthRoute,
+    beam_girder_uls_strength_route,
+)
 from concrete_pmm_pro.analysis.runtime import (
     ACCURACY_PRESET_RESOLUTIONS,
     RuntimeTiming,
@@ -2621,6 +2625,15 @@ def _beam_uls_get_state_value(state: Mapping[str, object], key: str, default: ob
     return getattr(state, key, default)
 
 
+def _beam_uls_strength_route_from_state(state: Mapping[str, object], *, is_bridge: bool, is_building: bool) -> BeamGirderUlsStrengthRoute:
+    return beam_girder_uls_strength_route(
+        is_bridge=is_bridge,
+        is_building=is_building,
+        project_design_code=project_design_code_from_session(state),
+        code_edition=project_code_edition_from_session(state),
+    )
+
+
 def _beam_uls_analysis_settings_from_state(state: Mapping[str, object], *, code_label: str) -> AnalysisSettings:
     raw = _beam_uls_get_state_value(state, "analysis_settings")
     if isinstance(raw, AnalysisSettings):
@@ -2725,8 +2738,7 @@ def _beam_uls_flexure_analysis_input_for_station(
     state: Mapping[str, object],
     *,
     row: Mapping[str, object],
-    code_label: str,
-    is_building: bool,
+    strength_route: BeamGirderUlsStrengthRoute,
     capacity_direction: float | None = None,
 ) -> tuple[AnalysisInput | None, list[str]]:
     messages: list[str] = []
@@ -2747,10 +2759,10 @@ def _beam_uls_flexure_analysis_input_for_station(
     if not isinstance(concrete, ConcreteMaterial):
         return None, ["Concrete material is missing."]
 
-    settings = _beam_uls_analysis_settings_from_state(state, code_label=code_label)
+    settings = _beam_uls_analysis_settings_from_state(state, code_label=strength_route.solver_code_label)
     rebars = effective_rebars_for_analysis(list(_beam_uls_get_state_value(state, "rebars", []) or []), state, settings)
     prestress = effective_prestress_for_analysis(list(_beam_uls_get_state_value(state, "prestress_elements", []) or []), state, settings)
-    span_m = _beam_uls_span_length_from_state(state, is_building=is_building)
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
     station_m = _beam_uls_float(row.get("Station x (m)"))
     if not math.isfinite(station_m):
         station_m = 0.0
@@ -2811,13 +2823,26 @@ def _beam_uls_flexure_preview_dataframe(
     state: Mapping[str, object],
     active_df: pd.DataFrame,
     *,
-    code_label: str,
-    is_building: bool,
+    strength_route: BeamGirderUlsStrengthRoute | None = None,
+    code_label: str | None = None,
+    is_building: bool | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Return station-by-station flexure check rows using existing PMM solver.
+    """Return station-by-station flexure check rows using the routed ULS basis.
 
-    This uses the existing PMM strength engine for primary Mux only. Shear, torsion, development length, debonding strength, and interface shear remain separate milestones.
+    ULS.CODE.ROUTE1 centralizes Bridge/Building code routing.  Backward-compatible
+    code_label/is_building keyword arguments are accepted for source tests and
+    older call sites, but new UI code should pass ``strength_route``.
     """
+
+    if strength_route is None:
+        display = str(code_label or "").strip().casefold()
+        route_is_building = bool(is_building) or "aci" in display or "318" in display
+        strength_route = beam_girder_uls_strength_route(
+            is_bridge=not route_is_building,
+            is_building=route_is_building,
+            project_design_code=code_label,
+            code_edition=code_label,
+        )
 
     columns = [
         "Check",
@@ -2910,8 +2935,7 @@ def _beam_uls_flexure_preview_dataframe(
         analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(
             state,
             row=demand_row,
-            code_label=code_label,
-            is_building=is_building,
+            strength_route=strength_route,
             capacity_direction=capacity_direction,
         )
         messages.extend(input_messages)
@@ -2923,7 +2947,7 @@ def _beam_uls_flexure_preview_dataframe(
                     "Governing x": station,
                     "Case": case,
                     "Demand": _format_beam_uls_demand(demand, "kN-m"),
-                    "Capacity": capacity_note if check == "Shear" and default_status == "LAYOUT READY" else "-",
+                    "Capacity": "-",
                     "Utilization": "-",
                     "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
                     "Capacity kN-m": float("nan"),
@@ -2979,7 +3003,7 @@ def _beam_uls_flexure_preview_dataframe(
         capacity_kNm = float(result.capacity_phiMn_Nmm) / 1_000_000.0
         utilization = float(result.dcr)
         method = result.capacity_method or "PMM strain compatibility"
-        note_parts = ["Primary Mux flexure only", f"{code_label} basis label"]
+        note_parts = ["Primary Mux flexure only", strength_route.flexure_engine_label, strength_route.flexure_basis_note]
         if zero_demand_endpoint:
             status = "SECTION PREVIEW"
             display_demand = "0.00 kN-m"
@@ -3323,23 +3347,23 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     is_bridge = is_beam_girder_future_workflow(mode_settings)
     is_building = is_building_beam_girder_workflow(mode_settings)
-    workflow_label = "Bridge Beam/Girder" if is_bridge else "Building Beam/Girder"
-    code_label = "AASHTO LRFD" if is_bridge else "ACI 318"
-    source_label = "Loads → ULS Bridge Beam/Girder Design Loads" if is_bridge else "Loads → ULS Building Beam/Girder Design Loads"
+    strength_route = _beam_uls_strength_route_from_state(st.session_state, is_bridge=is_bridge, is_building=is_building)
+    workflow_label = strength_route.workflow_label
+    code_label = strength_route.display_code_label
+    source_label = strength_route.uls_load_source_label
 
     st.markdown(_ANALYSIS_DASHBOARD_CSS, unsafe_allow_html=True)
     st.markdown("### ULS Beam/Girder decision summary")
     st.caption(
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
-        "ULS.FLEX1.4 plots primary Mux demand against section φMn along the span; shear, torsion, development/detailing checks, and full ULS certification remain future milestones."
+        "ULS.CODE.ROUTE1 routes strength checks by workflow before formulas are added: Bridge → AASHTO LRFD, Building → ACI 318. Flexure uses the current shared section-capacity engine; shear/torsion remain route-ready but not calculated."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
     flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
         st.session_state,
         active_df,
-        code_label=code_label,
-        is_building=is_building,
+        strength_route=strength_route,
     )
     _render_analysis_summary_strip(
         _beam_uls_summary_cards(active_df, workflow_label=workflow_label, code_label=code_label, flexure_preview_df=flexure_preview_df),
@@ -3348,10 +3372,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     basis_cards = [
         {"title": "Workflow", "value": workflow_label, "detail": "Selected in Setup", "status": "info"},
-        {"title": "Design code", "value": code_label, "detail": "Workflow-locked code basis", "status": "info"},
+        {"title": "Strength route", "value": code_label, "detail": strength_route.flexure_engine_label, "status": "info"},
         {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
+        {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup layout required before φVn", "status": "warning"},
     ]
-    _render_analysis_summary_strip(basis_cards, columns=3)
+    _render_analysis_summary_strip(basis_cards, columns=4)
 
     if active_df.empty:
         st.warning("No Active Beam/Girder ULS station demand rows are available. Define or import them in Loads before ULS review.")
@@ -3363,7 +3388,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with st.expander("ULS demand/capacity diagrams", expanded=False):
         st.caption(
             "Demand diagrams are drawn from Loads → Beam/Girder ULS station rows. "
-            "Flexure includes φMn from the current strain-compatibility engine; φVn and φTn are intentionally absent until verified shear/torsion engines are implemented."
+            f"Flexure uses {strength_route.flexure_engine_label} with the current shared strain-compatibility engine. φVn and φTn are intentionally absent until verified {strength_route.project_design_code} shear/torsion engines are implemented."
         )
         flex_tab, shear_tab, torsion_tab = st.tabs(["Flexure demand/capacity", "Shear demand", "Torsion demand"])
         with flex_tab:
@@ -3391,10 +3416,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.dataframe(_beam_uls_audit_dataframe(active_df), use_container_width=True, hide_index=True)
 
     with st.expander("ULS strength-check limitations", expanded=False):
-        st.write("- Flexure capacity is based on the existing strain-compatibility PMM engine and primary Mux demand only.")
+        st.write(f"- Active ULS strength route: {strength_route.workflow_label} → {strength_route.display_code_label}.")
+        st.write(f"- Flexure route: {strength_route.flexure_basis_note}")
         st.write("- Flexure φMn is plotted as a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
-        st.write("- Shear φVn and torsion φTn checks are not claimed here.")
-        st.write("- Dedicated girder strand layout can be included at the demand station for flexure strength, but transfer-length/development certification is still future work.")
+        st.write(f"- Shear route: {strength_route.shear_basis_note}")
+        st.write(f"- Torsion route: {strength_route.torsion_basis_note}")
+        st.write(f"- Overall guard: {strength_route.overall_guard_note}")
         st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")
         if flexure_preview_messages:
             st.caption("Flexure check notes: " + " | ".join(flexure_preview_messages[:5]))

@@ -266,3 +266,74 @@ def test_uls_flex1_4_engine_plots_zero_phi_mn_at_zero_mux_endpoints() -> None:
     assert all(endpoints["Capacity kN-m"] == 0.0)
     assert endpoints["Utilization value"].isna().all()
     assert "D/C is not applicable at zero demand" in endpoints.iloc[0]["Notes"]
+
+
+def test_uls_code_route1_bridge_and_building_routes_are_code_specific() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+
+    bridge = beam_girder_uls_strength_route(
+        is_bridge=True,
+        is_building=False,
+        project_design_code="ACI 318",  # stale input should not override workflow
+        code_edition="AASHTO LRFD 9th Edition",
+    )
+    building = beam_girder_uls_strength_route(
+        is_bridge=False,
+        is_building=True,
+        project_design_code="AASHTO LRFD",  # stale input should not override workflow
+        code_edition="ACI 318-19",
+    )
+
+    assert bridge.workflow_label == "Bridge Beam/Girder"
+    assert bridge.project_design_code == "AASHTO LRFD"
+    assert bridge.display_code_label == "AASHTO LRFD 9th Edition"
+    assert "AASHTO LRFD" in bridge.flexure_engine_label
+    assert "AASHTO LRFD" in bridge.shear_engine_label
+    assert not bridge.is_code_specific_shear_ready
+
+    assert building.workflow_label == "Building Beam/Girder"
+    assert building.project_design_code == "ACI 318"
+    assert building.display_code_label == "ACI 318-19"
+    assert building.default_combo_label == "ACI19-ULS-2"
+    assert "ACI 318" in building.flexure_engine_label
+    assert "ACI 318" in building.shear_engine_label
+    assert not building.is_code_specific_shear_ready
+
+
+def test_uls_code_route1_analysis_uses_route_basis_notes_in_flexure_rows() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+    from concrete_pmm_pro.ui.analysis_page import _beam_uls_flexure_preview_dataframe
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 20.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD 9th Edition")
+
+    preview, messages = _beam_uls_flexure_preview_dataframe(state, active, strength_route=route)
+
+    assert messages == []
+    assert len(preview) == 1
+    notes = str(preview.iloc[0]["Notes"])
+    assert "AASHTO LRFD flexure route" in notes
+    assert "shared strain-compatibility" in notes

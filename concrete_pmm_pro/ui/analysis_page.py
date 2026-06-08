@@ -3592,7 +3592,13 @@ def _beam_uls_shear_result_for_row(
     mux_kNm = _beam_uls_float(row.get("Mux"))
     case = str(row.get("Case Name") or "-")
     diagram_boundary = bool(row.get("__Diagram boundary"))
+    critical_section = bool(row.get("__Critical shear section"))
+    station_type = "DIAGRAM BOUNDARY" if diagram_boundary else ("CRITICAL SHEAR SECTION" if critical_section else "LOAD STATION")
+    support_side = str(row.get("__Support side") or "-")
+    critical_offset_m = _beam_uls_float(row.get("__Critical offset m"))
     notes: list[str] = []
+    if critical_section:
+        notes.append("Critical shear section inserted by Analysis; demand is interpolated from active ULS station rows and this row is considered for governing shear D/C.")
     if not math.isfinite(vu_kN) or abs(vu_kN) <= _BEAM_ULS_DEMAND_TOL:
         if not diagram_boundary:
             return {
@@ -3747,6 +3753,9 @@ def _beam_uls_shear_result_for_row(
         "Status": status,
         "Strength status": strength_status,
         "Detailing status": detailing_status,
+        "Station type": station_type,
+        "Support side": support_side,
+        "Critical offset m": critical_offset_m if math.isfinite(critical_offset_m) else float("nan"),
         "Governing x": _format_beam_uls_x(x_m),
         "Case": case,
         "Demand": _format_beam_uls_demand(vu_kN, "kN") if not diagram_boundary else "0.00 kN",
@@ -3793,7 +3802,7 @@ def _beam_uls_shear_check_dataframe(
     strength_route: BeamGirderUlsStrengthRoute,
 ) -> pd.DataFrame:
     columns = [
-        "Check", "Status", "Strength status", "Detailing status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
+        "Check", "Status", "Strength status", "Detailing status", "Station type", "Support side", "Critical offset m", "Governing x", "Case", "Demand", "Capacity", "Utilization",
         "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN",
         "D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value",
         "Zone", "Stirrup", "Av/s mm2/mm", "Av/s mm2/m", "Av/s required mm2/mm", "Av/s required mm2/m",
@@ -3820,6 +3829,202 @@ def _beam_uls_shear_check_dataframe(
         rows.append(result)
     return pd.DataFrame(rows, columns=columns)
 
+
+
+
+def _beam_uls_interpolated_demand_row_for_case(
+    active_df: pd.DataFrame,
+    *,
+    case_name: str,
+    x_m: float,
+    note: str = "",
+) -> dict[str, object] | None:
+    """Return an interpolated/extrapolated ULS demand row for a case.
+
+    Critical shear sections rarely coincide exactly with imported station rows.
+    The Analysis page remains read-only: it interpolates from the active Loads
+    station resultants and makes that basis explicit in the row note.
+    """
+
+    if active_df is None or active_df.empty or not math.isfinite(float(x_m)):
+        return None
+    df = active_df.copy()
+    if "Case Name" in df.columns:
+        case_df = df[df["Case Name"].astype(str) == str(case_name)].copy()
+        if case_df.empty:
+            case_df = df.copy()
+    else:
+        case_df = df.copy()
+    if case_df.empty or "Station x (m)" not in case_df.columns:
+        return None
+    case_df["__x_m"] = pd.to_numeric(case_df["Station x (m)"], errors="coerce")
+    case_df = case_df[case_df["__x_m"].notna()].sort_values("__x_m", kind="stable")
+    if case_df.empty:
+        return None
+
+    # Collapse duplicate stations by keeping the last edited/imported row.
+    case_df = case_df.drop_duplicates(subset=["__x_m"], keep="last").sort_values("__x_m", kind="stable")
+    xs = [float(value) for value in case_df["__x_m"].tolist()]
+
+    def _interp_column(column: str, default: float = 0.0) -> float:
+        if column not in case_df.columns:
+            return default
+        values = [float(_beam_uls_float(value)) for value in case_df[column].tolist()]
+        finite_pairs = [(x, y) for x, y in zip(xs, values) if math.isfinite(x) and math.isfinite(y)]
+        if not finite_pairs:
+            return default
+        if len(finite_pairs) == 1:
+            return float(finite_pairs[0][1])
+        x_target = float(x_m)
+        # Linear interpolation inside the station range and linear extrapolation
+        # just outside the range.  This keeps the critical-section demand tied
+        # to the user's active station-resultant diagram instead of inventing a
+        # separate load model in Analysis.
+        for (x0, y0), (x1, y1) in zip(finite_pairs[:-1], finite_pairs[1:]):
+            if (x0 <= x_target <= x1) or (x1 <= x_target <= x0):
+                if abs(x1 - x0) <= 1.0e-12:
+                    return float(y0)
+                ratio = (x_target - x0) / (x1 - x0)
+                return float(y0 + ratio * (y1 - y0))
+        if x_target < finite_pairs[0][0]:
+            x0, y0 = finite_pairs[0]
+            x1, y1 = finite_pairs[1]
+        else:
+            x0, y0 = finite_pairs[-2]
+            x1, y1 = finite_pairs[-1]
+        if abs(x1 - x0) <= 1.0e-12:
+            return float(y0)
+        ratio = (x_target - x0) / (x1 - x0)
+        return float(y0 + ratio * (y1 - y0))
+
+    return {
+        "Active": True,
+        "Station x (m)": float(x_m),
+        "Case Name": str(case_name),
+        "Mux": _interp_column("Mux", 1.0e-3),
+        "Vuy": _interp_column("Vuy", 0.0),
+        "Tu": _interp_column("Tu", 0.0),
+        "Muy": _interp_column("Muy", 0.0),
+        "Vux": _interp_column("Vux", 0.0),
+        "Nu": _interp_column("Nu", 0.0),
+        "Note": note or "Interpolated ULS demand row",
+    }
+
+
+def _beam_uls_shear_empty_result_dataframe(active_df: pd.DataFrame, *, state: Mapping[str, object], strength_route: BeamGirderUlsStrengthRoute) -> pd.DataFrame:
+    return _beam_uls_shear_check_dataframe(
+        state,
+        pd.DataFrame(columns=list(active_df.columns) if isinstance(active_df, pd.DataFrame) else []),
+        strength_route=strength_route,
+    )
+
+
+def _beam_uls_shear_critical_section_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    """Return first-pass critical shear section rows near each support.
+
+    These rows are design-check rows, not graphical endpoint boundaries.  The
+    default critical-section offset is d for ACI Building Beam/Girder and dv for
+    AASHTO Bridge Beam/Girder.  The shear demand is interpolated from the active
+    Loads ULS station-resultant diagram for each load case.
+    """
+
+    base = _beam_uls_shear_empty_result_dataframe(active_df, state=state, strength_route=strength_route)
+    columns = list(base.columns)
+    if active_df is None or active_df.empty:
+        return pd.DataFrame(columns=columns)
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    if not math.isfinite(span_m) or span_m <= 0.0:
+        return pd.DataFrame(columns=columns)
+    cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()]
+    if not cases:
+        cases = ["-"]
+
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str, float]] = set()
+    for case_name in cases:
+        for support_side, support_x in (("Left", 0.0), ("Right", float(span_m))):
+            support_row = _beam_uls_interpolated_demand_row_for_case(
+                active_df,
+                case_name=case_name,
+                x_m=support_x,
+                note="Support row used only to estimate d/dv for critical shear section",
+            )
+            if support_row is None:
+                continue
+            support_row["__Diagram boundary"] = True
+            support_result = _beam_uls_shear_result_for_row(state, support_row, strength_route=strength_route)
+            offset_mm = _beam_uls_float(support_result.get("dv mm" if strength_route.is_bridge else "d mm"))
+            # If the exact endpoint is not covered by a stirrup zone, fall back
+            # to the nearest active station for depth estimation.  This avoids
+            # losing the critical-section marker solely because a user-defined
+            # stirrup zone starts slightly inside the member.
+            if not math.isfinite(offset_mm) or offset_mm <= 0.0:
+                side_df = active_df.copy()
+                side_df["__x_m"] = pd.to_numeric(side_df.get("Station x (m)"), errors="coerce")
+                if "Case Name" in side_df.columns:
+                    side_df = side_df[side_df["Case Name"].astype(str) == str(case_name)].copy()
+                side_df = side_df[side_df["__x_m"].notna()].sort_values("__x_m", kind="stable")
+                if not side_df.empty:
+                    sample_x = float(side_df.iloc[0]["__x_m"] if support_side == "Left" else side_df.iloc[-1]["__x_m"])
+                    sample_row = _beam_uls_interpolated_demand_row_for_case(active_df, case_name=case_name, x_m=sample_x, note="Nearest station used to estimate d/dv for critical shear section")
+                    if sample_row is not None:
+                        sample_result = _beam_uls_shear_result_for_row(state, sample_row, strength_route=strength_route)
+                        offset_mm = _beam_uls_float(sample_result.get("dv mm" if strength_route.is_bridge else "d mm"))
+            if not math.isfinite(offset_mm) or offset_mm <= 0.0:
+                continue
+            offset_m = min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
+            if offset_m <= 1.0e-9:
+                continue
+            x_crit = offset_m if support_side == "Left" else float(span_m) - offset_m
+            x_crit = min(max(float(x_crit), 0.0), float(span_m))
+            key = (case_name, support_side, round(x_crit, 9))
+            if key in seen:
+                continue
+            seen.add(key)
+            demand_row = _beam_uls_interpolated_demand_row_for_case(
+                active_df,
+                case_name=case_name,
+                x_m=x_crit,
+                note=f"Critical shear section at {support_side.lower()} support",
+            )
+            if demand_row is None:
+                continue
+            demand_row["__Critical shear section"] = True
+            demand_row["__Support side"] = support_side
+            demand_row["__Critical offset m"] = offset_m
+            result = _beam_uls_shear_result_for_row(state, demand_row, strength_route=strength_route)
+            if "dv mm" not in result and "dv mm" in columns:
+                result["dv mm"] = float("nan")
+            for column in columns:
+                result.setdefault(
+                    column,
+                    float("nan")
+                    if column.endswith("kN")
+                    or column.endswith("mm")
+                    or column.endswith("mm2/mm")
+                    or column.endswith("mm2/m")
+                    or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "Critical offset m", "φ"}
+                    else "-",
+                )
+            rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _beam_uls_combine_shear_check_frames(*frames: pd.DataFrame | None) -> pd.DataFrame:
+    valid_frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    if not valid_frames:
+        columns: list[str] = []
+        for frame in frames:
+            if isinstance(frame, pd.DataFrame):
+                columns = list(frame.columns)
+                break
+        return pd.DataFrame(columns=columns)
+    return pd.concat(valid_frames, ignore_index=True, sort=False)
 
 def _beam_uls_shear_diagram_boundary_dataframe(
     state: Mapping[str, object],
@@ -3903,20 +4108,24 @@ def _beam_uls_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, ob
 
 def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFrame:
     columns = [
-        "Governing", "Station x", "Case", "Status", "Strength", "Detailing", "Vu demand", "φVn", "D/C", "Strength D/C", "Detailing D/C",
+        "Governing", "Station type", "Station x", "Support side", "Critical offset", "Case", "Status", "Strength", "Detailing", "Vu demand", "φVn", "D/C", "Strength D/C", "Detailing D/C",
         "φVc", "φVs", "Zone", "Stirrup", "Av/s", "Av/s min", "s max", "Spacing D/C", "bw", "d", "dv", "φ", "Code basis", "Method", "Notes",
     ]
     if shear_df is None or shear_df.empty:
         return pd.DataFrame(columns=columns)
     df = shear_df.copy()
-    df["__util"] = pd.to_numeric(df.get("D/C value"), errors="coerce")
+    governing_column = "Governing D/C value" if "Governing D/C value" in df.columns else "D/C value"
+    df["__util"] = pd.to_numeric(df.get(governing_column), errors="coerce")
     governing_idx = df["__util"].idxmax() if df["__util"].notna().any() else None
     rows = []
     for idx, row in df.iterrows():
         rows.append(
             {
                 "Governing": "Yes" if governing_idx is not None and idx == governing_idx else "",
+                "Station type": str(row.get("Station type") or "LOAD STATION"),
                 "Station x": str(row.get("Governing x") or "-"),
+                "Support side": str(row.get("Support side") or "-"),
+                "Critical offset": _format_beam_uls_audit_number(row.get("Critical offset m"), unit="m"),
                 "Case": str(row.get("Case") or "-"),
                 "Status": str(row.get("Status") or "-"),
                 "Strength": str(row.get("Strength status") or row.get("Status") or "-"),
@@ -4377,6 +4586,7 @@ def _make_beam_uls_shear_capacity_figure(
     *,
     code_label: str,
     boundary_capacity_df: pd.DataFrame | None = None,
+    critical_section_df: pd.DataFrame | None = None,
 ) -> go.Figure:
     fig = _make_beam_uls_demand_figure(
         active_df,
@@ -4388,6 +4598,8 @@ def _make_beam_uls_shear_capacity_figure(
         fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
         return fig
     plot_sources = [shear_check_df]
+    if critical_section_df is not None and not critical_section_df.empty:
+        plot_sources.append(critical_section_df)
     if boundary_capacity_df is not None and not boundary_capacity_df.empty:
         plot_sources.append(boundary_capacity_df)
     plot_df = pd.concat(plot_sources, ignore_index=True, sort=False).copy()
@@ -4396,6 +4608,10 @@ def _make_beam_uls_shear_capacity_figure(
     plot_df["__phi_vn"] = pd.to_numeric(plot_df.get("φVn kN"), errors="coerce")
     plot_df["__phi_vc"] = pd.to_numeric(plot_df.get("φVc kN"), errors="coerce")
     plot_df = plot_df[plot_df["__x_m"].notna() & plot_df["__phi_vn"].notna()].copy()
+    if not plot_df.empty:
+        dedupe_columns = [column for column in ["Case", "__x_m", "__phi_vn", "Station type"] if column in plot_df.columns]
+        if dedupe_columns:
+            plot_df = plot_df.drop_duplicates(subset=dedupe_columns, keep="first")
     if plot_df.empty:
         fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
         return fig
@@ -4408,6 +4624,34 @@ def _make_beam_uls_shear_capacity_figure(
         vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
         if any(math.isfinite(value) for value in vc_values):
             fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))
+    critical_x_values: list[float] = []
+    if critical_section_df is not None and not critical_section_df.empty:
+        critical_df = critical_section_df.copy()
+        critical_df["__x_m"] = critical_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+        critical_df["__x_m"] = pd.to_numeric(critical_df["__x_m"], errors="coerce")
+        critical_x_values = sorted({float(value) for value in critical_df["__x_m"].dropna().tolist()})
+    if critical_x_values:
+        active_v = pd.to_numeric(active_df.get("Vuy", pd.Series(dtype=float)), errors="coerce") if isinstance(active_df, pd.DataFrame) else pd.Series(dtype=float)
+        candidate_values: list[float] = [abs(float(value)) for value in active_v.dropna().tolist() if math.isfinite(float(value))]
+        for column in ["__phi_vn", "__phi_vc"]:
+            if column in plot_df.columns:
+                candidate_values.extend(abs(float(value)) for value in plot_df[column].dropna().tolist() if math.isfinite(float(value)))
+        y_limit = max(candidate_values) * 1.10 if candidate_values else 1.0
+        if not math.isfinite(y_limit) or y_limit <= 0.0:
+            y_limit = 1.0
+        for i, x_crit in enumerate(critical_x_values):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_crit, x_crit],
+                    y=[-y_limit, y_limit],
+                    mode="lines",
+                    name="Critical section for shear loading",
+                    showlegend=(i == 0),
+                    line={"dash": "dot"},
+                    hovertemplate="Critical shear section<br>x=%{x:.3f} m<extra></extra>",
+                )
+            )
+
     governing = _beam_uls_governing_shear_row(shear_check_df)
     if governing is not None:
         x_text = str(governing.get("Governing x") or "").replace(" m", "")
@@ -4461,11 +4705,17 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         active_df,
         strength_route=strength_route,
     )
-    shear_check_df = _beam_uls_shear_check_dataframe(
+    shear_station_check_df = _beam_uls_shear_check_dataframe(
         st.session_state,
         active_df,
         strength_route=strength_route,
     )
+    shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
+        st.session_state,
+        active_df,
+        strength_route=strength_route,
+    )
+    shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
     shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
         st.session_state,
         active_df,
@@ -4577,12 +4827,13 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 shear_check_df,
                 code_label=code_label,
                 boundary_capacity_df=shear_boundary_capacity_df,
+                critical_section_df=shear_critical_section_df,
             ),
             use_container_width=True,
         )
         st.caption(
-            "Shear capacity is from the active provided stirrup layout by zone. The φVn / φVc / φVs diagram is extended to x=0 and x=L as capacity-boundary values when the provided layout is available. "
-            "The status still combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
+            "Shear capacity is from the active provided stirrup layout by zone. Critical shear sections are inserted near the supports and included in the governing shear D/C; x=0 and x=L remain capacity-boundary graph values only. "
+            "The φVn / φVc / φVs diagram is extended to x=0 and x=L as capacity-boundary values when the provided layout is available. The status still combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
             "Detailed AASHTO MCFT β/θ calibration, high-shear spacing triggers, and benchmark certification remain separate QA/design steps."
         )
         with st.expander("Shear strength audit / provided stirrup output", expanded=False):
@@ -4596,6 +4847,13 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 st.info("Shear audit output is not available until active ULS demand rows and active stirrup zones are ready.")
             else:
                 st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Critical shear section checks", expanded=False):
+            if shear_critical_section_df.empty:
+                st.info("Critical shear section checks are not available until span length, section depth, active ULS station rows, and active stirrup zones are ready.")
+            else:
+                st.caption("First-pass critical shear sections inserted at approximately d from each support for ACI Building Beam/Girder and dv from each support for AASHTO Bridge Beam/Girder. These rows are included in the governing shear D/C.")
+                st.dataframe(_beam_uls_shear_audit_dataframe(shear_critical_section_df), use_container_width=True, hide_index=True)
+
         with st.expander("Shear end-boundary capacity values", expanded=False):
             if shear_boundary_capacity_df.empty:
                 st.info("End-boundary φVc / φVs / φVn values are not available until the provided stirrup layout and section/material inputs are ready.")
@@ -4606,6 +4864,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         with st.expander("Shear method notes", expanded=False):
             st.write(f"- Shear route: {strength_route.shear_basis_note}")
             st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
+            st.write("- Critical shear section rows are inserted at approximately d from each support for ACI and dv from each support for AASHTO; their demand is interpolated from active ULS station rows and they are considered for governing shear D/C.")
             st.write("- The detailing guard screens provided Av/s against a first-pass minimum and checks stirrup spacing against a first-pass maximum; failed guards downgrade the shear status.")
             st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, high-shear spacing triggers, prestress shear effects, and benchmark calibration are added.")
 

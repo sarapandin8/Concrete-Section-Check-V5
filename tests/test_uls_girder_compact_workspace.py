@@ -7,6 +7,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_flexure_audit_dataframe,
     _beam_uls_shear_audit_dataframe,
     _beam_uls_shear_check_dataframe,
+    _beam_uls_shear_critical_section_dataframe,
     _beam_uls_shear_diagram_boundary_dataframe,
     _beam_uls_shear_detailing_guard,
     _beam_uls_shear_reinforcement_status_dataframe,
@@ -836,6 +837,65 @@ def test_uls_shear2_2_capacity_diagram_adds_end_boundary_values_without_governin
     vn_trace = next(trace for trace in fig.data if trace.name == "φVn")
     assert min(vn_trace.x) == 0.0
     assert max(vn_trace.x) == 20.0
+
+
+
+def test_uls_shear3_critical_sections_are_inserted_and_considered_governing() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_system_settings": {"span_length_m": 20.0},
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Support",
+                "x_start_m": 0.0,
+                "x_end_m": 20.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "Strength I", "Mux": 10.0, "Vuy": 300.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 20.0, "Case Name": "Strength I", "Mux": 10.0, "Vuy": -300.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    critical = _beam_uls_shear_critical_section_dataframe(state, active, strength_route=route)
+    combined = pd.concat([_beam_uls_shear_check_dataframe(state, active, strength_route=route), critical], ignore_index=True)
+    fig = _make_beam_uls_shear_capacity_figure(active, combined, code_label="AASHTO LRFD", critical_section_df=critical)
+
+    assert len(critical) == 2
+    assert set(critical["Station type"]) == {"CRITICAL SHEAR SECTION"}
+    assert set(critical["Support side"]) == {"Left", "Right"}
+    assert critical["Critical offset m"].min() > 0.0
+    assert critical["D/C value"].notna().all()
+    assert any(trace.name == "Critical section for shear loading" for trace in fig.data)
 
 
 def test_uls_ui2_check_tabs_are_main_workspace_labels() -> None:

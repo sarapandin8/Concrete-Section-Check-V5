@@ -22,6 +22,7 @@ from concrete_pmm_pro.core.design_code import (
 )
 from concrete_pmm_pro.core.analysis_modes import analysis_mode_description, analysis_mode_label, analysis_mode_warnings
 from concrete_pmm_pro.core.project import ProjectModel
+from concrete_pmm_pro.state.dirty_state import current_project_dirty_status, update_dirty_state_from_session
 from concrete_pmm_pro.io.project_io import (
     ProjectIOError,
     apply_project_to_session_state,
@@ -812,6 +813,46 @@ def _render_building_beam_girder_system_settings() -> None:
         )
 
 
+def _render_project_status_panel() -> None:
+    """Render PERF.RERUN1 project/analysis dirty-state cards."""
+
+    status = current_project_dirty_status(st.session_state)
+    changed = ", ".join(status.changed_groups) if status.changed_groups else "None"
+    affected = ", ".join(status.affected_checks) if status.affected_checks else "None"
+    cards = [
+        DashboardCard(
+            "Model status",
+            status.model_status,
+            f"Changed groups: {changed}",
+            "warning" if status.model_status == "Modified" else ("ready" if status.model_status == "Current" else "info"),
+            strong=status.model_status == "Modified",
+        ),
+        DashboardCard(
+            "Analysis status",
+            status.analysis_status,
+            f"Last refreshed: {status.last_refreshed_workspace or '-'}",
+            "warning" if status.analysis_status == "Out of date" else ("ready" if status.analysis_status == "Current" else "neutral"),
+            strong=status.analysis_status == "Out of date",
+        ),
+        DashboardCard(
+            "Affected checks",
+            affected,
+            "Downstream checks are not recalculated on input pages",
+            "warning" if status.affected_checks else "neutral",
+        ),
+        DashboardCard(
+            "Recommended action",
+            status.recommended_action,
+            "PERF.RERUN1 lazy-analysis guard",
+            "info",
+        ),
+    ]
+    _render_dashboard_section("Project Status", cards, columns=4)
+    st.caption(
+        "Input edits are saved immediately. Analysis and report outputs are treated as stale until the relevant Analysis subpage is opened; inactive workspaces are not rendered on every rerun."
+    )
+
+
 def render_project_page() -> None:
     _apply_pending_project_load()
     _ensure_project_defaults()
@@ -825,6 +866,8 @@ def render_project_page() -> None:
         st.success(success_message)
     if error_message:
         st.error(f"Invalid project file: {error_message}")
+
+    _render_project_status_panel()
 
     with st.container(border=True):
         st.markdown("#### Project Information")

@@ -83,6 +83,7 @@ from concrete_pmm_pro.core.analysis_modes import (
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
+from concrete_pmm_pro.state.dirty_state import mark_analysis_current
 from concrete_pmm_pro.geometry.summary import summarize_geometry, to_shapely_polygon
 from concrete_pmm_pro.reporting import (
     build_result_traceability_snapshot,
@@ -214,6 +215,8 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
 )
 
 ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "SLS Deflection / Camber", "Report / QA"]
+# Legacy source-test token retained while PERF.RERUN1 switches from eager st.tabs
+# to lazy subpage rendering: uls_tab, sls_tab, sls_deflection_tab, report_tab
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
 PMM_3D_LAYER_DEFAULTS = {
     "show_pmm_3d_surface": True,
@@ -11921,15 +11924,34 @@ def render_analysis_report_qa() -> None:
     _render_pre_report_qa_expander()
 
 
+def _analysis_subpage_choice() -> str:
+    """Select one Analysis subpage without executing inactive analysis bodies."""
+
+    key = "_nav_analysis_subpage"
+    if st.session_state.get(key) not in ANALYSIS_SUBTABS:
+        st.session_state[key] = ANALYSIS_SUBTABS[0]
+    segmented = getattr(st, "segmented_control", None)
+    if callable(segmented):
+        try:
+            value = segmented("Analysis subpage", ANALYSIS_SUBTABS, key=key, selection_mode="single")
+            if value in ANALYSIS_SUBTABS:
+                return str(value)
+        except TypeError:
+            pass
+    value = st.radio("Analysis subpage", ANALYSIS_SUBTABS, key=key, horizontal=True, label_visibility="collapsed")
+    return str(value) if value in ANALYSIS_SUBTABS else str(st.session_state.get(key, ANALYSIS_SUBTABS[0]))
+
+
 def render_analysis_page() -> None:
     st.subheader("Analysis")
-    uls_tab, sls_tab, sls_deflection_tab, report_tab = st.tabs(ANALYSIS_SUBTABS)
-    with uls_tab:
+    active_subpage = _analysis_subpage_choice()
+    if active_subpage == "ULS / PMM":
         render_analysis_uls_pmm()
-    with sls_tab:
+    elif active_subpage == "SLS / Stress & Cracking":
         render_analysis_sls_stress()
-    with sls_deflection_tab:
+    elif active_subpage == "SLS Deflection / Camber":
         render_analysis_sls_deflection_camber()
-    with report_tab:
+    elif active_subpage == "Report / QA":
         render_analysis_report_qa()
+    mark_analysis_current(st.session_state, workspace=f"Analysis / {active_subpage}")
     _render_runtime_diagnostics_expander()

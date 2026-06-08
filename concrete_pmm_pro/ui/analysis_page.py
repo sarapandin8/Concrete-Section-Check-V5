@@ -3919,6 +3919,103 @@ def _beam_uls_shear_empty_result_dataframe(active_df: pd.DataFrame, *, state: Ma
     )
 
 
+def _beam_uls_shear_default_critical_section_rows(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> list[dict[str, object]]:
+    """Return first-pass critical shear section marker rows independent of stirrup-zone coverage.
+
+    The graph marker should not disappear merely because the exact critical
+    section is outside an active stirrup zone.  Capacity may still be unavailable
+    at that location, but the critical x-location itself remains useful and must
+    be visible so the user can see a layout gap near the support.
+    """
+
+    if active_df is None or active_df.empty:
+        return []
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    if not math.isfinite(span_m) or span_m <= 0.0:
+        return []
+    cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()]
+    if not cases:
+        cases = ["-"]
+
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str, float]] = set()
+    for case_name in cases:
+        for support_side, support_x in (("Left", 0.0), ("Right", float(span_m))):
+            support_row = _beam_uls_interpolated_demand_row_for_case(
+                active_df,
+                case_name=case_name,
+                x_m=support_x,
+                note="Support row used to estimate d/dv for critical shear section",
+            )
+            if support_row is None:
+                # Fallback to a simple row.  This still lets the section-geometry
+                # helper calculate d/dv when the user imported only interior
+                # station resultants.
+                support_row = {
+                    "Active": True,
+                    "Station x (m)": float(support_x),
+                    "Case Name": str(case_name),
+                    "Mux": 1.0e-3,
+                    "Vuy": 0.0,
+                    "Tu": 0.0,
+                    "Muy": 0.0,
+                    "Vux": 0.0,
+                    "Nu": 0.0,
+                    "Note": "Support fallback row used to estimate d/dv for critical shear section",
+                }
+            analysis_input, _messages = _beam_uls_flexure_analysis_input_for_station(
+                state,
+                row=support_row,
+                strength_route=strength_route,
+            )
+            if analysis_input is None:
+                continue
+            mux_kNm = _beam_uls_float(support_row.get("Mux"))
+            d_eff_mm, _tension_face, _d_note = _beam_uls_effective_shear_depth_mm(
+                analysis_input,
+                mux_kNm=mux_kNm,
+                strength_route=strength_route,
+            )
+            if d_eff_mm is None or not math.isfinite(float(d_eff_mm)) or float(d_eff_mm) <= 0.0:
+                continue
+            if strength_route.is_bridge:
+                try:
+                    _, y_min, _, y_max = _beam_uls_section_bounds(analysis_input.section_geometry)
+                    h_mm = float(y_max) - float(y_min)
+                except Exception:
+                    h_mm = float("nan")
+                if math.isfinite(h_mm) and h_mm > 0.0:
+                    offset_mm = max(0.72 * h_mm, min(0.90 * float(d_eff_mm), float(d_eff_mm)))
+                else:
+                    offset_mm = float(d_eff_mm)
+            else:
+                offset_mm = float(d_eff_mm)
+            offset_m = min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
+            if offset_m <= 1.0e-9:
+                continue
+            x_crit = offset_m if support_side == "Left" else float(span_m) - offset_m
+            x_crit = min(max(float(x_crit), 0.0), float(span_m))
+            key = (case_name, support_side, round(x_crit, 9))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    "Case": str(case_name),
+                    "Support side": support_side,
+                    "Critical offset m": offset_m,
+                    "Governing x": _format_beam_uls_x(x_crit),
+                    "x_m": x_crit,
+                }
+            )
+    return rows
+
+
 def _beam_uls_shear_critical_section_dataframe(
     state: Mapping[str, object],
     active_df: pd.DataFrame,
@@ -3935,83 +4032,65 @@ def _beam_uls_shear_critical_section_dataframe(
 
     base = _beam_uls_shear_empty_result_dataframe(active_df, state=state, strength_route=strength_route)
     columns = list(base.columns)
-    if active_df is None or active_df.empty:
+    marker_rows = _beam_uls_shear_default_critical_section_rows(state, active_df, strength_route=strength_route)
+    if not marker_rows:
         return pd.DataFrame(columns=columns)
-    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
-    if not math.isfinite(span_m) or span_m <= 0.0:
-        return pd.DataFrame(columns=columns)
-    cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()]
-    if not cases:
-        cases = ["-"]
 
     rows: list[dict[str, object]] = []
-    seen: set[tuple[str, str, float]] = set()
-    for case_name in cases:
-        for support_side, support_x in (("Left", 0.0), ("Right", float(span_m))):
-            support_row = _beam_uls_interpolated_demand_row_for_case(
-                active_df,
-                case_name=case_name,
-                x_m=support_x,
-                note="Support row used only to estimate d/dv for critical shear section",
+    for marker in marker_rows:
+        case_name = str(marker.get("Case") or "-")
+        support_side = str(marker.get("Support side") or "-")
+        x_crit = _beam_uls_float(marker.get("x_m"))
+        offset_m = _beam_uls_float(marker.get("Critical offset m"))
+        if not math.isfinite(x_crit):
+            continue
+        demand_row = _beam_uls_interpolated_demand_row_for_case(
+            active_df,
+            case_name=case_name,
+            x_m=x_crit,
+            note=f"Critical shear section at {support_side.lower()} support",
+        )
+        if demand_row is None:
+            demand_row = {
+                "Active": True,
+                "Station x (m)": float(x_crit),
+                "Case Name": case_name,
+                "Mux": 1.0e-3,
+                "Vuy": 0.0,
+                "Tu": 0.0,
+                "Muy": 0.0,
+                "Vux": 0.0,
+                "Nu": 0.0,
+                "Note": f"Critical shear section at {support_side.lower()} support; demand interpolation unavailable",
+            }
+        demand_row["__Critical shear section"] = True
+        demand_row["__Support side"] = support_side
+        demand_row["__Critical offset m"] = offset_m
+        result = _beam_uls_shear_result_for_row(state, demand_row, strength_route=strength_route)
+        if "dv mm" not in result and "dv mm" in columns:
+            result["dv mm"] = float("nan")
+        for column in columns:
+            result.setdefault(
+                column,
+                float("nan")
+                if column.endswith("kN")
+                or column.endswith("mm")
+                or column.endswith("mm2/mm")
+                or column.endswith("mm2/m")
+                or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "Critical offset m", "φ"}
+                else "-",
             )
-            if support_row is None:
-                continue
-            support_row["__Diagram boundary"] = True
-            support_result = _beam_uls_shear_result_for_row(state, support_row, strength_route=strength_route)
-            offset_mm = _beam_uls_float(support_result.get("dv mm" if strength_route.is_bridge else "d mm"))
-            # If the exact endpoint is not covered by a stirrup zone, fall back
-            # to the nearest active station for depth estimation.  This avoids
-            # losing the critical-section marker solely because a user-defined
-            # stirrup zone starts slightly inside the member.
-            if not math.isfinite(offset_mm) or offset_mm <= 0.0:
-                side_df = active_df.copy()
-                side_df["__x_m"] = pd.to_numeric(side_df.get("Station x (m)"), errors="coerce")
-                if "Case Name" in side_df.columns:
-                    side_df = side_df[side_df["Case Name"].astype(str) == str(case_name)].copy()
-                side_df = side_df[side_df["__x_m"].notna()].sort_values("__x_m", kind="stable")
-                if not side_df.empty:
-                    sample_x = float(side_df.iloc[0]["__x_m"] if support_side == "Left" else side_df.iloc[-1]["__x_m"])
-                    sample_row = _beam_uls_interpolated_demand_row_for_case(active_df, case_name=case_name, x_m=sample_x, note="Nearest station used to estimate d/dv for critical shear section")
-                    if sample_row is not None:
-                        sample_result = _beam_uls_shear_result_for_row(state, sample_row, strength_route=strength_route)
-                        offset_mm = _beam_uls_float(sample_result.get("dv mm" if strength_route.is_bridge else "d mm"))
-            if not math.isfinite(offset_mm) or offset_mm <= 0.0:
-                continue
-            offset_m = min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
-            if offset_m <= 1.0e-9:
-                continue
-            x_crit = offset_m if support_side == "Left" else float(span_m) - offset_m
-            x_crit = min(max(float(x_crit), 0.0), float(span_m))
-            key = (case_name, support_side, round(x_crit, 9))
-            if key in seen:
-                continue
-            seen.add(key)
-            demand_row = _beam_uls_interpolated_demand_row_for_case(
-                active_df,
-                case_name=case_name,
-                x_m=x_crit,
-                note=f"Critical shear section at {support_side.lower()} support",
-            )
-            if demand_row is None:
-                continue
-            demand_row["__Critical shear section"] = True
-            demand_row["__Support side"] = support_side
-            demand_row["__Critical offset m"] = offset_m
-            result = _beam_uls_shear_result_for_row(state, demand_row, strength_route=strength_route)
-            if "dv mm" not in result and "dv mm" in columns:
-                result["dv mm"] = float("nan")
-            for column in columns:
-                result.setdefault(
-                    column,
-                    float("nan")
-                    if column.endswith("kN")
-                    or column.endswith("mm")
-                    or column.endswith("mm2/mm")
-                    or column.endswith("mm2/m")
-                    or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "Critical offset m", "φ"}
-                    else "-",
-                )
-            rows.append(result)
+        # Preserve the marker identity even when capacity is not ready because
+        # the exact critical section is outside the active stirrup layout.
+        result["Station type"] = "CRITICAL SHEAR SECTION"
+        result["Support side"] = support_side
+        result["Critical offset m"] = offset_m
+        result["Governing x"] = _format_beam_uls_x(x_crit)
+        if not math.isfinite(_beam_uls_float(result.get("φVn kN"))):
+            existing_notes = str(result.get("Notes") or "").strip()
+            note = "Critical shear section is visible, but capacity is not ready at this exact location. Check that an active stirrup zone covers the critical section."
+            result["Notes"] = f"{existing_notes}; {note}" if existing_notes else note
+        rows.append(result)
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -4608,22 +4687,22 @@ def _make_beam_uls_shear_capacity_figure(
     plot_df["__phi_vn"] = pd.to_numeric(plot_df.get("φVn kN"), errors="coerce")
     plot_df["__phi_vc"] = pd.to_numeric(plot_df.get("φVc kN"), errors="coerce")
     plot_df = plot_df[plot_df["__x_m"].notna() & plot_df["__phi_vn"].notna()].copy()
-    if not plot_df.empty:
+    has_capacity_plot = not plot_df.empty
+    if has_capacity_plot:
         dedupe_columns = [column for column in ["Case", "__x_m", "__phi_vn", "Station type"] if column in plot_df.columns]
         if dedupe_columns:
             plot_df = plot_df.drop_duplicates(subset=dedupe_columns, keep="first")
-    if plot_df.empty:
-        fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand only — φVn not ready</sup>"})
-        return fig
-    plot_df = plot_df.sort_values(["Case", "__x_m"], kind="stable")
-    for case_name, case_df in plot_df.groupby("Case", sort=False):
-        x_values = [float(value) for value in case_df["__x_m"].tolist()]
-        vn_values = [float(value) for value in case_df["__phi_vn"].tolist()]
-        fig.add_trace(go.Scatter(x=x_values, y=vn_values, mode="markers+lines", name="φVn", hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>"))
-        fig.add_trace(go.Scatter(x=x_values, y=[-v for v in vn_values], mode="lines", name="-φVn", hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>"))
-        vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
-        if any(math.isfinite(value) for value in vc_values):
-            fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))
+        has_capacity_plot = not plot_df.empty
+    if has_capacity_plot:
+        plot_df = plot_df.sort_values(["Case", "__x_m"], kind="stable")
+        for case_name, case_df in plot_df.groupby("Case", sort=False):
+            x_values = [float(value) for value in case_df["__x_m"].tolist()]
+            vn_values = [float(value) for value in case_df["__phi_vn"].tolist()]
+            fig.add_trace(go.Scatter(x=x_values, y=vn_values, mode="markers+lines", name="φVn", hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>"))
+            fig.add_trace(go.Scatter(x=x_values, y=[-v for v in vn_values], mode="lines", name="-φVn", hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>"))
+            vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
+            if any(math.isfinite(value) for value in vc_values):
+                fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))
     critical_x_values: list[float] = []
     if critical_section_df is not None and not critical_section_df.empty:
         critical_df = critical_section_df.copy()
@@ -4633,9 +4712,10 @@ def _make_beam_uls_shear_capacity_figure(
     if critical_x_values:
         active_v = pd.to_numeric(active_df.get("Vuy", pd.Series(dtype=float)), errors="coerce") if isinstance(active_df, pd.DataFrame) else pd.Series(dtype=float)
         candidate_values: list[float] = [abs(float(value)) for value in active_v.dropna().tolist() if math.isfinite(float(value))]
-        for column in ["__phi_vn", "__phi_vc"]:
-            if column in plot_df.columns:
-                candidate_values.extend(abs(float(value)) for value in plot_df[column].dropna().tolist() if math.isfinite(float(value)))
+        if has_capacity_plot:
+            for column in ["__phi_vn", "__phi_vc"]:
+                if column in plot_df.columns:
+                    candidate_values.extend(abs(float(value)) for value in plot_df[column].dropna().tolist() if math.isfinite(float(value)))
         y_limit = max(candidate_values) * 1.10 if candidate_values else 1.0
         if not math.isfinite(y_limit) or y_limit <= 0.0:
             y_limit = 1.0
@@ -4670,7 +4750,8 @@ def _make_beam_uls_shear_capacity_figure(
                     hovertemplate="x=%{x:.3f} m<br>Governing φVn=%{y:.3f} kN<extra></extra>",
                 )
             )
-    fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · demand vs φVn</sup>"})
+    subtitle = "demand vs φVn" if has_capacity_plot else "demand only — φVn not ready"
+    fig.update_layout(title={"text": f"Shear Check — Strength ULS<br><sup>{code_label} · {subtitle}</sup>"})
     return fig
 
 

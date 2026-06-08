@@ -5403,12 +5403,47 @@ def _beam_uls_calculate_selected_check(
             "torsion_boundary_capacity_df": torsion_boundary_capacity_df,
         }
     if selected_check == "Shear + Torsion":
+        # Combined V+T is a complete workflow decision, not merely a passive
+        # reader of previously clicked Shear/Torsion tabs.  Build the required
+        # shear/torsion source rows in this calculation pass so users do not
+        # have to click Calculate Shear and Calculate Torsion first.
+        shear_station_check_df = _beam_uls_shear_check_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
+        shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        torsion_check_df = _beam_uls_torsion_check_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
         combined_vt_df = _beam_uls_combined_vt_check_dataframe(
             state,
             active_df,
             strength_route=strength_route,
         )
         return {
+            "shear_check_df": shear_check_df,
+            "shear_critical_section_df": shear_critical_section_df,
+            "shear_boundary_capacity_df": shear_boundary_capacity_df,
+            "torsion_check_df": torsion_check_df,
+            "torsion_boundary_capacity_df": torsion_boundary_capacity_df,
             "combined_vt_df": combined_vt_df,
             "interaction_status": _beam_uls_torsion_interaction_status(active_df),
         }
@@ -5695,6 +5730,29 @@ def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str,
     df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 1))
     idx = df.sort_values(["__status_priority", "__dc", "__tu"], ascending=[False, False, False]).index[0]
     return vt_df.loc[idx].drop(labels=["__dc", "__tu", "__status_priority"], errors="ignore").to_dict()
+
+
+def _beam_uls_combined_vt_source_readiness_notes(vt_df: pd.DataFrame | None) -> list[str]:
+    """Return short user-facing diagnostics for DATA REQUIRED combined V+T rows."""
+
+    if vt_df is None or vt_df.empty:
+        return ["No combined V+T rows were produced. Check active ULS station rows and nonzero Tu demand."]
+    notes: list[str] = []
+    df = vt_df.copy()
+    data_required = df[df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str) == "DATA REQUIRED"].copy()
+    if data_required.empty:
+        return []
+    if (data_required.get("Stress status", pd.Series(index=data_required.index, dtype=object)).astype(str) == "DATA REQUIRED").any():
+        notes.append("Stress interaction source data are incomplete: verify section/material, web depth/width, and shear capacity terms.")
+    if (data_required.get("Transverse status", pd.Series(index=data_required.index, dtype=object)).astype(str) == "DATA REQUIRED").any():
+        notes.append("Transverse source data are incomplete: verify active stirrup/closed-hoop zones cover the governing V+T stations.")
+    if (data_required.get("Longitudinal status", pd.Series(index=data_required.index, dtype=object)).astype(str).isin(["LAYOUT REQUIRED", "NOT CHECKED", "DATA REQUIRED"])).any():
+        notes.append("Longitudinal Al source is incomplete: enable ordinary rebar and confirm active bars intended for torsion perimeter reinforcement.")
+    raw_notes = data_required.get("Notes", pd.Series(dtype=object)).dropna().astype(str).tolist()
+    for note in raw_notes[:3]:
+        if note and note not in notes:
+            notes.append(note)
+    return notes[:5]
 
 
 def _beam_uls_combined_vt_audit_dataframe(vt_df: pd.DataFrame | None) -> pd.DataFrame:
@@ -6399,26 +6457,19 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         f"Run only the {selected_check} ULS check for the current model inputs. "
         "Previously calculated checks remain cached until model inputs change."
     )
-    status_text = _beam_uls_manual_result_badge(selected_entry)
-    if selected_entry is None:
-        st.warning(
-            f"{selected_check} has not been calculated for the current inputs. "
-            "Press Calculate before reviewing capacity, utilization, audit tables, or diagrams."
-        )
-    else:
-        st.caption(f"{selected_check}: {status_text}")
 
     if st.button(calc_label, key=f"beam_girder_uls_calculate_{selected_check.replace(' ', '_').replace('+', 'plus')}", type="primary", use_container_width=True, help=calc_help):
+        calculation_result = _beam_uls_calculate_selected_check(
+            st.session_state,
+            active_df,
+            selected_check=selected_check,
+            strength_route=strength_route,
+        )
         selected_entry = _beam_uls_store_manual_result(
             st.session_state,
             selected_check,
             input_hash=uls_input_hash,
-            result=_beam_uls_calculate_selected_check(
-                st.session_state,
-                active_df,
-                selected_check=selected_check,
-                strength_route=strength_route,
-            ),
+            result=calculation_result,
         )
         if selected_check == "Flexure":
             flexure_entry = selected_entry
@@ -6428,7 +6479,40 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             torsion_entry = selected_entry
         elif selected_check == "Shear + Torsion":
             interaction_entry = selected_entry
+            shear_source = {
+                key: calculation_result[key]
+                for key in ["shear_check_df", "shear_critical_section_df", "shear_boundary_capacity_df"]
+                if key in calculation_result
+            }
+            torsion_source = {
+                key: calculation_result[key]
+                for key in ["torsion_check_df", "torsion_boundary_capacity_df"]
+                if key in calculation_result
+            }
+            if shear_source:
+                shear_entry = _beam_uls_store_manual_result(
+                    st.session_state,
+                    "Shear",
+                    input_hash=uls_input_hash,
+                    result=shear_source,
+                )
+            if torsion_source:
+                torsion_entry = _beam_uls_store_manual_result(
+                    st.session_state,
+                    "Torsion",
+                    input_hash=uls_input_hash,
+                    result=torsion_source,
+                )
         st.success(f"{selected_check} calculated for current inputs.")
+
+    status_text = _beam_uls_manual_result_badge(selected_entry)
+    if selected_entry is None:
+        st.warning(
+            f"{selected_check} has not been calculated for the current inputs. "
+            "Press Calculate before reviewing capacity, utilization, audit tables, or diagrams."
+        )
+    else:
+        st.caption(f"{selected_check}: {status_text}")
 
     flexure_preview_df = _beam_uls_cached_dataframe(flexure_entry, "flexure_preview_df")
     flexure_preview_messages = _beam_uls_cached_messages(flexure_entry, "flexure_preview_messages")
@@ -6456,7 +6540,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     )
 
     st.markdown("#### Compact ULS check table")
-    st.caption("To keep ULS responsive, only checks already calculated for the current inputs show capacity/utilization. Press Calculate in the selected mode to refresh its result.")
+    st.caption("To keep ULS responsive, only checks already calculated for the current inputs show capacity/utilization. Press Calculate in the selected mode to refresh its result. Calculate Shear + Torsion also refreshes the shear/torsion source rows needed for the combined review.")
     st.dataframe(
         _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, state=st.session_state),
         use_container_width=True,
@@ -6672,7 +6756,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             if status == "FAIL":
                 st.error("Combined shear + torsion review check fails at the governing station. Review section size, stirrup layout, and torsion hoop geometry before any final design claim.")
             elif status == "DATA REQUIRED":
-                st.warning("Combined shear + torsion needs additional input or completed shear/torsion source data before review can be completed.")
+                st.warning("Combined shear + torsion calculation ran, but one or more source-data gates are incomplete.")
+                readiness_notes = _beam_uls_combined_vt_source_readiness_notes(combined_vt_df)
+                if readiness_notes:
+                    st.caption("Missing / incomplete source data:")
+                    for item in readiness_notes:
+                        st.write(f"- {item}")
             elif status == "PASS — REVIEW":
                 st.warning("Combined V+T stress, transverse reinforcement, and longitudinal Al review gates pass, but this is still REVIEW until full longitudinal flexure+shear+tension, hoop detailing, and benchmark gates are completed.")
             else:
@@ -6691,7 +6780,8 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             else:
                 st.dataframe(audit_df, use_container_width=True, hide_index=True)
         with st.expander("Combined shear + torsion method notes", expanded=False):
-            st.write("- ULS.VT2 checks combined compression-strut stress, combined transverse reinforcement, and a longitudinal Al review gate from the ordinary rebar source of truth.")
+            st.write("- ULS.VT2.1 checks combined compression-strut stress, combined transverse reinforcement, and a longitudinal Al review gate from the ordinary rebar source of truth.")
+            st.write("- Calculate Shear + Torsion builds the required shear and torsion source rows internally; users do not need to calculate the separate Shear and Torsion tabs first.")
             st.write("- AASHTO/Bridge uses the current first-pass AASHTO-compatible shear/torsion route; ACI/Building uses the current ACI-compatible route.")
             st.write("- Solid sections use root-sum-square stress interaction; hollow sections use linear sum interaction based on the available section void geometry.")
             st.write("- Provided transverse reinforcement is taken from the active transverse/stirrup zone as (Av + 2At)/s; no reinforcement is silently assumed.")

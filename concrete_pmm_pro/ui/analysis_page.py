@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Mapping
@@ -2892,6 +2893,242 @@ def _beam_uls_effective_phi_value(routed_capacity_nmm: float | None, nominal_cap
         return float("nan")
     return routed / nominal
 
+def _beam_uls_hashable_value(value: object) -> object:
+    """Return a stable JSON-ready value for flexure capacity-state hashing.
+
+    This deliberately avoids hashing Streamlit/session noise.  For prestress
+    elements it ignores display labels so identical active strand states at
+    different stations can share the same detailed strain-compatibility solve.
+    """
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        if isinstance(value, float):
+            return round(float(value), 9) if math.isfinite(float(value)) else str(value)
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _beam_uls_hashable_value(value[key]) for key in sorted(value, key=lambda item: str(item))}
+    if isinstance(value, (list, tuple, set)):
+        return [_beam_uls_hashable_value(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _beam_uls_hashable_value(value.model_dump(mode="json"))
+        except Exception:
+            try:
+                return _beam_uls_hashable_value(value.model_dump())
+            except Exception:
+                pass
+    if hasattr(value, "__dict__"):
+        return _beam_uls_hashable_value({key: val for key, val in vars(value).items() if not key.startswith("_")})
+    return repr(value)
+
+
+def _beam_uls_hash_payload(payload: object) -> str:
+    encoded = json.dumps(_beam_uls_hashable_value(payload), sort_keys=True, separators=(",", ":"), default=repr).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _beam_uls_section_geometry_capacity_fingerprint(geometry: SectionGeometry) -> dict[str, object]:
+    """Return a lightweight geometry fingerprint for flexure capacity caching.
+
+    Do not hash arbitrary ``geometry.metadata`` here. Section-builder metadata can
+    carry UI/helper payloads that are irrelevant to section capacity and can be
+    very large.  Capacity is controlled by actual concrete polygon coordinates.
+    """
+
+    def _point_payload(point: object) -> tuple[float, float]:
+        return (
+            round(_beam_uls_float(getattr(point, "x", float("nan"))), 6),
+            round(_beam_uls_float(getattr(point, "y", float("nan"))), 6),
+        )
+
+    return {
+        "name": str(getattr(geometry, "name", "")),
+        "outer_polygon": [_point_payload(point) for point in getattr(geometry, "outer_polygon", [])],
+        "holes": [[_point_payload(point) for point in hole] for hole in getattr(geometry, "holes", [])],
+    }
+
+
+def _beam_uls_concrete_capacity_fingerprint(material: object) -> dict[str, object]:
+    return {
+        "name": str(getattr(material, "name", "")),
+        "fc_MPa": round(_beam_uls_float(getattr(material, "fc_MPa", float("nan"))), 6),
+        "ecu": round(_beam_uls_float(getattr(material, "ecu", float("nan"))), 9),
+        "beta1": round(_beam_uls_float(getattr(material, "beta1", float("nan"))), 9),
+        "Ec_MPa": round(_beam_uls_float(getattr(material, "Ec_MPa", float("nan"))), 6),
+        "Ec_method": str(getattr(material, "Ec_method", "")),
+    }
+
+
+def _beam_uls_rebar_material_capacity_fingerprint(materials: list[object]) -> list[dict[str, object]]:
+    rows = [
+        {
+            "name": str(getattr(material, "name", "")),
+            "fy_MPa": round(_beam_uls_float(getattr(material, "fy_MPa", float("nan"))), 6),
+            "Es_MPa": round(_beam_uls_float(getattr(material, "Es_MPa", float("nan"))), 6),
+        }
+        for material in materials
+    ]
+    return sorted(rows, key=lambda item: item["name"])
+
+
+def _beam_uls_prestress_material_capacity_fingerprint(materials: list[object]) -> list[dict[str, object]]:
+    rows = [
+        {
+            "name": str(getattr(material, "name", "")),
+            "steel_type": str(getattr(material, "steel_type", "")),
+            "fpy_MPa": round(_beam_uls_float(getattr(material, "fpy_MPa", float("nan"))), 6),
+            "fpu_MPa": round(_beam_uls_float(getattr(material, "fpu_MPa", float("nan"))), 6),
+            "Ep_MPa": round(_beam_uls_float(getattr(material, "Ep_MPa", float("nan"))), 6),
+        }
+        for material in materials
+    ]
+    return sorted(rows, key=lambda item: item["name"])
+
+
+def _beam_uls_analysis_settings_capacity_fingerprint(settings: object) -> dict[str, object]:
+    return {
+        "code": str(getattr(settings, "code", "")),
+        "use_phi_factor": bool(getattr(settings, "use_phi_factor", True)),
+        "include_rebars": bool(getattr(settings, "include_rebars", True)),
+        "include_prestress": bool(getattr(settings, "include_prestress", True)),
+        "transverse_reinforcement": str(getattr(settings, "transverse_reinforcement", "")),
+        "prestress_stress_model": str(getattr(settings, "prestress_stress_model", "")),
+        "subtract_rebar_displaced_concrete": bool(getattr(settings, "subtract_rebar_displaced_concrete", True)),
+        "neutral_axis_angle_steps": int(getattr(settings, "neutral_axis_angle_steps", 0) or 0),
+        "neutral_axis_depth_steps": int(getattr(settings, "neutral_axis_depth_steps", 0) or 0),
+        "compression_positive": bool(getattr(settings, "compression_positive", True)),
+    }
+
+
+def _beam_uls_rebar_capacity_fingerprint(rebars: list[object]) -> list[object]:
+    return [
+        _beam_uls_hashable_value(rebar)
+        for rebar in sorted(
+            rebars,
+            key=lambda item: (
+                _beam_uls_float(getattr(item, "x_mm", float("nan"))),
+                _beam_uls_float(getattr(item, "y_mm", float("nan"))),
+                _beam_uls_float(getattr(item, "diameter_mm", float("nan"))),
+                str(getattr(item, "material_name", "")),
+            ),
+        )
+    ]
+
+
+def _beam_uls_prestress_capacity_fingerprint(elements: list[object]) -> list[object]:
+    rows: list[dict[str, object]] = []
+    for element in elements:
+        rows.append(
+            {
+                "x_mm": _beam_uls_float(getattr(element, "x_mm", float("nan"))),
+                "y_mm": _beam_uls_float(getattr(element, "y_mm", float("nan"))),
+                "area_mm2": _beam_uls_float(getattr(element, "area_mm2", float("nan"))),
+                "count": int(getattr(element, "count", 1) or 1),
+                "material_name": str(getattr(element, "material_name", "")),
+                "steel_type": str(getattr(element, "steel_type", "")),
+                "fpy_mpa": _beam_uls_float(getattr(element, "fpy_mpa", float("nan"))),
+                "fpu_mpa": _beam_uls_float(getattr(element, "fpu_mpa", float("nan"))),
+                "ep_mpa": _beam_uls_float(getattr(element, "ep_mpa", float("nan"))),
+                "pe_eff_n": _beam_uls_float(getattr(element, "pe_eff_n", float("nan"))),
+                "initial_stress_mpa": _beam_uls_float(getattr(element, "initial_stress_mpa", float("nan"))),
+                "initial_strain": _beam_uls_float(getattr(element, "initial_strain", float("nan"))),
+                "bonded": bool(getattr(element, "bonded", True)),
+            }
+        )
+    return sorted(rows, key=lambda item: (item["y_mm"], item["x_mm"], item["material_name"], item["count"]))
+
+
+def _beam_uls_load_capacity_direction_key(load_case: LoadCase | None, demand_kNm: float | None, capacity_direction: float | None) -> dict[str, object]:
+    demand = _beam_uls_float(demand_kNm)
+    direction = _beam_uls_float(capacity_direction)
+    if math.isfinite(demand) and abs(demand) > _BEAM_ULS_DEMAND_TOL:
+        sign = -1.0 if demand < 0.0 else 1.0
+    elif math.isfinite(direction) and abs(direction) > 0.0:
+        sign = -1.0 if direction < 0.0 else 1.0
+    else:
+        sign = 1.0
+    pu_n = _beam_uls_float(getattr(load_case, "Pu_N", 0.0)) if load_case is not None else 0.0
+    muy = _beam_uls_float(getattr(load_case, "Muy_Nmm", 0.0)) if load_case is not None else 0.0
+    return {"mux_sign": sign, "Pu_N": round(float(pu_n), 3) if math.isfinite(pu_n) else 0.0, "Muy_Nmm": round(float(muy), 3) if math.isfinite(muy) else 0.0}
+
+
+def _beam_uls_flexure_capacity_state_key(
+    analysis_input: AnalysisInput,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+    demand_kNm: float | None,
+    capacity_direction: float | None = None,
+) -> str:
+    """Return a cache key for a detailed flexure section-capacity state.
+
+    The key intentionally ignores station labels and Mux magnitude.  It keeps
+    geometry, materials, active rebar, active/bonded prestress state, route,
+    axial force, and bending sign.  That lets equal station capacity states reuse
+    the same strain-compatibility solve while debonded/development regions,
+    tension-face changes, or Nu changes remain separate.
+    """
+
+    load_case = analysis_input.load_cases[0] if analysis_input.load_cases else None
+    payload = {
+        "route": {
+            "workflow": strength_route.workflow_label,
+            "code": strength_route.display_code_label,
+            "solver_code": strength_route.solver_code_label,
+            "flexure_engine": strength_route.flexure_engine_label,
+        },
+        "load_direction": _beam_uls_load_capacity_direction_key(load_case, demand_kNm, capacity_direction),
+        "section_geometry": _beam_uls_section_geometry_capacity_fingerprint(analysis_input.section_geometry),
+        "concrete_material": _beam_uls_concrete_capacity_fingerprint(analysis_input.concrete_material),
+        "rebar_materials": _beam_uls_rebar_material_capacity_fingerprint(list(analysis_input.rebar_materials)),
+        "prestress_materials": _beam_uls_prestress_material_capacity_fingerprint(list(analysis_input.prestress_materials)),
+        "rebars": _beam_uls_rebar_capacity_fingerprint(list(analysis_input.rebars)),
+        "prestress_elements": _beam_uls_prestress_capacity_fingerprint(list(analysis_input.prestress_elements)),
+        "settings": _beam_uls_analysis_settings_capacity_fingerprint(analysis_input.settings),
+    }
+    return _beam_uls_hash_payload(payload)
+
+
+def _beam_uls_solve_flexure_capacity_state(
+    analysis_input: AnalysisInput,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    """Run the detailed flexure solver once for one capacity-state key."""
+
+    try:
+        pmm_result = run_rc_pmm_solver(analysis_input)
+        summary = check_uls_demands_against_rc_pmm(pmm_result, analysis_input.load_cases)
+        result = summary.results[0] if summary.results else None
+    except Exception as exc:
+        return {"state": "solver_error", "error": f"Flexure check solver error: {exc}"}
+    if result is None or result.capacity_phiMn_Nmm is None or result.dcr is None:
+        return {"state": "not_checked", "error": "Flexure capacity could not be interpolated from PMM results."}
+
+    flexure_basis = beam_girder_flexure_code_basis(
+        strength_route,
+        has_bonded_prestress=_beam_uls_has_bonded_prestress(analysis_input),
+    )
+    nominal_capacity_nmm, nominal_messages = _beam_uls_nominal_flexure_capacity_for_input(analysis_input)
+    routed_capacity_nmm, routed_basis_note = apply_flexure_code_basis(
+        phi_capacity_nmm=float(result.capacity_phiMn_Nmm),
+        nominal_capacity_nmm=nominal_capacity_nmm,
+        basis=flexure_basis,
+    )
+    nominal_capacity_kNm = float(nominal_capacity_nmm) / 1_000_000.0 if nominal_capacity_nmm is not None and nominal_capacity_nmm > 0.0 else float("nan")
+    route_phi_value = _beam_uls_effective_phi_value(routed_capacity_nmm, nominal_capacity_nmm)
+    return {
+        "state": "ok",
+        "result_warning_count": int(getattr(result, "warning_count", 0) or 0),
+        "flexure_basis": flexure_basis,
+        "nominal_capacity_nmm": nominal_capacity_nmm,
+        "nominal_capacity_kNm": nominal_capacity_kNm,
+        "nominal_messages": list(nominal_messages),
+        "routed_capacity_nmm": routed_capacity_nmm,
+        "routed_basis_note": routed_basis_note,
+        "route_phi_value": route_phi_value,
+    }
+
+
 def _beam_uls_flexure_preview_dataframe(
     state: Mapping[str, object],
     active_df: pd.DataFrame,
@@ -2995,6 +3232,14 @@ def _beam_uls_flexure_preview_dataframe(
         return 1.0
 
     demand_rows = pd.concat([nonzero_rows, endpoint_rows], axis=0).sort_values(["Case Name", "__station_m"], kind="stable")
+    # PERF.FLEX1: keep the detailed strain-compatibility calculation, but solve
+    # each unique capacity state only once.  Different station demand magnitudes
+    # can share φMn when geometry/material/rebar/prestress state, bending sign,
+    # design route, and Nu are identical.  Debonding or tension-face changes
+    # naturally create a different key.
+    capacity_state_cache: dict[str, dict[str, object]] = {}
+    capacity_cache_hits = 0
+    capacity_cache_misses = 0
     for _, demand_row in demand_rows.iterrows():
         demand = _beam_uls_float(demand_row.get("Mux"))
         station = _format_beam_uls_x(demand_row.get("Station x (m)"))
@@ -3063,11 +3308,23 @@ def _beam_uls_flexure_preview_dataframe(
                 }
             )
             continue
-        try:
-            pmm_result = run_rc_pmm_solver(analysis_input)
-            summary = check_uls_demands_against_rc_pmm(pmm_result, analysis_input.load_cases)
-            result = summary.results[0] if summary.results else None
-        except Exception as exc:
+        capacity_state_key = _beam_uls_flexure_capacity_state_key(
+            analysis_input,
+            strength_route=strength_route,
+            demand_kNm=demand,
+            capacity_direction=capacity_direction,
+        )
+        capacity_state = capacity_state_cache.get(capacity_state_key)
+        cache_hit = capacity_state is not None
+        if cache_hit:
+            capacity_cache_hits += 1
+        else:
+            capacity_state = _beam_uls_solve_flexure_capacity_state(analysis_input, strength_route=strength_route)
+            capacity_state_cache[capacity_state_key] = capacity_state
+            capacity_cache_misses += 1
+
+        state_status = str(capacity_state.get("state") or "")
+        if state_status == "solver_error":
             rows.append(
                 {
                     "Check": "Flexure",
@@ -3084,11 +3341,11 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity basis": "-",
                     "Route φ": "-",
                     "Method": "solver error",
-                    "Notes": f"Flexure check solver error: {exc}",
+                    "Notes": str(capacity_state.get("error") or "Flexure check solver error."),
                 }
             )
             continue
-        if result is None or result.capacity_phiMn_Nmm is None or result.dcr is None:
+        if state_status != "ok":
             rows.append(
                 {
                     "Check": "Flexure",
@@ -3105,29 +3362,41 @@ def _beam_uls_flexure_preview_dataframe(
                     "Capacity basis": "-",
                     "Route φ": "-",
                     "Method": "not checked",
-                    "Notes": "Flexure capacity could not be interpolated from PMM results.",
+                    "Notes": str(capacity_state.get("error") or "Flexure capacity could not be interpolated from PMM results."),
                 }
             )
             continue
-        flexure_basis = beam_girder_flexure_code_basis(
-            strength_route,
-            has_bonded_prestress=_beam_uls_has_bonded_prestress(analysis_input),
-        )
-        nominal_capacity_nmm: float | None = None
-        nominal_messages: list[str] = []
-        # VERIFY1 exposes Mn nominal and effective φ for benchmark-ready audit.
-        # The nominal solve is attempted for all routed flexure rows; code-specific
-        # layers still decide whether nominal Mn is required to compute φMn.
-        nominal_capacity_nmm, nominal_messages = _beam_uls_nominal_flexure_capacity_for_input(analysis_input)
-        messages.extend(nominal_messages)
-        routed_capacity_nmm, routed_basis_note = apply_flexure_code_basis(
-            phi_capacity_nmm=float(result.capacity_phiMn_Nmm),
-            nominal_capacity_nmm=nominal_capacity_nmm,
-            basis=flexure_basis,
-        )
-        nominal_capacity_kNm = float(nominal_capacity_nmm) / 1_000_000.0 if nominal_capacity_nmm is not None and nominal_capacity_nmm > 0.0 else float("nan")
-        route_phi_value = _beam_uls_effective_phi_value(routed_capacity_nmm, nominal_capacity_nmm)
-        if routed_capacity_nmm is None or routed_capacity_nmm <= 0.0:
+
+        flexure_basis = capacity_state["flexure_basis"]
+        if not isinstance(flexure_basis, BeamGirderFlexureCodeBasis):
+            rows.append(
+                {
+                    "Check": "Flexure",
+                    "Status": "REVIEW",
+                    "Governing x": station,
+                    "Case": case,
+                    "Demand": _format_beam_uls_demand(demand, "kN-m"),
+                    "Capacity": "-",
+                    "Utilization": "-",
+                    "Demand kN-m": demand if math.isfinite(demand) else float("nan"),
+                    "Capacity kN-m": float("nan"),
+                    "Utilization value": float("nan"),
+                    "Capacity plot sign": capacity_direction if zero_demand_endpoint else ( -1.0 if math.isfinite(demand) and demand < 0.0 else 1.0 ),
+                    "Capacity basis": "-",
+                    "Route φ": "-",
+                    "Method": "cache error",
+                    "Notes": "Flexure capacity-state cache returned an invalid code-basis object.",
+                }
+            )
+            continue
+        nominal_messages = [str(item) for item in capacity_state.get("nominal_messages", []) or []]
+        if not cache_hit:
+            messages.extend(nominal_messages)
+        routed_capacity_nmm = capacity_state.get("routed_capacity_nmm")
+        routed_basis_note = str(capacity_state.get("routed_basis_note") or "")
+        nominal_capacity_kNm = _beam_uls_float(capacity_state.get("nominal_capacity_kNm"))
+        route_phi_value = _beam_uls_float(capacity_state.get("route_phi_value"))
+        if routed_capacity_nmm is None or _beam_uls_float(routed_capacity_nmm) <= 0.0:
             rows.append(
                 {
                     "Check": "Flexure",
@@ -3183,8 +3452,11 @@ def _beam_uls_flexure_preview_dataframe(
             display_demand = _format_beam_uls_demand(demand, "kN-m")
             display_utilization = _format_beam_uls_ratio(utilization)
             utilization_value = utilization
-            if result.warning_count:
-                note_parts.append(f"{result.warning_count} interpolation warning(s)")
+            result_warning_count = int(capacity_state.get("result_warning_count", 0) or 0)
+            if result_warning_count:
+                note_parts.append(f"{result_warning_count} interpolation warning(s)")
+            if cache_hit:
+                note_parts.append("Capacity-state cache reused from matching section/prestress state")
         rows.append(
             {
                 "Check": "Flexure",
@@ -3216,6 +3488,11 @@ def _beam_uls_flexure_preview_dataframe(
                 "Benchmark readiness": flexure_basis.benchmark_readiness_note if not zero_demand_endpoint else "Boundary point; not used for D/C",
                 "Notes": "; ".join(note_parts),
             }
+        )
+    if capacity_cache_hits:
+        messages.append(
+            f"Flexure capacity-state cache reused {capacity_cache_hits} station row(s); "
+            f"{capacity_cache_misses} unique detailed capacity state(s) solved."
         )
     return pd.DataFrame(rows, columns=columns), deduplicate_warnings(messages)
 

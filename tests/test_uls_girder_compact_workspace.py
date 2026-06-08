@@ -5,6 +5,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _active_beam_uls_demand_dataframe_from_session,
     _beam_uls_check_table,
     _beam_uls_flexure_audit_dataframe,
+    _beam_uls_flexure_analysis_input_for_station,
+    _beam_uls_flexure_capacity_state_key,
     _beam_uls_shear_audit_dataframe,
     _beam_uls_shear_check_dataframe,
     _beam_uls_shear_critical_section_dataframe,
@@ -174,6 +176,75 @@ def test_uls_flex1_preview_engine_returns_phi_mn_for_simple_rc_section() -> None
     assert row["Capacity kN-m"] > 0.0
     assert row["Utilization value"] > 0.0
     assert "Primary Mux flexure only" in row["Notes"]
+
+
+def test_perf_flex1_capacity_state_key_reuses_same_section_state_for_different_mu_magnitudes() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+    }
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+    row_a = {"Station x (m)": 3.0, "Case Name": "A", "Mux": 100.0, "Nu": 0.0}
+    row_b = {"Station x (m)": 5.0, "Case Name": "B", "Mux": 250.0, "Nu": 0.0}
+    row_c = {"Station x (m)": 5.0, "Case Name": "B", "Mux": -250.0, "Nu": 0.0}
+
+    input_a, messages_a = _beam_uls_flexure_analysis_input_for_station(state, row=row_a, strength_route=route)
+    input_b, messages_b = _beam_uls_flexure_analysis_input_for_station(state, row=row_b, strength_route=route)
+    input_c, messages_c = _beam_uls_flexure_analysis_input_for_station(state, row=row_c, strength_route=route)
+
+    assert input_a is not None and input_b is not None and input_c is not None
+    assert messages_a == [] and messages_b == [] and messages_c == []
+    key_a = _beam_uls_flexure_capacity_state_key(input_a, strength_route=route, demand_kNm=row_a["Mux"])
+    key_b = _beam_uls_flexure_capacity_state_key(input_b, strength_route=route, demand_kNm=row_b["Mux"])
+    key_c = _beam_uls_flexure_capacity_state_key(input_c, strength_route=route, demand_kNm=row_c["Mux"])
+
+    assert key_a == key_b
+    assert key_a != key_c
+
+
+def test_perf_flex1_1_capacity_state_key_ignores_heavy_section_metadata() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    base_points = [
+        Point2D(x=0.0, y=0.0),
+        Point2D(x=300.0, y=0.0),
+        Point2D(x=300.0, y=600.0),
+        Point2D(x=0.0, y=600.0),
+    ]
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+    common = {
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40")],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+    }
+    state_a = {"section_geometry": SectionGeometry(name="A", outer_polygon=base_points, metadata={"ui_blob": [1] * 1000}), **common}
+    state_b = {"section_geometry": SectionGeometry(name="A", outer_polygon=base_points, metadata={"ui_blob": [2] * 1000}), **common}
+    row = {"Station x (m)": 3.0, "Case Name": "A", "Mux": 100.0, "Nu": 0.0}
+
+    input_a, _ = _beam_uls_flexure_analysis_input_for_station(state_a, row=row, strength_route=route)
+    input_b, _ = _beam_uls_flexure_analysis_input_for_station(state_b, row=row, strength_route=route)
+
+    assert input_a is not None and input_b is not None
+    assert _beam_uls_flexure_capacity_state_key(input_a, strength_route=route, demand_kNm=100.0) == _beam_uls_flexure_capacity_state_key(input_b, strength_route=route, demand_kNm=100.0)
 
 
 def test_uls_flex1_1_summary_status_includes_flexure_preview_result() -> None:

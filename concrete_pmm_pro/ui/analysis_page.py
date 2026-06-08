@@ -5520,6 +5520,31 @@ def _beam_uls_combined_vt_result_for_row(
     critical_offset_m = _beam_uls_float(row.get("__Critical offset m"))
     vu_kN = _beam_uls_float(row.get("Vuy"))
     tu_kNm = _beam_uls_float(row.get("Tu"))
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    is_member_end = (
+        station_type == "LOAD STATION"
+        and math.isfinite(x_m)
+        and math.isfinite(span_m)
+        and span_m > 0.0
+        and (abs(float(x_m)) <= 1.0e-8 or abs(float(x_m) - float(span_m)) <= 1.0e-8)
+    )
+    if is_member_end:
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "BOUNDARY SKIPPED",
+            "Station type": "DIAGRAM BOUNDARY",
+            "Support side": "LEFT" if abs(float(x_m)) <= 1.0e-8 else "RIGHT",
+            "Critical offset m": float("nan"),
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": tu_kNm if math.isfinite(tu_kNm) else float("nan"),
+            "Stress status": "BOUNDARY",
+            "Transverse status": "BOUNDARY",
+            "Longitudinal status": "BOUNDARY",
+            "Overall D/C value": float("nan"),
+            "Notes": "Member-end station is treated as a diagram boundary for combined V+T; use critical shear sections and interior load stations for the combined design check.",
+        }
     if not math.isfinite(tu_kNm) or abs(tu_kNm) <= _BEAM_ULS_DEMAND_TOL:
         return {
             "Check": "Shear + Torsion",
@@ -5537,9 +5562,25 @@ def _beam_uls_combined_vt_result_for_row(
             "Notes": "No active Tu at this station; combined V+T interaction is not applicable.",
         }
 
-    shear = _beam_uls_shear_result_for_row(state, row, strength_route=strength_route)
-    torsion = _beam_uls_torsion_result_for_row(state, row, strength_route=strength_route)
+    source_row = dict(row)
+    mux_source = _beam_uls_float(source_row.get("Mux"))
+    if not math.isfinite(mux_source) or abs(mux_source) <= _BEAM_ULS_DEMAND_TOL:
+        # Some source helpers use Mux only to establish tension face / section
+        # analysis context.  A tiny seed avoids hiding valid torsion-only or
+        # zero-shear combined checks; the original demand values below remain
+        # the governing combined V+T demand.
+        source_row["Mux"] = 1.0e-3
+    if math.isfinite(vu_kN) and abs(float(vu_kN)) <= _BEAM_ULS_DEMAND_TOL:
+        # Vu = 0 is a valid combined V+T state.  The shear helper normally
+        # exits early for no-demand rows, so use a tiny seed only to retrieve
+        # section/depth/Vc/Av source terms.  The combined shear stress and
+        # required shear reinforcement are still computed with Vu = 0.
+        source_row["Vuy"] = 1.0e-3
+    shear = _beam_uls_shear_result_for_row(state, source_row, strength_route=strength_route)
+    torsion = _beam_uls_torsion_result_for_row(state, source_row, strength_route=strength_route)
     notes: list[str] = []
+    if math.isfinite(vu_kN) and abs(float(vu_kN)) <= _BEAM_ULS_DEMAND_TOL:
+        notes.append("Vu = 0 is treated as a valid combined V+T demand state; shear stress and shear-required reinforcement terms are zero.")
     fc = float("nan")
     analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(state, row=row, strength_route=strength_route)
     if input_messages:
@@ -5721,13 +5762,13 @@ def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str,
     if vt_df is None or vt_df.empty:
         return None
     df = vt_df.copy()
-    df = df[df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str) != "NOT APPLICABLE"].copy()
+    df = df[~df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED"])].copy()
     if df.empty:
         return None
     df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
     tu_source = df["Tu kN-m"] if "Tu kN-m" in df.columns else pd.Series([float("nan")] * len(df), index=df.index)
     df["__tu"] = pd.to_numeric(tu_source, errors="coerce").abs()
-    status_priority = {"FAIL": 4, "DATA REQUIRED": 3, "PASS — REVIEW": 2, "NOT APPLICABLE": 0}
+    status_priority = {"FAIL": 4, "DATA REQUIRED": 3, "PASS — REVIEW": 2, "BOUNDARY SKIPPED": 0, "NOT APPLICABLE": 0}
     df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 1))
     idx = df.sort_values(["__status_priority", "__dc", "__tu"], ascending=[False, False, False]).index[0]
     return vt_df.loc[idx].drop(labels=["__dc", "__tu", "__status_priority"], errors="ignore").to_dict()
@@ -5837,7 +5878,7 @@ def _make_beam_uls_combined_vt_utilization_figure(vt_df: pd.DataFrame | None, *,
     plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
     plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
     plot_df = plot_df[plot_df["__x_m"].notna()].copy()
-    plot_df = plot_df[plot_df.get("Status", pd.Series(index=plot_df.index, dtype=object)).astype(str) != "NOT APPLICABLE"].copy()
+    plot_df = plot_df[~plot_df.get("Status", pd.Series(index=plot_df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED"])].copy()
     traces = [
         ("Stress interaction D/C", "Stress D/C value"),
         ("Transverse reinforcement D/C", "Transverse D/C value"),

@@ -1590,6 +1590,56 @@ def test_uls_vt2_1_calculate_shear_torsion_builds_internal_source_rows() -> None
     assert _beam_uls_combined_vt_source_readiness_notes(result["combined_vt_df"]) == []
 
 
+def test_uls_vt2_3_combined_vt_treats_zero_shear_as_valid_and_skips_member_ends() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=400.0, y=0.0),
+            Point2D(x=400.0, y=900.0),
+            Point2D(x=0.0, y=900.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
+        "rebars": [
+            Rebar(x_mm=80.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=320.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=80.0, y_mm=820.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=320.0, y_mm=820.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Full", "x_start_m": 0.0, "x_end_m": 20.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 150.0, "fy_MPa": 400.0, "Note": "provided"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "Strength I", "Mux": 1.0, "Vuy": 250.0, "Tu": 20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "member end"},
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 0.0, "Tu": 20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "zero shear"},
+            {"Active": True, "Station x (m)": 20.0, "Case Name": "Strength I", "Mux": 1.0, "Vuy": -250.0, "Tu": -20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "member end"},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    vt = _beam_uls_combined_vt_check_dataframe(state, active, strength_route=route)
+    mid = vt[vt["Governing x"] == "10.000 m"].iloc[0]
+    ends = vt[vt["Governing x"].isin(["0.000 m", "20.000 m"])]
+    readiness = _beam_uls_combined_vt_source_readiness_dataframe(vt)
+
+    assert set(ends["Status"]) == {"BOUNDARY SKIPPED"}
+    assert mid["Status"] in {"PASS — REVIEW", "FAIL"}
+    assert mid["Shear stress MPa"] == 0.0
+    assert mid["Av shear req mm2/mm"] == 0.0
+    assert "10.000 m" not in set(readiness["Station x"])
+    assert "0.000 m" not in set(readiness["Station x"])
+    assert "20.000 m" not in set(readiness["Station x"])
+
+
 def test_uls_vt2_2_combined_vt_utilization_figure_plots_dc_and_limit() -> None:
     vt = pd.DataFrame(
         [

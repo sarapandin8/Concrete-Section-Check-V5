@@ -1117,22 +1117,27 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
         st.write("- Auto required/minimum stirrup design should be a design assistant only; the final check must use the provided active layout.")
         st.write("- No shear strength formula is calculated in SHEAR.REINF1.")
 
-def render_rebar_page() -> None:
-    st.markdown(_REBAR_PAGE_CSS, unsafe_allow_html=True)
-    st.subheader("Rebar")
-    rebar_db = load_rebar_database()
-    bar_size_options = ["", "Custom"] + [str(name) for name in rebar_db["name"].tolist()]
-    active_material_name = st.session_state.get("active_rebar_material_name")
+def _render_longitudinal_rebar_tab(
+    rebar_db: pd.DataFrame,
+    bar_size_options: list[str],
+    active_material_name: str | None,
+) -> None:
+    """Render ordinary longitudinal reinforcement inputs and preview.
+
+    This tab owns the existing ordinary Rebar table.  Beam/Girder torsion Al
+    review intentionally reads this same table so users do not maintain a
+    duplicate longitudinal-torsion table that can drift away from the actual
+    section reinforcement.
+    """
 
     st.caption(
-        "Define ordinary reinforcement coordinates, bar sizes, and materials used by the active section analysis. "
-        "For Beam/Girder torsion, Analysis uses this same active Rebar table as the review-only longitudinal Al source; do not duplicate Al in a separate table."
+        "Ordinary longitudinal reinforcement used by PMM / SLS / flexure checks. "
+        "For Beam/Girder torsion, active ordinary bars are also the review-only Al source; do not duplicate Al in a separate table."
     )
-
     if not ordinary_rebar_enabled(st.session_state, default=True):
         st.info(
             "Ordinary rebar is disabled for the current section in Section Builder. "
-            "Stored Rebar table data is preserved, but ordinary rebar is ignored by analysis until you enable it again."
+            "Stored Rebar table data is preserved, but ordinary rebar and torsion Al are ignored by analysis until you enable it again."
         )
         with st.expander("Stored Rebar table preview", expanded=False):
             table = st.session_state.get("rebar_table")
@@ -1141,8 +1146,6 @@ def render_rebar_page() -> None:
             else:
                 st.dataframe(_ensure_rebar_table_columns(pd.DataFrame(table)), use_container_width=True, hide_index=True)
         st.session_state["rebars_valid_for_analysis"] = True
-        st.divider()
-        _render_shear_reinforcement_layout(rebar_db)
         return
 
     if "rebar_table" not in st.session_state:
@@ -1158,10 +1161,11 @@ def render_rebar_page() -> None:
     summary_slot = None
     with input_col:
         with st.container(border=True):
-            st.markdown("#### Rebar Input")
-            # Keep the summary visually above the editor.  The placeholder is filled
-            # after data_editor returns so the metrics still use the normalized table
-            # from the current rerun instead of stale pre-edit values.
+            st.markdown("#### Longitudinal Rebar Input")
+            # Keep the summary visually above the editor. The placeholder is
+            # filled after data_editor returns so the metrics still use the
+            # normalized table from the current rerun instead of stale pre-edit
+            # values.
             summary_slot = st.empty()
             input_mode = st.selectbox("Rebar input mode", ["Manual table", "Auto perimeter layout"])
             st.markdown(
@@ -1171,9 +1175,10 @@ def render_rebar_page() -> None:
             if input_mode == "Auto perimeter layout":
                 _render_auto_perimeter_controls(rebar_db, st.session_state.get("section_geometry"))
 
-            # The editable table is always shown.  Auto perimeter layout is a
-            # preview/apply workflow, so the main table remains the single source
-            # of truth for PMM/SLS analysis after the generated bars are applied.
+            # The editable table is always shown. Auto perimeter layout is a
+            # preview/apply workflow, so the main table remains the single
+            # source of truth for PMM/SLS/torsion-Al review after generated bars
+            # are applied.
             editor_key = f"rebar_data_editor_{st.session_state['rebar_editor_revision']}"
             edited_df = _render_rebar_editor(st.session_state["rebar_table"], bar_size_options, editor_key)
 
@@ -1182,11 +1187,11 @@ def render_rebar_page() -> None:
 
     if not rebar_editor_tables_equal(normalized_df, edited_df):
         # A database Bar Size edit changed dependent cells such as Diameter_mm
-        # or Material.  Updating only the backing dataframe after the widget has
-        # rendered leaves the visible data_editor one rerun behind.  Bump the
-        # editor key and rerun once so the user sees DB25→25/SD40 or DB32→32/SD50
-        # immediately, while manual overrides remain stable when Bar Size is
-        # unchanged.
+        # or Material. Updating only the backing dataframe after the widget has
+        # rendered leaves the visible data_editor one rerun behind. Bump the
+        # editor key and rerun once so the user sees DB25→25/SD40 or
+        # DB32→32/SD50 immediately, while manual overrides remain stable when
+        # Bar Size is unchanged.
         st.session_state["rebar_table"] = normalized_df
         st.session_state["rebar_editor_revision"] += 1
         st.rerun()
@@ -1219,7 +1224,7 @@ def render_rebar_page() -> None:
             )
 
         if geometry is not None:
-            st.subheader("Section Preview with Rebar")
+            st.subheader("Section Preview with Rebar — Longitudinal")
             st.caption("Default preview shows ordinary rebar only. Bars are drawn at true diameter scale; prestressing steel is intentionally hidden on the Rebar page.")
             preview_fig = create_section_preview(
                 geometry,
@@ -1256,9 +1261,39 @@ def render_rebar_page() -> None:
                             key="rebar_combined_reinforcement_preview",
                         )
 
-    st.subheader("Rebar Summary")
+    st.subheader("Longitudinal Rebar Summary")
     st.dataframe(rebar_summary_dataframe(st.session_state["rebars"]), use_container_width=True, hide_index=True)
 
-    st.divider()
+    with st.expander("Longitudinal rebar / torsion Al workflow notes", expanded=False):
+        st.write("- This ordinary Rebar table remains the single source of truth for longitudinal bars in PMM/SLS/flexure analysis.")
+        st.write("- Beam/Girder torsion reads active ordinary bars from this same table as the review-only Al provided source.")
+        st.write("- Do not count flexural bars as torsion perimeter Al unless they are intentionally detailed around the closed-hoop perimeter.")
+
+
+def _render_transverse_rebar_tab(rebar_db: pd.DataFrame) -> None:
+    """Render Beam/Girder transverse reinforcement and effective d/dv inputs."""
+
+    st.caption(
+        "Transverse reinforcement and effective shear-depth inputs used by Analysis → ULS Shear and Torsion. "
+        "Active stirrup zones are the provided layout for φVn and the first-pass closed-hoop source for φTn review."
+    )
     _render_shear_reinforcement_layout(rebar_db)
 
+
+def render_rebar_page() -> None:
+    st.markdown(_REBAR_PAGE_CSS, unsafe_allow_html=True)
+    st.subheader("Rebar")
+    rebar_db = load_rebar_database()
+    bar_size_options = ["", "Custom"] + [str(name) for name in rebar_db["name"].tolist()]
+    active_material_name = st.session_state.get("active_rebar_material_name")
+
+    st.caption(
+        "Define reinforcement used by the active section analysis. "
+        "Longitudinal bars and transverse stirrup zones are separated so Beam/Girder ULS checks stay readable and inputs are not duplicated."
+    )
+
+    longitudinal_tab, transverse_tab = st.tabs(["Longitudinal Rebar", "Transverse Rebar"])
+    with longitudinal_tab:
+        _render_longitudinal_rebar_tab(rebar_db, bar_size_options, active_material_name)
+    with transverse_tab:
+        _render_transverse_rebar_tab(rebar_db)

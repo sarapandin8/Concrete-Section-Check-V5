@@ -205,3 +205,13 @@ def test_rebar_true_scale_preview_keeps_hover_marker_small() -> None:
 
     assert traces["Rebar"].marker.size == 4
     assert "display=true-scale diameter" in traces["Rebar"].text[0]
+
+
+def test_rebar_page_groups_longitudinal_and_transverse_inputs_in_subtabs() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "rebar_page.py").read_text(encoding="utf-8")
+
+    assert 'st.tabs(["Longitudinal Rebar", "Transverse Rebar"])' in source
+    assert "_render_longitudinal_rebar_tab" in source
+    assert "_render_transverse_rebar_tab" in source
+    assert "Beam/Girder torsion reads active ordinary bars" in source
+    assert "Active stirrup zones are the provided layout" in source

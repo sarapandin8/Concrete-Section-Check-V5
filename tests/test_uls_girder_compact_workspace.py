@@ -958,6 +958,19 @@ def test_uls_ui2_shear_torsion_interaction_status_does_not_fake_pass() -> None:
     assert "Do not certify" in with_torsion_status["detail"]
 
 
+def test_perf_uls2_requires_manual_calculate_before_selected_check_runs() -> None:
+    from pathlib import Path
+
+    source = Path("concrete_pmm_pro/ui/analysis_page.py").read_text()
+
+    assert 'calc_label = f"Calculate {selected_check}"' in source
+    assert 'st.button(calc_label' in source
+    assert 'type="primary"' in source
+    assert 'has not been calculated for the current inputs' in source
+    assert '_beam_uls_calculate_selected_check(' in source
+    assert 'Capacity diagrams, utilization, and audit output are intentionally withheld' in source
+
+
 def test_uls_ui2_source_places_check_tabs_under_compact_table_without_general_diagram_expander() -> None:
     from pathlib import Path
 

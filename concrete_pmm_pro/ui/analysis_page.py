@@ -83,7 +83,7 @@ from concrete_pmm_pro.core.analysis_modes import (
     is_pmm_primary_workflow,
 )
 from concrete_pmm_pro.core.units import N_to_kN, Nmm_to_kNm
-from concrete_pmm_pro.state.dirty_state import mark_analysis_current
+from concrete_pmm_pro.state.dirty_state import mark_analysis_current, project_input_hash
 from concrete_pmm_pro.geometry.summary import summarize_geometry, to_shapely_polygon
 from concrete_pmm_pro.reporting import (
     build_result_traceability_snapshot,
@@ -5030,6 +5030,116 @@ def _beam_uls_flexure_audit_dataframe(flexure_preview_df: pd.DataFrame | None) -
 
 
 BEAM_ULS_CHECK_TAB_LABELS = ["Flexure", "Shear", "Torsion", "Shear + Torsion"]
+_BEAM_ULS_MANUAL_CALC_CACHE_KEY = "_beam_girder_uls_manual_calculation_cache"
+
+
+def _beam_uls_manual_cache(state: Mapping[str, object]) -> dict[str, dict[str, object]]:
+    cache = state.get(_BEAM_ULS_MANUAL_CALC_CACHE_KEY) if isinstance(state, Mapping) else None
+    return cache if isinstance(cache, dict) else {}
+
+
+def _beam_uls_current_cached_result(state: Mapping[str, object], check_name: str, input_hash: str) -> dict[str, object] | None:
+    entry = _beam_uls_manual_cache(state).get(check_name)
+    if not isinstance(entry, dict):
+        return None
+    if str(entry.get("input_hash") or "") != str(input_hash):
+        return None
+    return entry
+
+
+def _beam_uls_store_manual_result(
+    state: Any,
+    check_name: str,
+    *,
+    input_hash: str,
+    result: dict[str, object],
+) -> dict[str, object]:
+    cache = dict(_beam_uls_manual_cache(state))
+    entry = dict(result)
+    entry["input_hash"] = str(input_hash)
+    entry["check"] = str(check_name)
+    entry["calculated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cache[str(check_name)] = entry
+    state[_BEAM_ULS_MANUAL_CALC_CACHE_KEY] = cache
+    return entry
+
+
+def _beam_uls_manual_result_badge(entry: dict[str, object] | None) -> str:
+    if not entry:
+        return "Not calculated for current inputs"
+    stamp = str(entry.get("calculated_at") or "")
+    return f"Calculated for current inputs" + (f" · {stamp}" if stamp else "")
+
+
+def _beam_uls_calculate_selected_check(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    selected_check: str,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    if selected_check == "Flexure":
+        flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        return {
+            "flexure_preview_df": flexure_preview_df,
+            "flexure_preview_messages": list(flexure_preview_messages),
+        }
+    if selected_check == "Shear":
+        shear_station_check_df = _beam_uls_shear_check_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
+        shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        return {
+            "shear_check_df": shear_check_df,
+            "shear_critical_section_df": shear_critical_section_df,
+            "shear_boundary_capacity_df": shear_boundary_capacity_df,
+        }
+    if selected_check == "Torsion":
+        torsion_check_df = _beam_uls_torsion_check_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        return {
+            "torsion_check_df": torsion_check_df,
+            "torsion_boundary_capacity_df": torsion_boundary_capacity_df,
+        }
+    if selected_check == "Shear + Torsion":
+        return {"interaction_status": _beam_uls_torsion_interaction_status(active_df)}
+    return {}
+
+
+def _beam_uls_cached_dataframe(entry: dict[str, object] | None, key: str) -> pd.DataFrame | None:
+    value = entry.get(key) if isinstance(entry, dict) else None
+    return value if isinstance(value, pd.DataFrame) else None
+
+
+def _beam_uls_cached_messages(entry: dict[str, object] | None, key: str) -> list[str]:
+    value = entry.get(key) if isinstance(entry, dict) else None
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
 
 
 def _beam_uls_torsion_interaction_status(active_df: pd.DataFrame) -> dict[str, str]:
@@ -5665,52 +5775,64 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         BEAM_ULS_CHECK_TAB_LABELS,
         horizontal=True,
         key="beam_girder_uls_lazy_check",
-        help="Only the selected ULS check is calculated on this rerun. This keeps Flexure/Shear/Torsion from all running at once.",
+        help="The selected ULS check is not calculated until you press Calculate. This prevents Flexure/Shear/Torsion from running on every rerun.",
     )
     selected_check = str(selected_check_raw) if selected_check_raw in BEAM_ULS_CHECK_TAB_LABELS else BEAM_ULS_CHECK_TAB_LABELS[0]
+    uls_input_hash = project_input_hash(st.session_state)
 
-    flexure_preview_df: pd.DataFrame | None = None
-    flexure_preview_messages: list[str] = []
-    shear_check_df: pd.DataFrame | None = None
-    shear_critical_section_df = pd.DataFrame()
-    shear_boundary_capacity_df = pd.DataFrame()
-    torsion_check_df: pd.DataFrame | None = None
-    torsion_boundary_capacity_df = pd.DataFrame()
+    flexure_entry = _beam_uls_current_cached_result(st.session_state, "Flexure", uls_input_hash)
+    shear_entry = _beam_uls_current_cached_result(st.session_state, "Shear", uls_input_hash)
+    torsion_entry = _beam_uls_current_cached_result(st.session_state, "Torsion", uls_input_hash)
+    interaction_entry = _beam_uls_current_cached_result(st.session_state, "Shear + Torsion", uls_input_hash)
 
-    if selected_check == "Flexure":
-        flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
-            st.session_state,
-            active_df,
-            strength_route=strength_route,
+    selected_entry = _beam_uls_current_cached_result(st.session_state, selected_check, uls_input_hash)
+    calc_label = f"Calculate {selected_check}"
+    calc_help = (
+        f"Run only the {selected_check} ULS check for the current model inputs. "
+        "Previously calculated checks remain cached until model inputs change."
+    )
+    status_text = _beam_uls_manual_result_badge(selected_entry)
+    if selected_entry is None:
+        st.warning(
+            f"{selected_check} has not been calculated for the current inputs. "
+            "Press Calculate before reviewing capacity, utilization, audit tables, or diagrams."
         )
-    elif selected_check == "Shear":
-        shear_station_check_df = _beam_uls_shear_check_dataframe(
+    else:
+        st.caption(f"{selected_check}: {status_text}")
+
+    if st.button(calc_label, key=f"beam_girder_uls_calculate_{selected_check.replace(' ', '_').replace('+', 'plus')}", type="primary", use_container_width=True, help=calc_help):
+        selected_entry = _beam_uls_store_manual_result(
             st.session_state,
-            active_df,
-            strength_route=strength_route,
+            selected_check,
+            input_hash=uls_input_hash,
+            result=_beam_uls_calculate_selected_check(
+                st.session_state,
+                active_df,
+                selected_check=selected_check,
+                strength_route=strength_route,
+            ),
         )
-        shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
-            st.session_state,
-            active_df,
-            strength_route=strength_route,
-        )
-        shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
-        shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
-            st.session_state,
-            active_df,
-            strength_route=strength_route,
-        )
-    elif selected_check == "Torsion":
-        torsion_check_df = _beam_uls_torsion_check_dataframe(
-            st.session_state,
-            active_df,
-            strength_route=strength_route,
-        )
-        torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
-            st.session_state,
-            active_df,
-            strength_route=strength_route,
-        )
+        if selected_check == "Flexure":
+            flexure_entry = selected_entry
+        elif selected_check == "Shear":
+            shear_entry = selected_entry
+        elif selected_check == "Torsion":
+            torsion_entry = selected_entry
+        elif selected_check == "Shear + Torsion":
+            interaction_entry = selected_entry
+        st.success(f"{selected_check} calculated for current inputs.")
+
+    flexure_preview_df = _beam_uls_cached_dataframe(flexure_entry, "flexure_preview_df")
+    flexure_preview_messages = _beam_uls_cached_messages(flexure_entry, "flexure_preview_messages")
+    shear_check_df = _beam_uls_cached_dataframe(shear_entry, "shear_check_df")
+    shear_critical_section_df_cached = _beam_uls_cached_dataframe(shear_entry, "shear_critical_section_df")
+    shear_boundary_capacity_df_cached = _beam_uls_cached_dataframe(shear_entry, "shear_boundary_capacity_df")
+    shear_critical_section_df = shear_critical_section_df_cached if shear_critical_section_df_cached is not None else pd.DataFrame()
+    shear_boundary_capacity_df = shear_boundary_capacity_df_cached if shear_boundary_capacity_df_cached is not None else pd.DataFrame()
+    torsion_check_df = _beam_uls_cached_dataframe(torsion_entry, "torsion_check_df")
+    torsion_boundary_capacity_df_cached = _beam_uls_cached_dataframe(torsion_entry, "torsion_boundary_capacity_df")
+    torsion_boundary_capacity_df = torsion_boundary_capacity_df_cached if torsion_boundary_capacity_df_cached is not None else pd.DataFrame()
+    interaction_status = interaction_entry.get("interaction_status") if isinstance(interaction_entry, dict) else None
 
     _render_analysis_summary_strip(
         _beam_uls_summary_cards(
@@ -5725,7 +5847,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     )
 
     st.markdown("#### Compact ULS check table")
-    st.caption("To keep ULS responsive, only the selected check below is calculated on the current rerun. Other rows remain demand/readiness summaries until opened.")
+    st.caption("To keep ULS responsive, only checks already calculated for the current inputs show capacity/utilization. Press Calculate in the selected mode to refresh its result.")
     st.dataframe(
         _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, state=st.session_state),
         use_container_width=True,
@@ -5733,7 +5855,26 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     )
 
     st.markdown("#### ULS check workspace")
-    st.caption(_beam_uls_check_tab_caption() + " PERF.ULS1 calculates only the selected check to avoid running all ULS engines at once.")
+    st.caption(_beam_uls_check_tab_caption() + " PERF.ULS2 runs a selected ULS check only after you press Calculate.")
+
+    if selected_entry is None:
+        _render_analysis_summary_strip(
+            [
+                {
+                    "title": f"{selected_check} calculation",
+                    "value": "NOT CALCULATED",
+                    "detail": "Press the highlighted Calculate button above to run this check for the current inputs.",
+                    "status": "warning",
+                    "strong": True,
+                }
+            ],
+            columns=1,
+        )
+        st.info("Capacity diagrams, utilization, and audit output are intentionally withheld until the selected ULS check is calculated.")
+        with st.expander("ULS demand table — audit / source data", expanded=False):
+            st.caption("Read-only normalized view of Active rows from Loads. Secondary actions Muy, Vux, and Nu are kept here for audit, not default decision display.")
+            st.dataframe(_beam_uls_audit_dataframe(active_df), use_container_width=True, hide_index=True)
+        return
 
     if selected_check == "Flexure":
         flexure = _beam_uls_governing_action(active_df, "Mux")
@@ -5909,7 +6050,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.write("- The current torsion hoop geometry uses an explicit first-pass offset of the outside section polygon because the app does not yet have a dedicated torsion hoop layout owner. Verify Ao/Aoh before final design.")
 
     if selected_check == "Shear + Torsion":
-        interaction = _beam_uls_torsion_interaction_status(active_df)
+        interaction = interaction_status if isinstance(interaction_status, dict) else _beam_uls_torsion_interaction_status(active_df)
         _render_analysis_summary_strip([interaction], columns=1)
         if interaction["value"].startswith("Not applicable"):
             st.info(interaction["detail"])

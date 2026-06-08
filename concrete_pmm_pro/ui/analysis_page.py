@@ -5774,6 +5774,69 @@ def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str,
     return vt_df.loc[idx].drop(labels=["__dc", "__tu", "__status_priority"], errors="ignore").to_dict()
 
 
+def _beam_uls_combined_vt_source_strength_gate(
+    shear_df: pd.DataFrame | None,
+    torsion_df: pd.DataFrame | None,
+) -> dict[str, object]:
+    """Summarize separate shear/torsion source-strength acceptance for V+T.
+
+    Combined interaction/reinforcement utilization is a distinct check gate.  It
+    must not be presented as overall ULS acceptance when the underlying separate
+    shear or torsion strength checks fail.
+    """
+
+    blockers: list[str] = []
+    reviews: list[str] = []
+
+    shear = _beam_uls_governing_shear_row(shear_df)
+    if shear is not None:
+        shear_status = str(shear.get("Status") or "-").upper()
+        shear_dc = _beam_uls_float(shear.get("Governing D/C value", shear.get("D/C value")))
+        shear_x = str(shear.get("Governing x") or "-")
+        if shear_status == "FAIL":
+            blockers.append(f"Shear FAIL at x={shear_x}" + (f" (D/C {_format_beam_uls_ratio(shear_dc)})" if math.isfinite(shear_dc) else ""))
+        elif shear_status not in {"PASS", "NO DEMAND", "NOT APPLICABLE"}:
+            reviews.append(f"Shear {shear_status} at x={shear_x}")
+    elif shear_df is None or shear_df.empty:
+        reviews.append("Shear source check has not produced review rows")
+
+    torsion = _beam_uls_governing_torsion_row(torsion_df)
+    if torsion is not None:
+        torsion_status = str(torsion.get("Status") or "-").upper()
+        torsion_dc = _beam_uls_float(torsion.get("D/C value"))
+        torsion_x = str(torsion.get("Governing x") or "-")
+        if torsion_status == "FAIL":
+            blockers.append(f"Torsion FAIL at x={torsion_x}" + (f" (D/C {_format_beam_uls_ratio(torsion_dc)})" if math.isfinite(torsion_dc) else ""))
+        elif torsion_status not in {"PASS", "BELOW THRESHOLD", "NO DEMAND", "NOT APPLICABLE"}:
+            reviews.append(f"Torsion {torsion_status} at x={torsion_x}")
+    elif torsion_df is None or torsion_df.empty:
+        reviews.append("Torsion source check has not produced review rows")
+
+    if blockers:
+        return {
+            "value": "BLOCKED",
+            "detail": "; ".join(blockers[:3]),
+            "status": "danger",
+            "has_blocker": True,
+            "has_review": bool(reviews),
+        }
+    if reviews:
+        return {
+            "value": "SOURCE REVIEW",
+            "detail": "; ".join(reviews[:3]),
+            "status": "warning",
+            "has_blocker": False,
+            "has_review": True,
+        }
+    return {
+        "value": "CLEAR",
+        "detail": "Separate shear/torsion source checks do not block this combined-interaction review.",
+        "status": "success",
+        "has_blocker": False,
+        "has_review": False,
+    }
+
+
 def _beam_uls_combined_vt_source_readiness_notes(vt_df: pd.DataFrame | None) -> list[str]:
     """Return short user-facing diagnostics for DATA REQUIRED combined V+T rows."""
 
@@ -6949,13 +7012,15 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         governing_vt = _beam_uls_governing_combined_vt_row(combined_vt_df)
         if governing_vt is not None:
             status = str(governing_vt.get("Status") or "REVIEW")
+            source_gate = _beam_uls_combined_vt_source_strength_gate(shear_check_df, torsion_check_df)
             vt_cards = [
-                {"title": "Combined V+T status", "value": status, "detail": f"{governing_vt.get('Case', '-')} @ x={governing_vt.get('Governing x', '-')}", "status": "danger" if status == "FAIL" else ("warning" if status in {"DATA REQUIRED", "PASS — REVIEW"} else "neutral"), "strong": True},
+                {"title": "Combined interaction", "value": status, "detail": f"{governing_vt.get('Case', '-')} @ x={governing_vt.get('Governing x', '-')}", "status": "danger" if status == "FAIL" else ("warning" if status in {"DATA REQUIRED", "PASS — REVIEW"} else "neutral"), "strong": True},
+                {"title": "Source strength gate", "value": str(source_gate.get("value") or "-"), "detail": str(source_gate.get("detail") or "-"), "status": str(source_gate.get("status") or "neutral"), "strong": bool(source_gate.get("has_blocker"))},
                 {"title": "Stress interaction", "value": _format_beam_uls_ratio(governing_vt.get("Stress D/C value")), "detail": str(governing_vt.get("Interaction form") or "combined stress screen"), "status": "danger" if str(governing_vt.get("Stress status")) == "FAIL" else "info"},
                 {"title": "Transverse reinforcement", "value": _format_beam_uls_ratio(governing_vt.get("Transverse D/C value")), "detail": "Checks provided (Av + 2At)/s", "status": "danger" if str(governing_vt.get("Transverse status")) == "FAIL" else "info"},
                 {"title": "Longitudinal Al review", "value": _format_beam_uls_ratio(governing_vt.get("Longitudinal D/C value")), "detail": str(governing_vt.get("Longitudinal status") or "ordinary rebar source"), "status": "danger" if str(governing_vt.get("Longitudinal status")) == "FAIL" else ("warning" if str(governing_vt.get("Longitudinal status")) in {"LAYOUT REQUIRED", "NOT CHECKED"} else "info")},
             ]
-            _render_analysis_summary_strip(vt_cards, columns=4)
+            _render_analysis_summary_strip(vt_cards, columns=5)
             if _beam_uls_combined_vt_has_finite_utilization(combined_vt_df):
                 st.plotly_chart(
                     _make_beam_uls_combined_vt_utilization_figure(combined_vt_df, code_label=code_label),
@@ -6980,7 +7045,18 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                     for item in readiness_notes:
                         st.write(f"- {item}")
             elif status == "PASS — REVIEW":
-                st.warning("Combined V+T stress, transverse reinforcement, and longitudinal Al review gates pass, but this is still REVIEW until full longitudinal flexure+shear+tension, hoop detailing, and benchmark gates are completed.")
+                if bool(source_gate.get("has_blocker")):
+                    st.warning(
+                        "Combined interaction/reinforcement gates pass, but overall ULS member acceptance is blocked by the separate source strength gate: "
+                        + str(source_gate.get("detail") or "source strength check fails")
+                    )
+                elif bool(source_gate.get("has_review")):
+                    st.warning(
+                        "Combined interaction/reinforcement gates pass, but separate shear/torsion source checks still need review: "
+                        + str(source_gate.get("detail") or "source check requires review")
+                    )
+                else:
+                    st.warning("Combined V+T stress, transverse reinforcement, and longitudinal Al review gates pass, but this is still REVIEW until full longitudinal flexure+shear+tension, hoop detailing, and benchmark gates are completed.")
             else:
                 st.info("No active torsion demand is present in the selected ULS demand rows.")
         else:
@@ -6997,6 +7073,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             else:
                 st.dataframe(audit_df, use_container_width=True, hide_index=True)
         with st.expander("Combined shear + torsion method notes", expanded=False):
+            st.write("- ULS.VT2.4 separates the combined interaction status from the separate shear/torsion source strength gate; an interaction PASS does not override a shear-only or torsion-only failure.")
             st.write("- ULS.VT2.1 checks combined compression-strut stress, combined transverse reinforcement, and a longitudinal Al review gate from the ordinary rebar source of truth.")
             st.write("- Calculate Shear + Torsion builds the required shear and torsion source rows internally; users do not need to calculate the separate Shear and Torsion tabs first.")
             st.write("- AASHTO/Bridge uses the current first-pass AASHTO-compatible shear/torsion route; ACI/Building uses the current ACI-compatible route.")

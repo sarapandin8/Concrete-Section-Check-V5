@@ -5528,23 +5528,12 @@ def _beam_uls_combined_vt_result_for_row(
         and span_m > 0.0
         and (abs(float(x_m)) <= 1.0e-8 or abs(float(x_m) - float(span_m)) <= 1.0e-8)
     )
+    boundary_note = ""
     if is_member_end:
-        return {
-            "Check": "Shear + Torsion",
-            "Status": "BOUNDARY SKIPPED",
-            "Station type": "DIAGRAM BOUNDARY",
-            "Support side": "LEFT" if abs(float(x_m)) <= 1.0e-8 else "RIGHT",
-            "Critical offset m": float("nan"),
-            "Governing x": _format_beam_uls_x(x_m),
-            "Case": case,
-            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
-            "Tu kN-m": tu_kNm if math.isfinite(tu_kNm) else float("nan"),
-            "Stress status": "BOUNDARY",
-            "Transverse status": "BOUNDARY",
-            "Longitudinal status": "BOUNDARY",
-            "Overall D/C value": float("nan"),
-            "Notes": "Member-end station is treated as a diagram boundary for combined V+T; use critical shear sections and interior load stations for the combined design check.",
-        }
+        station_type = "DIAGRAM BOUNDARY"
+        support_side = "LEFT" if abs(float(x_m)) <= 1.0e-8 else "RIGHT"
+        critical_offset_m = float("nan")
+        boundary_note = "Endpoint utilization is plotted as a diagram boundary only and is not used as a governing combined V+T design station."
     if not math.isfinite(tu_kNm) or abs(tu_kNm) <= _BEAM_ULS_DEMAND_TOL:
         return {
             "Check": "Shear + Torsion",
@@ -5614,7 +5603,7 @@ def _beam_uls_combined_vt_result_for_row(
     if not all(math.isfinite(value) and value > 0.0 for value in required_inputs) or not math.isfinite(vu_kN):
         return {
             "Check": "Shear + Torsion",
-            "Status": "DATA REQUIRED",
+            "Status": "DIAGRAM BOUNDARY" if is_member_end else "DATA REQUIRED",
             "Station type": station_type,
             "Support side": support_side,
             "Critical offset m": critical_offset_m,
@@ -5622,11 +5611,12 @@ def _beam_uls_combined_vt_result_for_row(
             "Case": case,
             "Vu kN": vu_kN,
             "Tu kN-m": tu_kNm,
-            "Stress status": "DATA REQUIRED",
-            "Transverse status": "DATA REQUIRED",
+            "Stress status": "BOUNDARY" if is_member_end else "DATA REQUIRED",
+            "Transverse status": "BOUNDARY" if is_member_end else "DATA REQUIRED",
+            "Longitudinal status": "BOUNDARY" if is_member_end else "DATA REQUIRED",
             "Overall D/C value": float("nan"),
             "Shape": shape,
-            "Notes": "Combined V+T needs finite shear capacity terms, torsion hoop geometry, active transverse zone, and section/material input.",
+            "Notes": boundary_note if is_member_end else "Combined V+T needs finite shear capacity terms, torsion hoop geometry, active transverse zone, and section/material input.",
         }
 
     shear_stress = abs(float(vu_kN)) * 1000.0 / (float(bw_mm) * float(depth_mm))
@@ -5674,6 +5664,12 @@ def _beam_uls_combined_vt_result_for_row(
         status = "DATA REQUIRED"
     else:
         status = "PASS — REVIEW"
+    if is_member_end:
+        status = "DIAGRAM BOUNDARY"
+        stress_status = "BOUNDARY"
+        transverse_status = "BOUNDARY"
+        longitudinal_status = "BOUNDARY"
+        notes.append(boundary_note)
     notes.append("ULS.VT2 checks combined compression-strut stress, combined transverse reinforcement, and a longitudinal torsion-area review gate from the ordinary rebar source of truth.")
     notes.append(str(longitudinal_review.get("description") or ""))
     notes.append("Final combined longitudinal flexure + shear-truss + torsion certification, hoop anchorage/detailing, and benchmark verification remain future gates.")
@@ -5762,7 +5758,8 @@ def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str,
     if vt_df is None or vt_df.empty:
         return None
     df = vt_df.copy()
-    df = df[~df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED"])].copy()
+    df = df[~df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED", "DIAGRAM BOUNDARY"])].copy()
+    df = df[df.get("Station type", pd.Series(index=df.index, dtype=object)).astype(str) != "DIAGRAM BOUNDARY"].copy()
     if df.empty:
         return None
     df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
@@ -6030,7 +6027,11 @@ def _beam_uls_combined_vt_audit_dataframe(vt_df: pd.DataFrame | None) -> pd.Data
         return pd.DataFrame(columns=columns)
     df = vt_df.copy()
     df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
-    governing_idx = df["__dc"].idxmax() if df["__dc"].notna().any() else None
+    design_df = df[
+        ~df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED", "DIAGRAM BOUNDARY"])
+        & (df.get("Station type", pd.Series(index=df.index, dtype=object)).astype(str) != "DIAGRAM BOUNDARY")
+    ].copy()
+    governing_idx = design_df["__dc"].idxmax() if not design_df.empty and design_df["__dc"].notna().any() else None
     rows: list[dict[str, object]] = []
     for idx, row in df.iterrows():
         rows.append({

@@ -1590,7 +1590,7 @@ def test_uls_vt2_1_calculate_shear_torsion_builds_internal_source_rows() -> None
     assert _beam_uls_combined_vt_source_readiness_notes(result["combined_vt_df"]) == []
 
 
-def test_uls_vt2_3_combined_vt_treats_zero_shear_as_valid_and_skips_member_ends() -> None:
+def test_uls_vt2_5_combined_vt_treats_zero_shear_as_valid_and_plots_member_end_boundaries() -> None:
     from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
     from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
 
@@ -1631,13 +1631,21 @@ def test_uls_vt2_3_combined_vt_treats_zero_shear_as_valid_and_skips_member_ends(
     ends = vt[vt["Governing x"].isin(["0.000 m", "20.000 m"])]
     readiness = _beam_uls_combined_vt_source_readiness_dataframe(vt)
 
-    assert set(ends["Status"]) == {"BOUNDARY SKIPPED"}
+    assert set(ends["Status"]) == {"DIAGRAM BOUNDARY"}
+    assert set(ends["Station type"]) == {"DIAGRAM BOUNDARY"}
+    assert ends["Overall D/C value"].notna().any()
     assert mid["Status"] in {"PASS — REVIEW", "FAIL"}
     assert mid["Shear stress MPa"] == 0.0
     assert mid["Av shear req mm2/mm"] == 0.0
     assert "10.000 m" not in set(readiness["Station x"])
     assert "0.000 m" not in set(readiness["Station x"])
     assert "20.000 m" not in set(readiness["Station x"])
+    fig = _make_beam_uls_combined_vt_utilization_figure(vt, code_label="AASHTO LRFD")
+    stress_trace = next(trace for trace in fig.data if str(trace.name).startswith("Stress interaction D/C"))
+    assert min(float(x) for x in stress_trace.x) == 0.0
+    assert max(float(x) for x in stress_trace.x) == 20.0
+    governing_trace = next(trace for trace in fig.data if trace.name == "Governing V+T check")
+    assert all(float(x) not in {0.0, 20.0} for x in governing_trace.x)
 
 
 def test_uls_vt2_2_combined_vt_utilization_figure_plots_dc_and_limit() -> None:

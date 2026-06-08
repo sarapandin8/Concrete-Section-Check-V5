@@ -4059,58 +4059,104 @@ def _beam_uls_shear_default_critical_section_rows(
     if not cases:
         cases = ["-"]
 
+    # Prefer the already evaluated station shear rows as the source of truth for d/dv.
+    # The user screenshot that triggered ULS.SHEAR4.1 had valid shear capacity and
+    # d/dv in the Shear cards, but the critical-section dataframe was empty because
+    # the marker generator tried to rebuild an AnalysisInput at the support first.
+    # That coupling is fragile: critical-section locations should come from the
+    # effective-depth basis that the Shear check already consumed.
+    station_depth_df = _beam_uls_shear_check_dataframe(state, active_df, strength_route=strength_route)
+
+    def _numeric_x_from_row(row: Mapping[str, object]) -> float:
+        if "Station x (m)" in row:
+            value = _beam_uls_float(row.get("Station x (m)"))
+            if math.isfinite(value):
+                return float(value)
+        text = str(row.get("Governing x") or "").replace("m", "").strip()
+        return _beam_uls_float(text)
+
+    def _offset_from_station_depths(case_name: str, support_side: str) -> float | None:
+        if station_depth_df is None or station_depth_df.empty:
+            return None
+        df = station_depth_df.copy()
+        if "Case" in df.columns:
+            case_df = df[df["Case"].astype(str) == str(case_name)].copy()
+            if not case_df.empty:
+                df = case_df
+        if "Station type" in df.columns:
+            df = df[df["Station type"].astype(str) != "DIAGRAM BOUNDARY"].copy()
+        if df.empty:
+            return None
+        df["__x_m"] = df.apply(_numeric_x_from_row, axis=1)
+        df = df[pd.to_numeric(df["__x_m"], errors="coerce").notna()].copy()
+        if not df.empty:
+            df["__support_distance"] = df["__x_m"].map(lambda x: abs(float(x) - (0.0 if support_side == "Left" else float(span_m))))
+            df = df.sort_values("__support_distance", kind="stable")
+        depth_columns = ["dv mm", "d mm"] if strength_route.is_bridge else ["d mm"]
+        for _, depth_row in df.iterrows():
+            for column in depth_columns:
+                depth_mm = _beam_uls_float(depth_row.get(column))
+                if math.isfinite(depth_mm) and depth_mm > 0.0:
+                    return min(max(float(depth_mm) / 1000.0, 0.0), 0.50 * float(span_m))
+        return None
+
+    def _offset_from_support_analysis(case_name: str, support_x: float) -> float | None:
+        support_row = _beam_uls_interpolated_demand_row_for_case(
+            active_df,
+            case_name=case_name,
+            x_m=support_x,
+            note="Support row used to estimate d/dv for critical shear section",
+        )
+        if support_row is None:
+            # Fallback to a simple row.  This still lets the section-geometry
+            # helper calculate d/dv when the user imported only interior
+            # station resultants.
+            support_row = {
+                "Active": True,
+                "Station x (m)": float(support_x),
+                "Case Name": str(case_name),
+                "Mux": 1.0e-3,
+                "Vuy": 0.0,
+                "Tu": 0.0,
+                "Muy": 0.0,
+                "Vux": 0.0,
+                "Nu": 0.0,
+                "Note": "Support fallback row used to estimate d/dv for critical shear section",
+            }
+        analysis_input, _messages = _beam_uls_flexure_analysis_input_for_station(
+            state,
+            row=support_row,
+            strength_route=strength_route,
+        )
+        if analysis_input is None:
+            return None
+        mux_kNm = _beam_uls_float(support_row.get("Mux"))
+        depth_values = _beam_uls_effective_shear_depth_values_mm(
+            state,
+            analysis_input,
+            mux_kNm=mux_kNm,
+            strength_route=strength_route,
+        )
+        d_eff_mm = depth_values.get("d_mm")
+        if d_eff_mm is None or not math.isfinite(float(d_eff_mm)) or float(d_eff_mm) <= 0.0:
+            return None
+        if strength_route.is_bridge:
+            dv_eff_mm = depth_values.get("dv_mm")
+            offset_mm = float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) and float(dv_eff_mm) > 0.0 else float(d_eff_mm)
+        else:
+            offset_mm = float(d_eff_mm)
+        return min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
+
     rows: list[dict[str, object]] = []
     seen: set[tuple[str, str, float]] = set()
     for case_name in cases:
         for support_side, support_x in (("Left", 0.0), ("Right", float(span_m))):
-            support_row = _beam_uls_interpolated_demand_row_for_case(
-                active_df,
-                case_name=case_name,
-                x_m=support_x,
-                note="Support row used to estimate d/dv for critical shear section",
-            )
-            if support_row is None:
-                # Fallback to a simple row.  This still lets the section-geometry
-                # helper calculate d/dv when the user imported only interior
-                # station resultants.
-                support_row = {
-                    "Active": True,
-                    "Station x (m)": float(support_x),
-                    "Case Name": str(case_name),
-                    "Mux": 1.0e-3,
-                    "Vuy": 0.0,
-                    "Tu": 0.0,
-                    "Muy": 0.0,
-                    "Vux": 0.0,
-                    "Nu": 0.0,
-                    "Note": "Support fallback row used to estimate d/dv for critical shear section",
-                }
-            analysis_input, _messages = _beam_uls_flexure_analysis_input_for_station(
-                state,
-                row=support_row,
-                strength_route=strength_route,
-            )
-            if analysis_input is None:
+            offset_m = _offset_from_station_depths(case_name, support_side)
+            if offset_m is None or not math.isfinite(float(offset_m)) or float(offset_m) <= 1.0e-9:
+                offset_m = _offset_from_support_analysis(case_name, support_x)
+            if offset_m is None or not math.isfinite(float(offset_m)) or float(offset_m) <= 1.0e-9:
                 continue
-            mux_kNm = _beam_uls_float(support_row.get("Mux"))
-            depth_values = _beam_uls_effective_shear_depth_values_mm(
-                state,
-                analysis_input,
-                mux_kNm=mux_kNm,
-                strength_route=strength_route,
-            )
-            d_eff_mm = depth_values.get("d_mm")
-            if d_eff_mm is None or not math.isfinite(float(d_eff_mm)) or float(d_eff_mm) <= 0.0:
-                continue
-            if strength_route.is_bridge:
-                dv_eff_mm = depth_values.get("dv_mm")
-                offset_mm = float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) and float(dv_eff_mm) > 0.0 else float(d_eff_mm)
-            else:
-                offset_mm = float(d_eff_mm)
-            offset_m = min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
-            if offset_m <= 1.0e-9:
-                continue
-            x_crit = offset_m if support_side == "Left" else float(span_m) - offset_m
+            x_crit = float(offset_m) if support_side == "Left" else float(span_m) - float(offset_m)
             x_crit = min(max(float(x_crit), 0.0), float(span_m))
             key = (case_name, support_side, round(x_crit, 9))
             if key in seen:
@@ -4120,7 +4166,7 @@ def _beam_uls_shear_default_critical_section_rows(
                 {
                     "Case": str(case_name),
                     "Support side": support_side,
-                    "Critical offset m": offset_m,
+                    "Critical offset m": float(offset_m),
                     "Governing x": _format_beam_uls_x(x_crit),
                     "x_m": x_crit,
                 }
@@ -5045,7 +5091,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 st.dataframe(shear_audit_df, use_container_width=True, hide_index=True)
         with st.expander("Critical shear section checks", expanded=False):
             if shear_critical_section_df.empty:
-                st.info("Critical shear section checks are not available until span length, section depth, active ULS station rows, and active stirrup zones are ready.")
+                st.info("Critical shear section locations are not available until span length, effective d/dv basis, and active ULS station rows are ready. Capacity at those critical sections also needs active stirrup-zone coverage.")
             else:
                 st.caption("First-pass critical shear sections inserted at approximately d from each support for ACI Building Beam/Girder and dv from each support for AASHTO Bridge Beam/Girder. These rows are included in the governing shear D/C.")
                 st.dataframe(_beam_uls_shear_audit_dataframe(shear_critical_section_df), use_container_width=True, hide_index=True)

@@ -1043,3 +1043,87 @@ def test_uls_shear4_manual_effective_d_dv_drives_shear_capacity_and_critical_off
     assert set(round(float(value), 1) for value in shear["dv mm"].dropna()) == {480.0}
     assert set(round(float(value), 3) for value in critical["Critical offset m"].dropna()) == {0.48}
     assert "Manual" in str(shear.iloc[0]["Notes"])
+
+
+def test_uls_shear4_1_critical_markers_use_station_depth_when_support_input_path_is_not_available() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=1500.0),
+            Point2D(x=0.0, y=1500.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=75.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=75.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_system_settings": {"span_length_m": 20.0},
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Support L",
+                "x_start_m": 0.0,
+                "x_end_m": 3.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 250.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            },
+            {
+                "Active": True,
+                "Zone": "Midspan",
+                "x_start_m": 3.0,
+                "x_end_m": 17.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 250.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            },
+            {
+                "Active": True,
+                "Zone": "Support R",
+                "x_start_m": 17.0,
+                "x_end_m": 20.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 250.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            },
+        ],
+    }
+    # Screenshot-like station set: no explicit x=0 support row, but capacity rows
+    # and d/dv are already available in the Shear card. Critical-section marker
+    # generation must reuse those station d/dv values instead of disappearing.
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 1.7, "Case Name": "ULS-G1", "Mux": 100.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 800.0, "Vuy": 75.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 19.7, "Case Name": "ULS-G1", "Mux": 100.0, "Vuy": -250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+    critical = _beam_uls_shear_critical_section_dataframe(state, active, strength_route=route)
+    fig = _make_beam_uls_shear_capacity_figure(active, pd.concat([shear, critical], ignore_index=True), code_label="AASHTO LRFD", critical_section_df=critical)
+
+    assert not shear.empty
+    assert shear["dv mm"].notna().any()
+    assert len(critical) == 2
+    assert set(critical["Station type"]) == {"CRITICAL SHEAR SECTION"}
+    assert any(trace.name == "Critical section for shear loading" for trace in fig.data)

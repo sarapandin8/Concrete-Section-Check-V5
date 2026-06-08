@@ -5477,13 +5477,37 @@ def _beam_uls_section_torsion_shape_type(state: Mapping[str, object]) -> str:
 
 def _beam_uls_combined_vt_demand_rows(active_df: pd.DataFrame, state: Mapping[str, object], *, strength_route: BeamGirderUlsStrengthRoute) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
+    explicit_keys: set[tuple[str, float]] = set()
     if isinstance(active_df, pd.DataFrame) and not active_df.empty:
         for _, row in active_df.iterrows():
             result = row.to_dict()
             result.setdefault("__VT station type", "LOAD STATION")
             result.setdefault("__Support side", "-")
             result.setdefault("__Critical offset m", float("nan"))
+            x_val = _beam_uls_float(result.get("Station x (m)"))
+            case_val = str(result.get("Case Name") or result.get("Case") or "-")
+            if math.isfinite(x_val):
+                explicit_keys.add((case_val, round(float(x_val), 9)))
             rows.append(result)
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    if isinstance(active_df, pd.DataFrame) and not active_df.empty and math.isfinite(span_m) and span_m > 0.0:
+        cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()] or ["-"]
+        for case_name in cases:
+            for x_endpoint, support_side in ((0.0, "LEFT"), (float(span_m), "RIGHT")):
+                if (case_name, round(float(x_endpoint), 9)) in explicit_keys:
+                    continue
+                boundary_row = _beam_uls_interpolated_demand_row_for_case(
+                    active_df,
+                    case_name=case_name,
+                    x_m=float(x_endpoint),
+                    note="Combined shear + torsion endpoint diagram-boundary demand row",
+                )
+                if boundary_row is None:
+                    continue
+                boundary_row["__VT station type"] = "DIAGRAM BOUNDARY"
+                boundary_row["__Support side"] = support_side
+                boundary_row["__Critical offset m"] = float("nan")
+                rows.append(boundary_row)
     for marker in _beam_uls_shear_default_critical_section_rows(state, active_df, strength_route=strength_route):
         case_name = str(marker.get("Case") or "-")
         x_crit = _beam_uls_float(marker.get("x_m"))
@@ -5522,7 +5546,7 @@ def _beam_uls_combined_vt_result_for_row(
     tu_kNm = _beam_uls_float(row.get("Tu"))
     span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
     is_member_end = (
-        station_type == "LOAD STATION"
+        station_type in {"LOAD STATION", "DIAGRAM BOUNDARY"}
         and math.isfinite(x_m)
         and math.isfinite(span_m)
         and span_m > 0.0
@@ -6109,6 +6133,7 @@ def _beam_uls_check_table(
     flexure_preview_df: pd.DataFrame | None = None,
     shear_check_df: pd.DataFrame | None = None,
     torsion_check_df: pd.DataFrame | None = None,
+    combined_vt_df: pd.DataFrame | None = None,
     *,
     state: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
@@ -6214,6 +6239,36 @@ def _beam_uls_check_table(
                 "Utilization": "-",
             }
         )
+    combined_result = _beam_uls_governing_combined_vt_row(combined_vt_df)
+    if combined_result is not None:
+        vu_value = _beam_uls_float(combined_result.get("Vu kN"))
+        tu_value = _beam_uls_float(combined_result.get("Tu kN-m"))
+        dc_value = _beam_uls_float(combined_result.get("Overall D/C value"))
+        rows.append(
+            {
+                "Check": "Shear + Torsion",
+                "Status": str(combined_result.get("Status") or "REVIEW"),
+                "Governing x": str(combined_result.get("Governing x") or "-"),
+                "Case": str(combined_result.get("Case") or "-"),
+                "Demand": f"Vu {_format_beam_uls_demand(vu_value, 'kN')}; Tu {_format_beam_uls_demand(tu_value, 'kN-m')}",
+                "Capacity": "Interaction / (Av+2At)/s / Al review",
+                "Utilization": f"{dc_value:.3f}" if math.isfinite(dc_value) else "-",
+            }
+        )
+    elif torsion is not None and float(torsion["abs_demand"]) > _BEAM_ULS_DEMAND_TOL:
+        rows.append(
+            {
+                "Check": "Shear + Torsion",
+                "Status": "NOT CALCULATED",
+                "Governing x": _format_beam_uls_x(torsion["x_m"]),
+                "Case": str(torsion["case"]),
+                "Demand": f"Tu {_format_beam_uls_demand(torsion['demand'], 'kN-m')}",
+                "Capacity": "Press Calculate Shear + Torsion",
+                "Utilization": "-",
+            }
+        )
+    else:
+        rows.append({"Check": "Shear + Torsion", "Status": "NOT ACTIVE", "Governing x": "-", "Case": "-", "Demand": "-", "Capacity": "No active Tu", "Utilization": "-"})
     return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
 
 
@@ -6809,7 +6864,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     st.markdown("#### Compact ULS check table")
     st.caption("To keep ULS responsive, only checks already calculated for the current inputs show capacity/utilization. Press Calculate in the selected mode to refresh its result. Calculate Shear + Torsion also refreshes the shear/torsion source rows needed for the combined review.")
     st.dataframe(
-        _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, state=st.session_state),
+        _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, combined_vt_df=combined_vt_df, state=st.session_state),
         use_container_width=True,
         hide_index=True,
     )

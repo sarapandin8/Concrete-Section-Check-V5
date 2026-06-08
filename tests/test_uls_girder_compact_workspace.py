@@ -14,6 +14,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_summary_cards,
     _beam_uls_torsion_audit_dataframe,
     _beam_uls_torsion_check_dataframe,
+    _beam_uls_torsion_diagram_boundary_dataframe,
     _beam_uls_torsion_interaction_status,
     _make_beam_uls_shear_capacity_figure,
     _make_beam_uls_torsion_capacity_figure,
@@ -1276,6 +1277,47 @@ def test_uls_torsion1_figure_uses_unmarked_red_check_lines_and_marked_demand() -
     assert phi_tn.mode == "lines"
     assert phi_tn.line.color == "red"
     assert phi_tn.line.dash == "dash"
+
+
+def test_uls_torsion1_figure_uses_boundary_rows_to_extend_phi_tn_to_member_ends() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=400.0, y=0.0),
+            Point2D(x=400.0, y=900.0),
+            Point2D(x=0.0, y=900.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
+        "rebars": [Rebar(x_mm=200.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40")],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Support", "x_start_m": 0.0, "x_end_m": 20.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 200.0, "fy_MPa": 400.0, "Note": "provided"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 2.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": 20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 18.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": -20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    torsion = _beam_uls_torsion_check_dataframe(state, active, strength_route=route)
+    boundary = _beam_uls_torsion_diagram_boundary_dataframe(state, active, strength_route=route)
+    fig = _make_beam_uls_torsion_capacity_figure(active, torsion, code_label="AASHTO LRFD", boundary_capacity_df=boundary)
+
+    assert not boundary.empty
+    assert set(boundary["Governing x"]) == {"0.000 m", "20.000 m"}
+    phi_tn = next(trace for trace in fig.data if trace.name == "φTn")
+    assert min(float(x) for x in phi_tn.x) == 0.0
+    assert max(float(x) for x in phi_tn.x) == 20.0
 
 
 def test_uls_codeverify1_aci_318_19_uses_chapter_22_basis_not_legacy_chapter_11() -> None:

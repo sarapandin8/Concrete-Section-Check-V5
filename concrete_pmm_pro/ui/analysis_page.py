@@ -4326,6 +4326,82 @@ def _beam_uls_shear_diagram_boundary_dataframe(
     return pd.DataFrame(rows, columns=columns)
 
 
+def _beam_uls_torsion_diagram_boundary_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    """Return φTcr / φTn diagram-boundary rows at x=0 and x=L.
+
+    These rows are for plotting capacity continuity only. They are not added to
+    the governing torsion check because torsion design still depends on the
+    actual active demand stations plus separate longitudinal/detailing checks.
+    """
+
+    base = _beam_uls_torsion_check_dataframe(
+        state,
+        pd.DataFrame(columns=list(active_df.columns) if isinstance(active_df, pd.DataFrame) else []),
+        strength_route=strength_route,
+    )
+    columns = list(base.columns)
+    if active_df is None or active_df.empty:
+        return pd.DataFrame(columns=columns)
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    if not math.isfinite(span_m) or span_m <= 0.0:
+        return pd.DataFrame(columns=columns)
+    cases = [str(value or "-") for value in active_df.get("Case Name", pd.Series(["-"])).dropna().unique().tolist()]
+    if not cases:
+        cases = ["-"]
+    rows: list[dict[str, object]] = []
+    active_rows = active_df.copy()
+    active_rows["__x_m"] = pd.to_numeric(active_rows.get("Station x (m)"), errors="coerce")
+    for case_name in cases:
+        case_rows = active_rows[active_rows.get("Case Name", pd.Series(dtype=object)).astype(str) == case_name].copy() if "Case Name" in active_rows.columns else pd.DataFrame()
+        for x_m in (0.0, float(span_m)):
+            nearest_row: dict[str, object] = {}
+            if not case_rows.empty and case_rows["__x_m"].notna().any():
+                nearest_idx = (case_rows["__x_m"].astype(float) - float(x_m)).abs().idxmin()
+                nearest_row = case_rows.loc[nearest_idx].to_dict()
+            mux_seed = _beam_uls_float(nearest_row.get("Mux"))
+            if not math.isfinite(mux_seed) or abs(mux_seed) <= 0.0:
+                mux_seed = 1.0e-3
+            demand_row = {
+                "Active": True,
+                "Station x (m)": float(x_m),
+                "Case Name": case_name,
+                "Mux": mux_seed,
+                "Vuy": _beam_uls_float(nearest_row.get("Vuy")) if nearest_row else 0.0,
+                # Tiny nonzero Tu keeps the torsion result path in capacity mode
+                # so the diagram can expose φTcr / φTn boundary values at x=0 and x=L.
+                "Tu": 1.0e-3,
+                "Muy": _beam_uls_float(nearest_row.get("Muy")) if nearest_row else 0.0,
+                "Vux": _beam_uls_float(nearest_row.get("Vux")) if nearest_row else 0.0,
+                "Nu": _beam_uls_float(nearest_row.get("Nu")) if nearest_row else 0.0,
+                "Note": "Torsion capacity diagram boundary",
+                "__Diagram boundary": True,
+            }
+            result = _beam_uls_torsion_result_for_row(state, demand_row, strength_route=strength_route)
+            result.setdefault("Station type", "DIAGRAM BOUNDARY")
+            result.setdefault("Support side", "LEFT" if x_m <= 0.0 else "RIGHT")
+            for column in columns:
+                result.setdefault(
+                    column,
+                    float("nan")
+                    if column.endswith("kN-m")
+                    or column.endswith("mm2")
+                    or column.endswith("mm")
+                    or column.endswith("mm2/mm")
+                    or column in {"D/C value", "θ deg", "cotθ", "φ"}
+                    else "-",
+                )
+            phi_tn = _beam_uls_float(result.get("φTn kN-m"))
+            phi_tcr = _beam_uls_float(result.get("φTcr kN-m"))
+            if math.isfinite(phi_tn) or math.isfinite(phi_tcr):
+                rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _beam_uls_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, object] | None:
     if shear_df is None or shear_df.empty:
         return None
@@ -5369,7 +5445,13 @@ def _make_beam_uls_shear_capacity_figure(
 
 
 
-def _make_beam_uls_torsion_capacity_figure(active_df: pd.DataFrame, torsion_check_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+def _make_beam_uls_torsion_capacity_figure(
+    active_df: pd.DataFrame,
+    torsion_check_df: pd.DataFrame | None,
+    *,
+    code_label: str,
+    boundary_capacity_df: pd.DataFrame | None = None,
+) -> go.Figure:
     fig = _make_beam_uls_demand_figure(
         active_df,
         column="Tu",
@@ -5379,38 +5461,46 @@ def _make_beam_uls_torsion_capacity_figure(active_df: pd.DataFrame, torsion_chec
     if torsion_check_df is None or torsion_check_df.empty:
         fig.update_layout(title={"text": f"Torsion Check — Strength ULS<br><sup>{code_label} · demand only — φTn not ready</sup>"})
         return fig
-    plot_df = torsion_check_df.copy()
+    plot_sources = [torsion_check_df]
+    if boundary_capacity_df is not None and not boundary_capacity_df.empty:
+        plot_sources.append(boundary_capacity_df)
+    plot_df = pd.concat(plot_sources, ignore_index=True, sort=False).copy()
     plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
     plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
     plot_df["__phi_tn"] = pd.to_numeric(plot_df.get("φTn kN-m"), errors="coerce")
     plot_df["__phi_tcr"] = pd.to_numeric(plot_df.get("φTcr kN-m"), errors="coerce")
-    capacity_df = plot_df[plot_df["__x_m"].notna() & plot_df["__phi_tn"].notna()].copy()
-    has_capacity = not capacity_df.empty
+    plot_df = plot_df[plot_df["__x_m"].notna() & (plot_df["__phi_tn"].notna() | plot_df["__phi_tcr"].notna())].copy()
+    if not plot_df.empty:
+        dedupe_columns = [column for column in ["Case", "__x_m", "__phi_tn", "__phi_tcr", "Station type"] if column in plot_df.columns]
+        if dedupe_columns:
+            plot_df = plot_df.drop_duplicates(subset=dedupe_columns, keep="first")
+    has_capacity = not plot_df.empty
     if has_capacity:
-        capacity_df = capacity_df.sort_values(["Case", "__x_m"], kind="stable")
-        for case_name, case_df in capacity_df.groupby("Case", sort=False):
+        plot_df = plot_df.sort_values(["Case", "__x_m"], kind="stable")
+        for case_name, case_df in plot_df.groupby("Case", sort=False):
             x_values = [float(value) for value in case_df["__x_m"].tolist()]
-            tn_values = [float(value) for value in case_df["__phi_tn"].tolist()]
-            fig.add_trace(
-                go.Scatter(
-                    x=x_values,
-                    y=tn_values,
-                    mode="lines",
-                    name="φTn",
-                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
-                    hovertemplate="x=%{x:.3f} m<br>φTn=%{y:.3f} kN-m<extra></extra>",
+            tn_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_tn"].tolist()]
+            if any(math.isfinite(value) for value in tn_values):
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_values,
+                        y=tn_values,
+                        mode="lines",
+                        name="φTn",
+                        line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
+                        hovertemplate="x=%{x:.3f} m<br>φTn=%{y:.3f} kN-m<extra></extra>",
+                    )
                 )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=x_values,
-                    y=[-v for v in tn_values],
-                    mode="lines",
-                    name="-φTn",
-                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
-                    hovertemplate="x=%{x:.3f} m<br>-φTn=%{y:.3f} kN-m<extra></extra>",
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_values,
+                        y=[-v if math.isfinite(v) else float("nan") for v in tn_values],
+                        mode="lines",
+                        name="-φTn",
+                        line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
+                        hovertemplate="x=%{x:.3f} m<br>-φTn=%{y:.3f} kN-m<extra></extra>",
+                    )
                 )
-            )
             tcr_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_tcr"].tolist()]
             if any(math.isfinite(value) for value in tcr_values):
                 fig.add_trace(
@@ -5504,6 +5594,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         strength_route=strength_route,
     )
     torsion_check_df = _beam_uls_torsion_check_dataframe(
+        st.session_state,
+        active_df,
+        strength_route=strength_route,
+    )
+    torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
         st.session_state,
         active_df,
         strength_route=strength_route,
@@ -5682,7 +5777,12 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             ]
         _render_analysis_summary_strip(torsion_cards, columns=4)
         st.plotly_chart(
-            _make_beam_uls_torsion_capacity_figure(active_df, torsion_check_df, code_label=code_label),
+            _make_beam_uls_torsion_capacity_figure(
+                active_df,
+                torsion_check_df,
+                code_label=code_label,
+                boundary_capacity_df=torsion_boundary_capacity_df,
+            ),
             use_container_width=True,
         )
         st.caption(
@@ -5698,6 +5798,13 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             if audit_df.empty:
                 st.info("Torsion audit output is not available until active ULS demand rows and section inputs are ready.")
             else:
+                st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Torsion end-boundary capacity values", expanded=False):
+            audit_df = _beam_uls_torsion_audit_dataframe(torsion_boundary_capacity_df)
+            if audit_df.empty:
+                st.info("End-boundary φTcr / φTn values are not available until the provided closed-hoop layout and section/material inputs are ready.")
+            else:
+                st.caption("Diagram-boundary capacity values at x=0 and x=L. These are plotted to make the torsion capacity curve continuous; they are not treated as governing torsion design sections.")
                 st.dataframe(audit_df, use_container_width=True, hide_index=True)
         with st.expander("Torsion method notes", expanded=False):
             st.write(f"- Torsion route: {strength_route.torsion_basis_note}")

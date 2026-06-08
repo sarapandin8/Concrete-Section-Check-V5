@@ -75,7 +75,6 @@ def _clean_table_value(value: Any) -> Any:
 
 
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
-TORSION_LONGITUDINAL_TABLE_KEY = "beam_girder_torsion_longitudinal_reinforcement_table"
 
 WORKFLOW_LOAD_TABLE_METADATA_KEYS = (
     "column_uls_loads_table",
@@ -101,16 +100,6 @@ def _workflow_load_table_metadata_from_session(session_state: Any) -> dict[str, 
 
 def _beam_girder_shear_reinforcement_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
     value = _get_session_value(session_state, SHEAR_REINFORCEMENT_TABLE_KEY, None)
-    if value is None:
-        return []
-    try:
-        return pd.DataFrame(value).to_dict(orient="records")
-    except Exception:
-        return []
-
-
-def _beam_girder_torsion_longitudinal_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
-    value = _get_session_value(session_state, TORSION_LONGITUDINAL_TABLE_KEY, None)
     if value is None:
         return []
     try:
@@ -294,9 +283,6 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     beam_girder_shear_reinforcement = _beam_girder_shear_reinforcement_metadata_from_session(session_state)
     if beam_girder_shear_reinforcement:
         metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = beam_girder_shear_reinforcement
-    beam_girder_torsion_longitudinal = _beam_girder_torsion_longitudinal_metadata_from_session(session_state)
-    if beam_girder_torsion_longitudinal:
-        metadata[TORSION_LONGITUDINAL_TABLE_KEY] = beam_girder_torsion_longitudinal
     girder_prestress_force_states = _girder_prestress_force_states_metadata_from_session(session_state)
     if girder_prestress_force_states:
         metadata["girder_prestress_force_states_table"] = girder_prestress_force_states

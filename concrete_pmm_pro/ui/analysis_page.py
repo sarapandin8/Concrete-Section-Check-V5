@@ -4562,17 +4562,19 @@ def _beam_uls_torsion_hoop_geometry(
     }
 
 
-def _beam_uls_torsion_longitudinal_table_from_state(state: Mapping[str, object]) -> pd.DataFrame:
-    raw = _beam_uls_get_state_value(state, TORSION_LONGITUDINAL_TABLE_KEY)
-    if raw is None:
-        metadata = _beam_uls_get_state_value(state, "project_metadata", {})
-        if isinstance(metadata, Mapping):
-            raw = metadata.get(TORSION_LONGITUDINAL_TABLE_KEY)
-    table = pd.DataFrame(raw if raw is not None else [], columns=TORSION_LONGITUDINAL_COLUMNS)
-    for column in TORSION_LONGITUDINAL_COLUMNS:
-        if column not in table.columns:
-            table[column] = None
-    return table[TORSION_LONGITUDINAL_COLUMNS].copy()
+def _beam_uls_rebar_area_mm2(item: object) -> float:
+    area = getattr(item, "area_mm2", None)
+    if area is not None:
+        area_value = _beam_uls_float(area)
+        if math.isfinite(area_value) and area_value > 0.0:
+            return float(area_value)
+    diameter = getattr(item, "diameter_mm", None)
+    if diameter is None and isinstance(item, Mapping):
+        diameter = item.get("diameter_mm", item.get("Diameter_mm"))
+    diameter_value = _beam_uls_float(diameter)
+    if not math.isfinite(diameter_value) or diameter_value <= 0.0:
+        return float("nan")
+    return math.pi * float(diameter_value) ** 2 / 4.0
 
 
 def _beam_uls_torsion_longitudinal_review(state: Mapping[str, object], al_req_mm2: float) -> dict[str, object]:
@@ -4583,31 +4585,32 @@ def _beam_uls_torsion_longitudinal_review(state: Mapping[str, object], al_req_mm
             "utilization": float("nan"),
             "description": "Longitudinal torsion reinforcement is not required by the current first-pass torsion row.",
         }
-    table = _beam_uls_torsion_longitudinal_table_from_state(state)
-    if table.empty:
+    raw_rebars = _beam_uls_get_state_value(state, "rebars", []) or []
+    try:
+        effective_rebars = effective_rebars_for_analysis(list(raw_rebars), state)
+    except Exception:
+        effective_rebars = list(raw_rebars) if ordinary_rebar_enabled(state, default=True) else []
+    if not ordinary_rebar_enabled(state, default=True):
         return {
             "status": "LAYOUT REQUIRED",
             "provided_mm2": 0.0,
             "utilization": float("nan"),
-            "description": "Define active longitudinal torsion reinforcement in Sections → Rebar.",
+            "description": "Enable ordinary rebar / longitudinal Al in Section Builder and define active Rebar rows for torsion Al review.",
         }
     provided = 0.0
-    active_rows = 0
-    for _, row in table.iterrows():
-        if not _beam_uls_active_value(row.get("Active")):
+    counted = 0
+    for item in effective_rebars:
+        area = _beam_uls_rebar_area_mm2(item)
+        if not math.isfinite(area) or area <= 0.0:
             continue
-        diameter = _beam_uls_float(row.get("Diameter_mm"))
-        count = _beam_uls_float(row.get("Count"))
-        if not all(math.isfinite(value) and value > 0.0 for value in [diameter, count]):
-            continue
-        active_rows += 1
-        provided += math.pi * float(diameter) ** 2 / 4.0 * float(count)
-    if active_rows == 0 or provided <= 0.0:
+        provided += float(area)
+        counted += 1
+    if counted == 0 or provided <= 0.0:
         return {
             "status": "LAYOUT REQUIRED",
             "provided_mm2": provided,
             "utilization": float("nan"),
-            "description": "No active longitudinal torsion reinforcement rows are provided.",
+            "description": "No active ordinary rebar rows are available for longitudinal torsion Al review. Use the existing Rebar table as the single source of truth.",
         }
     utilization = float(al_req_mm2) / provided if provided > 0.0 else float("nan")
     status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 + 1.0e-9 else "FAIL"
@@ -4615,7 +4618,10 @@ def _beam_uls_torsion_longitudinal_review(state: Mapping[str, object], al_req_mm
         "status": status,
         "provided_mm2": provided,
         "utilization": utilization,
-        "description": f"Active torsion longitudinal rows: {active_rows}; Al,req/Al,prov = {_format_beam_uls_ratio(utilization)}.",
+        "description": (
+            f"Al provided is taken from {counted} active ordinary rebar bar(s) in the existing Rebar table; "
+            f"Al,req/Al,prov = {_format_beam_uls_ratio(utilization)}. Verify that counted bars are detailed around the torsion hoop perimeter before final design."
+        ),
     }
 
 
@@ -4770,9 +4776,9 @@ def _beam_uls_torsion_result_for_row(
     utilization = abs(float(tu_kNm)) / phi_tn_kNm if phi_tn_kNm > 0.0 else float("nan")
     transverse_status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 + 1.0e-9 else "FAIL"
     # First-pass longitudinal torsion steel demand from the closed-hoop truss
-    # relationship. Provided longitudinal bars are checked from the dedicated
-    # Sections → Rebar torsion longitudinal table, but the overall torsion check
-    # remains REVIEW until hoop detailing and combined V+T interaction are added.
+    # relationship. Provided Al is read from the existing ordinary rebar table
+    # (single source of truth), while the overall torsion check remains REVIEW
+    # until hoop detailing and combined V+T interaction are added.
     al_req = at_per_s * ph * cot_theta * cot_theta if math.isfinite(ph) and ph > 0.0 else float("nan")
     longitudinal_review = _beam_uls_torsion_longitudinal_review(state, al_req)
     longitudinal_status = str(longitudinal_review.get("status") or "REVIEW")
@@ -5261,10 +5267,6 @@ _BEAM_ULS_DEMAND_MARKER_STYLE = {"color": "#1f77b4", "size": 7}
 # station resultants. Use this convention for future beam/girder design diagrams.
 _BEAM_ULS_CHECK_LINE_STYLE = {"color": "red", "dash": "dash", "width": 3}
 _BEAM_ULS_REFERENCE_LINE_STYLE = {"color": "orange", "dash": "dash", "width": 3}
-TORSION_LONGITUDINAL_TABLE_KEY = "beam_girder_torsion_longitudinal_reinforcement_table"
-TORSION_LONGITUDINAL_COLUMNS = ["Active", "Location", "Bar Size", "Diameter_mm", "Count", "fy_MPa", "Note"]
-
-
 def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title: str, y_label: str) -> go.Figure:
     plot_df = active_df[["Station x (m)", "Case Name", column]].copy()
     plot_df = plot_df[pd.to_numeric(plot_df["Station x (m)"], errors="coerce").notna()]

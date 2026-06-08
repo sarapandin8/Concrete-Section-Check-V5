@@ -1208,9 +1208,9 @@ def test_uls_torsion1_aci_route_reports_first_pass_phi_tn_without_fake_final_pas
     torsion = _beam_uls_torsion_check_dataframe(state, active, strength_route=route)
 
     row = torsion.iloc[0]
-    assert row["Status"] in {"REVIEW", "BELOW THRESHOLD"}
+    assert row["Status"] in {"REVIEW", "BELOW THRESHOLD", "FAIL"}
     assert row["Transverse status"] in {"PASS", "THRESHOLD OK"}
-    assert row["Longitudinal status"] in {"REVIEW", "NOT CHECKED", "LAYOUT REQUIRED"}
+    assert row["Longitudinal status"] in {"PASS", "FAIL", "NOT CHECKED", "LAYOUT REQUIRED"}
     assert row["φTn kN-m"] > 0.0
     assert row["D/C value"] > 0.0
     assert row["φ"] == 0.75
@@ -1218,7 +1218,7 @@ def test_uls_torsion1_aci_route_reports_first_pass_phi_tn_without_fake_final_pas
     assert "Longitudinal torsion" in row["Notes"]
 
 
-def test_uls_torsion2_longitudinal_torsion_layout_can_upgrade_longitudinal_status_to_pass() -> None:
+def test_uls_torsion2_uses_existing_rebar_table_as_longitudinal_al_source() -> None:
     from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
     from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
 
@@ -1233,9 +1233,10 @@ def test_uls_torsion2_longitudinal_torsion_layout_can_upgrade_longitudinal_statu
     base_state = {
         "section_geometry": geometry,
         "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
-        "rebars": [Rebar(x_mm=200.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40")],
+        "rebars": [],
         "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
         "prestress_elements": [],
+        "section_has_ordinary_rebar": True,
         "beam_girder_shear_reinforcement_table": [
             {"Active": True, "Zone": "Support", "x_start_m": 0.0, "x_end_m": 10.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 200.0, "fy_MPa": 400.0, "Note": "provided"}
         ],
@@ -1247,18 +1248,22 @@ def test_uls_torsion2_longitudinal_torsion_layout_can_upgrade_longitudinal_statu
     )
     route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
 
-    without_al = _beam_uls_torsion_check_dataframe(base_state, active, strength_route=route).iloc[0]
-    assert without_al["Longitudinal status"] == "LAYOUT REQUIRED"
+    without_rebar = _beam_uls_torsion_check_dataframe(base_state, active, strength_route=route).iloc[0]
+    assert without_rebar["Longitudinal status"] in {"LAYOUT REQUIRED", "NOT CHECKED"}
 
     state = dict(base_state)
-    state["beam_girder_torsion_longitudinal_reinforcement_table"] = [
-        {"Active": True, "Location": "Perimeter bars", "Bar Size": "DB25", "Diameter_mm": 25.0, "Count": 12, "fy_MPa": 400.0, "Note": "provided torsion longitudinal bars"}
-    ]
-    with_al = _beam_uls_torsion_check_dataframe(state, active, strength_route=route).iloc[0]
-    assert with_al["Longitudinal status"] == "PASS"
-    assert with_al["Al provided mm2"] > with_al["Al req mm2"]
-    assert with_al["Al utilization"] <= 1.0
-    assert with_al["Status"] in {"REVIEW", "BELOW THRESHOLD"}
+    state["rebars"] = [Rebar(x_mm=60.0 + i * 20.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40") for i in range(12)]
+    with_rebar = _beam_uls_torsion_check_dataframe(state, active, strength_route=route).iloc[0]
+    assert with_rebar["Longitudinal status"] == "PASS"
+    assert with_rebar["Al provided mm2"] > with_rebar["Al req mm2"]
+    assert with_rebar["Al utilization"] <= 1.0
+    assert "existing Rebar table" in with_rebar["Notes"]
+    assert with_rebar["Status"] in {"REVIEW", "BELOW THRESHOLD"}
+
+    disabled_state = dict(state)
+    disabled_state["section_has_ordinary_rebar"] = False
+    disabled = _beam_uls_torsion_check_dataframe(disabled_state, active, strength_route=route).iloc[0]
+    assert disabled["Longitudinal status"] in {"LAYOUT REQUIRED", "NOT CHECKED"}
 
 
 def test_uls_torsion1_bridge_and_building_routes_use_different_phi() -> None:

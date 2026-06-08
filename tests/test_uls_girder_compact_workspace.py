@@ -4,6 +4,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     BEAM_ULS_CHECK_TAB_LABELS,
     _active_beam_uls_demand_dataframe_from_session,
     _beam_uls_check_table,
+    _beam_uls_combined_vt_audit_dataframe,
+    _beam_uls_combined_vt_check_dataframe,
     _beam_uls_flexure_audit_dataframe,
     _beam_uls_flexure_analysis_input_for_station,
     _beam_uls_flexure_capacity_state_key,
@@ -1484,3 +1486,52 @@ def test_uls_codeverify1_audit_keeps_first_pass_bridge_and_psc_items_out_of_fina
     assert any(item.risk_level == "CRITICAL" for item in bridge_psc_items)
     assert all(item.implementation_status in {"PARTIAL", "MISSING"} for item in bridge_psc_items)
     assert any("Combined V+T" in item.check_item for item in bridge_psc_items)
+
+
+def test_uls_vt1_combined_shear_torsion_review_check_produces_stress_and_transverse_dc() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=400.0, y=0.0),
+            Point2D(x=400.0, y=900.0),
+            Point2D(x=0.0, y=900.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
+        "rebars": [
+            Rebar(x_mm=80.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=320.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=80.0, y_mm=820.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=320.0, y_mm=820.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Full", "x_start_m": 0.0, "x_end_m": 20.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 150.0, "fy_MPa": 400.0, "Note": "provided"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 2.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 150.0, "Tu": 20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 18.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": -150.0, "Tu": -20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    vt = _beam_uls_combined_vt_check_dataframe(state, active, strength_route=route)
+    audit = _beam_uls_combined_vt_audit_dataframe(vt)
+
+    assert not vt.empty
+    assert {"LOAD STATION", "CRITICAL SHEAR SECTION"}.issubset(set(vt["Station type"]))
+    design_rows = vt[vt["Status"] != "NOT APPLICABLE"]
+    assert not design_rows.empty
+    assert design_rows["Stress D/C value"].notna().any()
+    assert design_rows["Transverse D/C value"].notna().any()
+    assert "PASS — REVIEW" in set(design_rows["Status"]) or "FAIL" in set(design_rows["Status"])
+    assert not audit.empty
+    assert "(Av+2At)/s req" in audit.columns

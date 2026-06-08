@@ -5403,7 +5403,15 @@ def _beam_uls_calculate_selected_check(
             "torsion_boundary_capacity_df": torsion_boundary_capacity_df,
         }
     if selected_check == "Shear + Torsion":
-        return {"interaction_status": _beam_uls_torsion_interaction_status(active_df)}
+        combined_vt_df = _beam_uls_combined_vt_check_dataframe(
+            state,
+            active_df,
+            strength_route=strength_route,
+        )
+        return {
+            "combined_vt_df": combined_vt_df,
+            "interaction_status": _beam_uls_torsion_interaction_status(active_df),
+        }
     return {}
 
 
@@ -5417,6 +5425,309 @@ def _beam_uls_cached_messages(entry: dict[str, object] | None, key: str) -> list
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+def _beam_uls_section_torsion_shape_type(state: Mapping[str, object]) -> str:
+    geometry = _beam_uls_get_state_value(state, "section_geometry")
+    if geometry is None:
+        return "solid"
+    try:
+        polygon = to_shapely_polygon(geometry)
+        if len(getattr(polygon, "interiors", [])) > 0:
+            return "hollow"
+    except Exception:
+        return "solid"
+    return "solid"
+
+
+def _beam_uls_combined_vt_demand_rows(active_df: pd.DataFrame, state: Mapping[str, object], *, strength_route: BeamGirderUlsStrengthRoute) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if isinstance(active_df, pd.DataFrame) and not active_df.empty:
+        for _, row in active_df.iterrows():
+            result = row.to_dict()
+            result.setdefault("__VT station type", "LOAD STATION")
+            result.setdefault("__Support side", "-")
+            result.setdefault("__Critical offset m", float("nan"))
+            rows.append(result)
+    for marker in _beam_uls_shear_default_critical_section_rows(state, active_df, strength_route=strength_route):
+        case_name = str(marker.get("Case") or "-")
+        x_crit = _beam_uls_float(marker.get("x_m"))
+        if not math.isfinite(x_crit):
+            continue
+        demand_row = _beam_uls_interpolated_demand_row_for_case(
+            active_df,
+            case_name=case_name,
+            x_m=float(x_crit),
+            note="Combined shear + torsion critical shear-section demand row",
+        )
+        if demand_row is None:
+            continue
+        demand_row["__VT station type"] = "CRITICAL SHEAR SECTION"
+        demand_row["__Critical shear section"] = True
+        demand_row["__Support side"] = str(marker.get("Support side") or "-")
+        demand_row["__Critical offset m"] = _beam_uls_float(marker.get("Critical offset m"))
+        rows.append(demand_row)
+    if not rows:
+        return pd.DataFrame(columns=list(active_df.columns) if isinstance(active_df, pd.DataFrame) else [])
+    return pd.DataFrame(rows)
+
+
+def _beam_uls_combined_vt_result_for_row(
+    state: Mapping[str, object],
+    row: Mapping[str, object],
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    x_m = _beam_uls_float(row.get("Station x (m)"))
+    case = str(row.get("Case Name") or row.get("Case") or "-")
+    station_type = str(row.get("__VT station type") or ("CRITICAL SHEAR SECTION" if row.get("__Critical shear section") else "LOAD STATION"))
+    support_side = str(row.get("__Support side") or "-")
+    critical_offset_m = _beam_uls_float(row.get("__Critical offset m"))
+    vu_kN = _beam_uls_float(row.get("Vuy"))
+    tu_kNm = _beam_uls_float(row.get("Tu"))
+    if not math.isfinite(tu_kNm) or abs(tu_kNm) <= _BEAM_ULS_DEMAND_TOL:
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "NOT APPLICABLE",
+            "Station type": station_type,
+            "Support side": support_side,
+            "Critical offset m": critical_offset_m,
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": 0.0,
+            "Stress status": "NOT ACTIVE",
+            "Transverse status": "NOT ACTIVE",
+            "Overall D/C value": float("nan"),
+            "Notes": "No active Tu at this station; combined V+T interaction is not applicable.",
+        }
+
+    shear = _beam_uls_shear_result_for_row(state, row, strength_route=strength_route)
+    torsion = _beam_uls_torsion_result_for_row(state, row, strength_route=strength_route)
+    notes: list[str] = []
+    fc = float("nan")
+    analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(state, row=row, strength_route=strength_route)
+    if input_messages:
+        notes.extend(input_messages)
+    if analysis_input is not None:
+        fc = float(analysis_input.concrete_material.fc_MPa)
+    bw_mm = _beam_uls_float(shear.get("bw mm"))
+    d_mm = _beam_uls_float(shear.get("d mm"))
+    dv_mm = _beam_uls_float(shear.get("dv mm"))
+    depth_mm = dv_mm if strength_route.is_bridge and math.isfinite(dv_mm) and dv_mm > 0.0 else d_mm
+    phi = _beam_uls_float(shear.get("φ"))
+    if not math.isfinite(phi) or phi <= 0.0:
+        phi = 0.90 if strength_route.is_bridge else 0.75
+    vc_kN = _beam_uls_float(shear.get("Vc kN"))
+    vs_kN = _beam_uls_float(shear.get("Vs kN"))
+    avs_provided = _beam_uls_float(shear.get("Av/s mm2/mm"))
+    avs_min = _beam_uls_float(shear.get("Av/s required mm2/mm"))
+    fy_shear = float("nan")
+    zone = _beam_uls_active_shear_zone_for_station(state, x_m)
+    if zone is not None:
+        fy_shear = _beam_uls_float(zone.get("fy_MPa"))
+    ao = _beam_uls_float(torsion.get("Ao mm2"))
+    aoh = _beam_uls_float(torsion.get("Aoh mm2"))
+    ph = _beam_uls_float(torsion.get("ph mm"))
+    at_per_s = _beam_uls_float(torsion.get("At/s mm2/mm"))
+    cot_theta = _beam_uls_float(torsion.get("cotθ"))
+    if not math.isfinite(cot_theta) or cot_theta <= 0.0:
+        cot_theta = 1.0
+    shape = _beam_uls_section_torsion_shape_type(state)
+    required_inputs = [fc, bw_mm, depth_mm, phi, vc_kN, avs_provided, fy_shear, ao, aoh, ph, at_per_s]
+    if not all(math.isfinite(value) and value > 0.0 for value in required_inputs) or not math.isfinite(vu_kN):
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "DATA REQUIRED",
+            "Station type": station_type,
+            "Support side": support_side,
+            "Critical offset m": critical_offset_m,
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Vu kN": vu_kN,
+            "Tu kN-m": tu_kNm,
+            "Stress status": "DATA REQUIRED",
+            "Transverse status": "DATA REQUIRED",
+            "Overall D/C value": float("nan"),
+            "Shape": shape,
+            "Notes": "Combined V+T needs finite shear capacity terms, torsion hoop geometry, active transverse zone, and section/material input.",
+        }
+
+    shear_stress = abs(float(vu_kN)) * 1000.0 / (float(bw_mm) * float(depth_mm))
+    torsion_stress = abs(float(tu_kNm)) * 1.0e6 * float(ph) / (1.7 * float(aoh) * float(aoh))
+    if shape == "hollow":
+        stress_demand = shear_stress + torsion_stress
+        interaction_form = "linear sum for hollow section"
+    else:
+        stress_demand = math.sqrt(shear_stress * shear_stress + torsion_stress * torsion_stress)
+        interaction_form = "root-sum-square for solid section"
+    if strength_route.is_bridge:
+        stress_limit = float(phi) * 0.25 * float(fc)
+        stress_basis = "AASHTO LRFD-compatible combined V+T compression-strut stress screen"
+    else:
+        vc_stress = float(vc_kN) * 1000.0 / (float(bw_mm) * float(depth_mm))
+        stress_limit = float(phi) * (vc_stress + 0.66 * math.sqrt(float(fc)))
+        stress_basis = "ACI 318-compatible combined V+T stress interaction screen"
+    stress_dc = stress_demand / stress_limit if stress_limit > 0.0 else float("nan")
+    stress_status = "PASS" if math.isfinite(stress_dc) and stress_dc <= 1.0 + 1.0e-9 else "FAIL"
+
+    shear_req = max(0.0, (abs(float(vu_kN)) * 1000.0 / float(phi) - float(vc_kN) * 1000.0) / (float(fy_shear) * float(depth_mm) * float(cot_theta)))
+    torsion_req = abs(float(tu_kNm)) * 1.0e6 / (float(phi) * 2.0 * float(ao) * float(fy_shear) * float(cot_theta))
+    combined_req = shear_req + 2.0 * torsion_req
+    if strength_route.is_bridge:
+        min_req = max(0.083 * math.sqrt(float(fc)) * float(bw_mm) / float(fy_shear), 0.35 * float(bw_mm) / float(fy_shear))
+    else:
+        min_req = max(0.062 * math.sqrt(float(fc)) * float(bw_mm) / float(fy_shear), 0.35 * float(bw_mm) / float(fy_shear))
+    required_total = max(combined_req, min_req)
+    provided_total = float(avs_provided) + 2.0 * float(at_per_s)
+    transverse_dc = required_total / provided_total if provided_total > 0.0 else float("nan")
+    transverse_status = "PASS" if math.isfinite(transverse_dc) and transverse_dc <= 1.0 + 1.0e-9 else "FAIL"
+    overall_dc_values = [value for value in [stress_dc, transverse_dc] if math.isfinite(value)]
+    overall_dc = max(overall_dc_values) if overall_dc_values else float("nan")
+    if stress_status == "FAIL" or transverse_status == "FAIL":
+        status = "FAIL"
+    else:
+        status = "PASS — REVIEW"
+    notes.append("ULS.VT1 checks combined compression-strut stress and combined transverse reinforcement only; longitudinal V+T, hoop anchorage/detailing, and benchmark certification remain future gates.")
+    notes.append("Vp is treated as zero in this review screen unless already embedded in the imported ULS resultants / current first-pass shear route.")
+    return {
+        "Check": "Shear + Torsion",
+        "Status": status,
+        "Station type": station_type,
+        "Support side": support_side,
+        "Critical offset m": critical_offset_m if math.isfinite(critical_offset_m) else float("nan"),
+        "Governing x": _format_beam_uls_x(x_m),
+        "Case": case,
+        "Vu kN": float(vu_kN),
+        "Tu kN-m": float(tu_kNm),
+        "Shape": shape.upper(),
+        "Stress status": stress_status,
+        "Transverse status": transverse_status,
+        "Stress D/C value": stress_dc,
+        "Transverse D/C value": transverse_dc,
+        "Overall D/C value": overall_dc,
+        "Shear stress MPa": shear_stress,
+        "Torsion stress MPa": torsion_stress,
+        "Interaction stress MPa": stress_demand,
+        "Stress limit MPa": stress_limit,
+        "Av shear req mm2/mm": shear_req,
+        "At torsion req mm2/mm": torsion_req,
+        "Combined transverse req mm2/mm": combined_req,
+        "Minimum transverse req mm2/mm": min_req,
+        "Governing transverse req mm2/mm": required_total,
+        "Provided Av+2At per s mm2/mm": provided_total,
+        "bw mm": float(bw_mm),
+        "d mm": float(d_mm) if math.isfinite(d_mm) else float("nan"),
+        "dv mm": float(dv_mm) if math.isfinite(dv_mm) else float("nan"),
+        "Ao mm2": float(ao),
+        "Aoh mm2": float(aoh),
+        "ph mm": float(ph),
+        "φ": float(phi),
+        "θ cot": float(cot_theta),
+        "Code basis": stress_basis,
+        "Interaction form": interaction_form,
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _beam_uls_combined_vt_check_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Station type", "Support side", "Critical offset m", "Governing x", "Case", "Vu kN", "Tu kN-m", "Shape",
+        "Stress status", "Transverse status", "Stress D/C value", "Transverse D/C value", "Overall D/C value",
+        "Shear stress MPa", "Torsion stress MPa", "Interaction stress MPa", "Stress limit MPa",
+        "Av shear req mm2/mm", "At torsion req mm2/mm", "Combined transverse req mm2/mm", "Minimum transverse req mm2/mm", "Governing transverse req mm2/mm", "Provided Av+2At per s mm2/mm",
+        "bw mm", "d mm", "dv mm", "Ao mm2", "Aoh mm2", "ph mm", "φ", "θ cot", "Code basis", "Interaction form", "Notes",
+    ]
+    demand_rows = _beam_uls_combined_vt_demand_rows(active_df, state, strength_route=strength_route)
+    if demand_rows.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for _, demand_row in demand_rows.iterrows():
+        result = _beam_uls_combined_vt_result_for_row(state, demand_row.to_dict(), strength_route=strength_route)
+        for column in columns:
+            result.setdefault(
+                column,
+                float("nan")
+                if column.endswith("kN")
+                or column.endswith("kN-m")
+                or column.endswith("MPa")
+                or column.endswith("mm2/mm")
+                or column.endswith("mm")
+                or column.endswith("mm2")
+                or column in {"Critical offset m", "Stress D/C value", "Transverse D/C value", "Overall D/C value", "φ", "θ cot"}
+                else "-",
+            )
+        rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if vt_df is None or vt_df.empty:
+        return None
+    df = vt_df.copy()
+    df = df[df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str) != "NOT APPLICABLE"].copy()
+    if df.empty:
+        return None
+    df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
+    df["__tu"] = pd.to_numeric(df.get("Tu kN-m"), errors="coerce").abs()
+    status_priority = {"FAIL": 4, "DATA REQUIRED": 3, "PASS — REVIEW": 2, "NOT APPLICABLE": 0}
+    df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 1))
+    idx = df.sort_values(["__status_priority", "__dc", "__tu"], ascending=[False, False, False]).index[0]
+    return vt_df.loc[idx].drop(labels=["__dc", "__tu", "__status_priority"], errors="ignore").to_dict()
+
+
+def _beam_uls_combined_vt_audit_dataframe(vt_df: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Governing", "Station type", "Station x", "Case", "Shape", "Status", "Stress", "Transverse", "Vu", "Tu", "Stress D/C", "Transverse D/C", "Overall D/C",
+        "v shear", "t torsion", "interaction", "limit", "Av/s req", "At/s req", "(Av+2At)/s req", "min req", "provided", "bw", "d", "dv", "Aoh", "Ao", "ph", "φ", "cotθ", "Code basis", "Notes",
+    ]
+    if vt_df is None or vt_df.empty:
+        return pd.DataFrame(columns=columns)
+    df = vt_df.copy()
+    df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
+    governing_idx = df["__dc"].idxmax() if df["__dc"].notna().any() else None
+    rows: list[dict[str, object]] = []
+    for idx, row in df.iterrows():
+        rows.append({
+            "Governing": "Yes" if governing_idx is not None and idx == governing_idx else "",
+            "Station type": str(row.get("Station type") or "-"),
+            "Station x": str(row.get("Governing x") or "-"),
+            "Case": str(row.get("Case") or "-"),
+            "Shape": str(row.get("Shape") or "-"),
+            "Status": str(row.get("Status") or "-"),
+            "Stress": str(row.get("Stress status") or "-"),
+            "Transverse": str(row.get("Transverse status") or "-"),
+            "Vu": _format_beam_uls_audit_number(row.get("Vu kN"), unit="kN"),
+            "Tu": _format_beam_uls_audit_number(row.get("Tu kN-m"), unit="kN-m"),
+            "Stress D/C": _format_beam_uls_ratio(row.get("Stress D/C value")),
+            "Transverse D/C": _format_beam_uls_ratio(row.get("Transverse D/C value")),
+            "Overall D/C": _format_beam_uls_ratio(row.get("Overall D/C value")),
+            "v shear": _format_beam_uls_audit_number(row.get("Shear stress MPa"), unit="MPa"),
+            "t torsion": _format_beam_uls_audit_number(row.get("Torsion stress MPa"), unit="MPa"),
+            "interaction": _format_beam_uls_audit_number(row.get("Interaction stress MPa"), unit="MPa"),
+            "limit": _format_beam_uls_audit_number(row.get("Stress limit MPa"), unit="MPa"),
+            "Av/s req": _format_beam_uls_audit_number(row.get("Av shear req mm2/mm"), unit="mm²/mm"),
+            "At/s req": _format_beam_uls_audit_number(row.get("At torsion req mm2/mm"), unit="mm²/mm"),
+            "(Av+2At)/s req": _format_beam_uls_audit_number(row.get("Governing transverse req mm2/mm"), unit="mm²/mm"),
+            "min req": _format_beam_uls_audit_number(row.get("Minimum transverse req mm2/mm"), unit="mm²/mm"),
+            "provided": _format_beam_uls_audit_number(row.get("Provided Av+2At per s mm2/mm"), unit="mm²/mm"),
+            "bw": _format_beam_uls_audit_number(row.get("bw mm"), unit="mm"),
+            "d": _format_beam_uls_audit_number(row.get("d mm"), unit="mm"),
+            "dv": _format_beam_uls_audit_number(row.get("dv mm"), unit="mm"),
+            "Aoh": _format_beam_uls_audit_number(row.get("Aoh mm2"), unit="mm²"),
+            "Ao": _format_beam_uls_audit_number(row.get("Ao mm2"), unit="mm²"),
+            "ph": _format_beam_uls_audit_number(row.get("ph mm"), unit="mm"),
+            "φ": _format_beam_uls_ratio(row.get("φ")),
+            "cotθ": _format_beam_uls_ratio(row.get("θ cot")),
+            "Code basis": str(row.get("Code basis") or "-"),
+            "Notes": str(row.get("Notes") or ""),
+        })
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _beam_uls_torsion_interaction_status(active_df: pd.DataFrame) -> dict[str, str]:
@@ -6110,6 +6421,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     torsion_boundary_capacity_df_cached = _beam_uls_cached_dataframe(torsion_entry, "torsion_boundary_capacity_df")
     torsion_boundary_capacity_df = torsion_boundary_capacity_df_cached if torsion_boundary_capacity_df_cached is not None else pd.DataFrame()
     interaction_status = interaction_entry.get("interaction_status") if isinstance(interaction_entry, dict) else None
+    combined_vt_df = _beam_uls_cached_dataframe(interaction_entry, "combined_vt_df")
 
     _render_analysis_summary_strip(
         _beam_uls_summary_cards(
@@ -6327,15 +6639,46 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.write("- The current torsion hoop geometry uses an explicit first-pass offset of the outside section polygon because the app does not yet have a dedicated torsion hoop layout owner. Verify Ao/Aoh before final design.")
 
     if selected_check == "Shear + Torsion":
-        interaction = interaction_status if isinstance(interaction_status, dict) else _beam_uls_torsion_interaction_status(active_df)
-        _render_analysis_summary_strip([interaction], columns=1)
-        if interaction["value"].startswith("Not applicable"):
-            st.info(interaction["detail"])
+        governing_vt = _beam_uls_governing_combined_vt_row(combined_vt_df)
+        if governing_vt is not None:
+            status = str(governing_vt.get("Status") or "REVIEW")
+            vt_cards = [
+                {"title": "Combined V+T status", "value": status, "detail": f"{governing_vt.get('Case', '-')} @ x={governing_vt.get('Governing x', '-')}", "status": "danger" if status == "FAIL" else ("warning" if status in {"DATA REQUIRED", "PASS — REVIEW"} else "neutral"), "strong": True},
+                {"title": "Stress interaction", "value": _format_beam_uls_ratio(governing_vt.get("Stress D/C value")), "detail": str(governing_vt.get("Interaction form") or "combined stress screen"), "status": "danger" if str(governing_vt.get("Stress status")) == "FAIL" else "info"},
+                {"title": "Transverse reinforcement", "value": _format_beam_uls_ratio(governing_vt.get("Transverse D/C value")), "detail": "Checks provided (Av + 2At)/s", "status": "danger" if str(governing_vt.get("Transverse status")) == "FAIL" else "info"},
+                {"title": "Guard", "value": "REVIEW ONLY", "detail": "Longitudinal V+T/detailing/benchmark not final", "status": "warning"},
+            ]
+            _render_analysis_summary_strip(vt_cards, columns=4)
+            if status == "FAIL":
+                st.error("Combined shear + torsion review check fails at the governing station. Review section size, stirrup layout, and torsion hoop geometry before any final design claim.")
+            elif status == "DATA REQUIRED":
+                st.warning("Combined shear + torsion needs additional input or completed shear/torsion source data before review can be completed.")
+            elif status == "PASS — REVIEW":
+                st.warning("Combined V+T stress and transverse reinforcement screens pass, but this is still REVIEW until longitudinal V+T, hoop detailing, and benchmark gates are completed.")
+            else:
+                st.info("No active torsion demand is present in the selected ULS demand rows.")
         else:
-            st.warning(interaction["detail"])
+            interaction = interaction_status if isinstance(interaction_status, dict) else _beam_uls_torsion_interaction_status(active_df)
+            _render_analysis_summary_strip([interaction], columns=1)
+            if interaction["value"].startswith("Not applicable"):
+                st.info(interaction["detail"])
+            else:
+                st.warning(interaction["detail"])
+        with st.expander("Combined shear + torsion audit / review output", expanded=False):
+            audit_df = _beam_uls_combined_vt_audit_dataframe(combined_vt_df)
+            if audit_df.empty:
+                st.info("Combined V+T audit output is not available until you press Calculate and the shear/torsion source inputs are ready.")
+            else:
+                st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        with st.expander("Combined shear + torsion method notes", expanded=False):
+            st.write("- ULS.VT1 checks combined compression-strut stress and combined transverse reinforcement only.")
+            st.write("- AASHTO/Bridge uses the current first-pass AASHTO-compatible shear/torsion route; ACI/Building uses the current ACI-compatible route.")
+            st.write("- Solid sections use root-sum-square stress interaction; hollow sections use linear sum interaction based on the available section void geometry.")
+            st.write("- Provided transverse reinforcement is taken from the active transverse/stirrup zone as (Av + 2At)/s; no reinforcement is silently assumed.")
+            st.write("- Longitudinal combined V+T reinforcement, closed-hoop anchorage/detailing, AASHTO MCFT final β/θ calibration, and benchmark verification remain future gates before final PASS wording.")
         st.caption(
-            "This tab is intentionally separated from the shear tab because combined shear + torsion is a different design decision. "
-            "When Tu is active, separate shear and torsion checks must not be treated as a combined-interaction PASS."
+            "This tab is intentionally separated from the shear and torsion tabs because combined shear + torsion is a different design decision. "
+            "Separate shear and torsion checks must not be treated as a combined-interaction final PASS."
         )
 
     with st.expander("ULS demand table — audit / source data", expanded=False):

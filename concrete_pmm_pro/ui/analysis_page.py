@@ -5725,7 +5725,8 @@ def _beam_uls_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str,
     if df.empty:
         return None
     df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
-    df["__tu"] = pd.to_numeric(df.get("Tu kN-m"), errors="coerce").abs()
+    tu_source = df["Tu kN-m"] if "Tu kN-m" in df.columns else pd.Series([float("nan")] * len(df), index=df.index)
+    df["__tu"] = pd.to_numeric(tu_source, errors="coerce").abs()
     status_priority = {"FAIL": 4, "DATA REQUIRED": 3, "PASS — REVIEW": 2, "NOT APPLICABLE": 0}
     df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 1))
     idx = df.sort_values(["__status_priority", "__dc", "__tu"], ascending=[False, False, False]).index[0]
@@ -5753,6 +5754,167 @@ def _beam_uls_combined_vt_source_readiness_notes(vt_df: pd.DataFrame | None) -> 
         if note and note not in notes:
             notes.append(note)
     return notes[:5]
+
+
+def _beam_uls_combined_vt_has_finite_utilization(vt_df: pd.DataFrame | None) -> bool:
+    if vt_df is None or vt_df.empty:
+        return False
+    for column in ["Stress D/C value", "Transverse D/C value", "Longitudinal D/C value", "Overall D/C value"]:
+        if column in vt_df.columns and pd.to_numeric(vt_df[column], errors="coerce").notna().any():
+            return True
+    return False
+
+
+def _beam_uls_combined_vt_source_readiness_dataframe(vt_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Return station-level source readiness diagnostics for incomplete V+T rows."""
+
+    columns = ["Station x", "Case", "Status", "Stress source", "Transverse source", "Longitudinal source", "Notes"]
+    if vt_df is None or vt_df.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "Station x": "-",
+                    "Case": "-",
+                    "Status": "DATA REQUIRED",
+                    "Stress source": "No combined V+T rows produced",
+                    "Transverse source": "No combined V+T rows produced",
+                    "Longitudinal source": "No combined V+T rows produced",
+                    "Notes": "Check active ULS rows, nonzero Tu demand, section/material input, and reinforcement layouts.",
+                }
+            ],
+            columns=columns,
+        )
+    rows: list[dict[str, object]] = []
+    for _, row in vt_df.iterrows():
+        status = str(row.get("Status") or "-")
+        if status not in {"DATA REQUIRED", "FAIL"}:
+            continue
+
+        stress_status = str(row.get("Stress status") or "-")
+        transverse_status = str(row.get("Transverse status") or "-")
+        longitudinal_status = str(row.get("Longitudinal status") or "-")
+        if status == "FAIL" and not any(value in {"DATA REQUIRED", "LAYOUT REQUIRED", "NOT CHECKED"} for value in [stress_status, transverse_status, longitudinal_status]):
+            continue
+
+        def _source_label(gate_status: str, ready_label: str, missing_label: str) -> str:
+            return ready_label if gate_status in {"PASS", "NOT ACTIVE"} else missing_label
+
+        rows.append(
+            {
+                "Station x": str(row.get("Governing x") or "-"),
+                "Case": str(row.get("Case") or "-"),
+                "Status": status,
+                "Stress source": _source_label(stress_status, "Ready", "Missing section/material, web width/depth, shear capacity, or torsion hoop geometry"),
+                "Transverse source": _source_label(transverse_status, "Ready", "Missing active stirrup/closed-hoop zone or finite Av+2At source terms"),
+                "Longitudinal source": _source_label(longitudinal_status, "Ready", "Missing/insufficient active ordinary rebar intended as torsion longitudinal Al"),
+                "Notes": str(row.get("Notes") or ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _make_beam_uls_combined_vt_utilization_figure(vt_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+    fig = go.Figure()
+    if vt_df is None or vt_df.empty:
+        fig.add_annotation(
+            text="No combined shear + torsion rows. Press Calculate Shear + Torsion after ULS demand rows are ready.",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            xref="paper",
+            yref="paper",
+        )
+        fig.update_layout(
+            title={"text": f"Combined Shear + Torsion Utilization — Strength ULS<br><sup>{code_label} · no rows</sup>"},
+            xaxis_title="Distance from left end of member (m)",
+            yaxis_title="Demand / Capacity ratio",
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5),
+        )
+        return fig
+
+    plot_df = vt_df.copy()
+    plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+    plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
+    plot_df = plot_df[plot_df["__x_m"].notna()].copy()
+    plot_df = plot_df[plot_df.get("Status", pd.Series(index=plot_df.index, dtype=object)).astype(str) != "NOT APPLICABLE"].copy()
+    traces = [
+        ("Stress interaction D/C", "Stress D/C value"),
+        ("Transverse reinforcement D/C", "Transverse D/C value"),
+        ("Longitudinal Al D/C", "Longitudinal D/C value"),
+    ]
+    has_trace = False
+    if not plot_df.empty:
+        plot_df = plot_df.sort_values(["Case", "__x_m"], kind="stable")
+        for case_name, case_df in plot_df.groupby("Case", sort=False):
+            for trace_name, column in traces:
+                values = pd.to_numeric(case_df.get(column), errors="coerce")
+                if values.notna().any():
+                    fig.add_trace(
+                        go.Scatter(
+                            x=case_df["__x_m"],
+                            y=values,
+                            mode="lines+markers",
+                            name=f"{trace_name} — {case_name}",
+                            line={"width": 3},
+                            marker={"size": 7},
+                            hovertemplate="x=%{x:.3f} m<br>D/C=%{y:.3f}<extra></extra>",
+                        )
+                    )
+                    has_trace = True
+
+    if has_trace:
+        x_values = pd.to_numeric(plot_df["__x_m"], errors="coerce").dropna().astype(float)
+        x_min = float(x_values.min()) if not x_values.empty else 0.0
+        x_max = float(x_values.max()) if not x_values.empty and float(x_values.max()) > x_min else x_min + 1.0
+        fig.add_trace(
+            go.Scatter(
+                x=[x_min, x_max],
+                y=[1.0, 1.0],
+                mode="lines",
+                name="Limit D/C = 1.0",
+                line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
+                hovertemplate="Limit D/C = 1.0<extra></extra>",
+            )
+        )
+        governing = _beam_uls_governing_combined_vt_row(vt_df)
+        if governing is not None:
+            x_text = str(governing.get("Governing x") or "").replace(" m", "")
+            x_val = _beam_uls_float(x_text)
+            dc = _beam_uls_float(governing.get("Overall D/C value"))
+            status = str(governing.get("Status") or "REVIEW")
+            if math.isfinite(x_val) and math.isfinite(dc):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[x_val],
+                        y=[dc],
+                        mode="markers+text",
+                        text=[f"{status} · D/C {dc:.3f}"],
+                        textposition="top center",
+                        name="Governing V+T check",
+                        marker={"symbol": "diamond", "size": 12},
+                        hovertemplate="x=%{x:.3f} m<br>Governing D/C=%{y:.3f}<extra></extra>",
+                    )
+                )
+    else:
+        fig.add_annotation(
+            text="Combined V+T utilization diagram is not available until finite D/C source terms are ready.",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            xref="paper",
+            yref="paper",
+        )
+
+    fig.update_layout(
+        title={"text": f"Combined Shear + Torsion Utilization — Strength ULS<br><sup>{code_label}</sup>"},
+        xaxis_title="Distance from left end of member (m)",
+        yaxis_title="Demand / Capacity ratio",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.35, xanchor="center", x=0.5),
+        margin=dict(l=30, r=20, t=70, b=90),
+    )
+    return fig
 
 
 def _beam_uls_combined_vt_audit_dataframe(vt_df: pd.DataFrame | None) -> pd.DataFrame:
@@ -6753,6 +6915,20 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
                 {"title": "Longitudinal Al review", "value": _format_beam_uls_ratio(governing_vt.get("Longitudinal D/C value")), "detail": str(governing_vt.get("Longitudinal status") or "ordinary rebar source"), "status": "danger" if str(governing_vt.get("Longitudinal status")) == "FAIL" else ("warning" if str(governing_vt.get("Longitudinal status")) in {"LAYOUT REQUIRED", "NOT CHECKED"} else "info")},
             ]
             _render_analysis_summary_strip(vt_cards, columns=4)
+            if _beam_uls_combined_vt_has_finite_utilization(combined_vt_df):
+                st.plotly_chart(
+                    _make_beam_uls_combined_vt_utilization_figure(combined_vt_df, code_label=code_label),
+                    use_container_width=True,
+                )
+                st.caption("Combined V+T is plotted as utilization ratio versus station because Vu and Tu have different units. The red dashed line is the D/C = 1.0 check limit.")
+            else:
+                st.info("Combined V+T utilization diagram is hidden until finite stress/transverse/longitudinal D/C source terms are ready.")
+
+            readiness_detail_df = _beam_uls_combined_vt_source_readiness_dataframe(combined_vt_df)
+            if not readiness_detail_df.empty:
+                st.caption("Source readiness detail")
+                st.dataframe(readiness_detail_df, use_container_width=True, hide_index=True)
+
             if status == "FAIL":
                 st.error("Combined shear + torsion review check fails at the governing station. Review section size, stirrup layout, and torsion hoop geometry before any final design claim.")
             elif status == "DATA REQUIRED":

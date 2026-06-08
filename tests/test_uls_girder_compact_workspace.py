@@ -7,7 +7,9 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_check_table,
     _beam_uls_combined_vt_audit_dataframe,
     _beam_uls_combined_vt_check_dataframe,
+    _beam_uls_combined_vt_source_readiness_dataframe,
     _beam_uls_combined_vt_source_readiness_notes,
+    _make_beam_uls_combined_vt_utilization_figure,
     _beam_uls_flexure_audit_dataframe,
     _beam_uls_flexure_analysis_input_for_station,
     _beam_uls_flexure_capacity_state_key,
@@ -1588,11 +1590,34 @@ def test_uls_vt2_1_calculate_shear_torsion_builds_internal_source_rows() -> None
     assert _beam_uls_combined_vt_source_readiness_notes(result["combined_vt_df"]) == []
 
 
+def test_uls_vt2_2_combined_vt_utilization_figure_plots_dc_and_limit() -> None:
+    vt = pd.DataFrame(
+        [
+            {"Status": "PASS — REVIEW", "Governing x": "2.000 m", "Case": "Strength I", "Stress D/C value": 0.25, "Transverse D/C value": 0.55, "Longitudinal D/C value": 0.65, "Overall D/C value": 0.65},
+            {"Status": "FAIL", "Governing x": "5.000 m", "Case": "Strength I", "Stress D/C value": 1.15, "Transverse D/C value": 0.60, "Longitudinal D/C value": 0.70, "Overall D/C value": 1.15},
+        ]
+    )
+
+    fig = _make_beam_uls_combined_vt_utilization_figure(vt, code_label="AASHTO LRFD")
+
+    names = {str(trace.name) for trace in fig.data}
+    assert "Stress interaction D/C — Strength I" in names
+    assert "Transverse reinforcement D/C — Strength I" in names
+    assert "Longitudinal Al D/C — Strength I" in names
+    assert "Limit D/C = 1.0" in names
+    limit = next(trace for trace in fig.data if trace.name == "Limit D/C = 1.0")
+    assert limit.mode == "lines"
+    assert limit.line.dash == "dash"
+    assert any(trace.name == "Governing V+T check" for trace in fig.data)
+
+
 def test_uls_vt2_1_source_readiness_notes_explain_data_required_rows() -> None:
     vt = pd.DataFrame(
         [
             {
                 "Status": "DATA REQUIRED",
+                "Governing x": "7.000 m",
+                "Case": "ULS-G1",
                 "Stress status": "DATA REQUIRED",
                 "Transverse status": "DATA REQUIRED",
                 "Longitudinal status": "LAYOUT REQUIRED",
@@ -1602,7 +1627,13 @@ def test_uls_vt2_1_source_readiness_notes_explain_data_required_rows() -> None:
     )
 
     notes = _beam_uls_combined_vt_source_readiness_notes(vt)
+    readiness = _beam_uls_combined_vt_source_readiness_dataframe(vt)
 
     assert any("Stress interaction source data" in note for note in notes)
     assert any("Transverse source data" in note for note in notes)
     assert any("Longitudinal Al source" in note for note in notes)
+    assert not readiness.empty
+    assert readiness.iloc[0]["Station x"] == "7.000 m"
+    assert "Missing section/material" in readiness.iloc[0]["Stress source"]
+    assert "Missing active stirrup" in readiness.iloc[0]["Transverse source"]
+    assert "Missing/insufficient" in readiness.iloc[0]["Longitudinal source"]

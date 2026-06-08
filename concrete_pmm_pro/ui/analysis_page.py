@@ -4785,6 +4785,8 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
                 y=y_values,
                 mode="markers+lines",
                 name=f"φMn",
+                line={"color": "red", "dash": "dash", "width": 3},
+                marker={"color": "red", "size": 7},
                 hovertemplate="x=%{x:.3f} m<br>φMn=%{y:.3f} kN-m<extra></extra>",
             )
         )
@@ -4856,8 +4858,28 @@ def _make_beam_uls_shear_capacity_figure(
         for case_name, case_df in plot_df.groupby("Case", sort=False):
             x_values = [float(value) for value in case_df["__x_m"].tolist()]
             vn_values = [float(value) for value in case_df["__phi_vn"].tolist()]
-            fig.add_trace(go.Scatter(x=x_values, y=vn_values, mode="markers+lines", name="φVn", hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>"))
-            fig.add_trace(go.Scatter(x=x_values, y=[-v for v in vn_values], mode="lines", name="-φVn", hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>"))
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=vn_values,
+                    mode="markers+lines",
+                    name="φVn",
+                    line={"color": "red", "dash": "dash", "width": 3},
+                    marker={"color": "red", "size": 7},
+                    hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=[-v for v in vn_values],
+                    mode="markers+lines",
+                    name="-φVn",
+                    line={"color": "red", "dash": "dash", "width": 3},
+                    marker={"color": "red", "size": 7},
+                    hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>",
+                )
+            )
             vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
             if any(math.isfinite(value) for value in vc_values):
                 fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))

@@ -611,33 +611,54 @@ def _ensure_reinforcement_flags_for_preset(preset: dict[str, Any]) -> None:
         st.session_state[REINFORCEMENT_FLAGS_PRESET_KEY] = preset_key
 
 
+def _store_reinforcement_flags_metadata() -> None:
+    """Mirror section-level steel-system switches into project metadata.
+
+    The checkbox widget keys remain owned by Streamlit.  This helper only copies
+    their current values so save/load round-trip and downstream pages see the
+    same include-rebar/include-prestress decision immediately.
+    """
+
+    metadata = dict(st.session_state.get("project_metadata", {}) or {})
+    for flag_name in (ORDINARY_REBAR_FLAG_KEY, PRESTRESSING_STEEL_FLAG_KEY, REINFORCEMENT_FLAGS_PRESET_KEY):
+        if flag_name in st.session_state:
+            metadata[flag_name] = st.session_state[flag_name]
+    st.session_state["project_metadata"] = metadata
+
+
 def _render_reinforcement_prestress_system_panel(preset: dict[str, Any]) -> None:
-    """Render section-level rebar/prestress participation switches."""
+    """Render visible section-level rebar/prestress participation switches."""
 
     _ensure_reinforcement_flags_for_preset(preset)
     default_rebar, default_prestress = _default_reinforcement_flags_for_preset(preset)
     family_label = _girder_section_family_label(preset)
-    st.markdown("##### Reinforcement / Prestress System")
+    st.markdown("##### Section Steel Systems")
     st.markdown(
-        '<div class="cpmm-section-note">Choose which internal steel systems belong to this section. '
-        'Disabling a system preserves the existing input table but excludes it from previews and analysis input assembly.</div>',
+        '<div class="cpmm-section-note">Choose which internal steel systems are included in this section analysis. '
+        'Disabling a system preserves existing Rebar/Prestress input tables but excludes that system from analysis input assembly. '
+        'For precast girders, enable ordinary rebar when mild longitudinal bars or torsion Al are part of the design model.</div>',
         unsafe_allow_html=True,
     )
     col1, col2 = st.columns(2)
     with col1:
         st.checkbox(
-            "Ordinary rebar in this section",
+            "Include ordinary rebar / longitudinal Al",
             value=ordinary_rebar_enabled(st.session_state, default=default_rebar),
             key=ORDINARY_REBAR_FLAG_KEY,
-            help="When disabled, stored Rebar rows are kept but ignored by PMM/SLS analysis and hidden from the default section preview.",
+            help=(
+                "When disabled, stored ordinary Rebar rows are kept but ignored by PMM/SLS analysis. "
+                "Enable this for precast girders when mild longitudinal bars should participate in flexure/effective d or torsion Al review."
+            ),
         )
     with col2:
         st.checkbox(
-            "Prestressing steel in this section",
+            "Include prestressing steel",
             value=prestressing_steel_enabled(st.session_state, default=default_prestress),
             key=PRESTRESSING_STEEL_FLAG_KEY,
             help="When disabled, stored Prestress rows/strand layout data are kept but ignored by analysis and hidden from the default section preview.",
         )
+
+    _store_reinforcement_flags_metadata()
 
     rebar_status = "Enabled" if ordinary_rebar_enabled(st.session_state, default=default_rebar) else "Disabled"
     ps_status = "Enabled" if prestressing_steel_enabled(st.session_state, default=default_prestress) else "Disabled"
@@ -645,7 +666,7 @@ def _render_reinforcement_prestress_system_panel(preset: dict[str, Any]) -> None
         _kv_panel_html(
             [
                 ("Selected section family", family_label),
-                ("Ordinary rebar", rebar_status),
+                ("Ordinary rebar / longitudinal Al", rebar_status),
                 ("Prestressing steel", ps_status),
                 ("Default for this preset", f"Rebar {'ON' if default_rebar else 'OFF'} / Prestress {'ON' if default_prestress else 'OFF'}"),
             ]
@@ -1392,10 +1413,12 @@ def _render_section_definition_panel(
             "Geometry inputs are edited in the definition workspace below."
         )
 
-        with st.expander("Project / workflow / axis / reinforcement details", expanded=False):
+        with st.container(border=True):
+            _render_reinforcement_prestress_system_panel(preset)
+
+        with st.expander("Project / workflow / axis details", expanded=False):
             _render_member_type_section_guidance(preset)
             _render_axis_convention_card()
-            _render_reinforcement_prestress_system_panel(preset)
 
         with st.expander("Browse by geometry family", expanded=False):
             st.caption(

@@ -496,7 +496,9 @@ def test_section_builder_definition_workspace_layout_source() -> None:
     source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
 
     assert "Section Workspace Status" in source
-    assert "Project / workflow / axis / reinforcement details" in source
+    assert "Section Steel Systems" in source
+    assert "Project / workflow / axis details" in source
+    assert "Include ordinary rebar / longitudinal Al" in source
     assert "Primary section dimensions are kept at the same level as the live preview" in source
     assert "Dimension labels" in source
     assert "material controls are in the details expander" in source

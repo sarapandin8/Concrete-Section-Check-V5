@@ -982,3 +982,64 @@ def test_uls_shear3_1_critical_marker_is_visible_even_when_phi_vn_not_ready() ->
     assert set(critical["Status"]) == {"LAYOUT REQUIRED"}
     assert any(str(note).find("active stirrup zone covers the critical section") >= 0 for note in critical["Notes"])
     assert any(trace.name == "Critical section for shear loading" for trace in fig.data)
+
+
+def test_uls_shear4_manual_effective_d_dv_drives_shear_capacity_and_critical_offset() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_system_settings": {"span_length_m": 20.0},
+        "beam_girder_shear_depth_settings": {
+            "mode": "Manual effective d / dv",
+            "d_mm": 520.0,
+            "dv_mm": 480.0,
+            "note": "test design depth",
+        },
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Full span",
+                "x_start_m": 0.0,
+                "x_end_m": 20.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "provided",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "Strength I", "Mux": 10.0, "Vuy": 300.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 10.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 0.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 20.0, "Case Name": "Strength I", "Mux": 10.0, "Vuy": -300.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+    critical = _beam_uls_shear_critical_section_dataframe(state, active, strength_route=route)
+
+    assert set(round(float(value), 1) for value in shear["d mm"].dropna()) == {520.0}
+    assert set(round(float(value), 1) for value in shear["dv mm"].dropna()) == {480.0}
+    assert set(round(float(value), 3) for value in critical["Critical offset m"].dropna()) == {0.48}
+    assert "Manual" in str(shear.iloc[0]["Notes"])

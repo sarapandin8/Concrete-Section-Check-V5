@@ -41,6 +41,9 @@ REBAR_DEFAULT_MATERIAL_BY_SIZE = {
 # design is detailed by stirrup regions, not by per-station manual entries.
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
 SHEAR_REINFORCEMENT_VALID_KEY = "beam_girder_shear_reinforcement_valid"
+SHEAR_DEPTH_SETTINGS_KEY = "beam_girder_shear_depth_settings"
+SHEAR_DEPTH_MODE_AUTO = "Auto from reinforcement centroid"
+SHEAR_DEPTH_MODE_MANUAL = "Manual effective d / dv"
 SHEAR_REINFORCEMENT_COLUMNS = [
     "Active",
     "Zone",
@@ -911,6 +914,115 @@ def _shear_reinforcement_column_config() -> dict[str, Any]:
     }
 
 
+
+def _shear_depth_settings_from_state() -> dict[str, Any]:
+    """Return Beam/Girder effective shear-depth settings stored in metadata.
+
+    Analysis remains read-only.  These settings live with the section/rebar
+    definition because d and dv are section/detailing design parameters, not ULS
+    load inputs.
+    """
+
+    raw = st.session_state.get(SHEAR_DEPTH_SETTINGS_KEY)
+    if raw is None:
+        raw = (st.session_state.get("project_metadata", {}) or {}).get(SHEAR_DEPTH_SETTINGS_KEY)
+    if not isinstance(raw, dict):
+        raw = {}
+    mode = str(raw.get("mode") or SHEAR_DEPTH_MODE_AUTO)
+    if mode not in {SHEAR_DEPTH_MODE_AUTO, SHEAR_DEPTH_MODE_MANUAL}:
+        mode = SHEAR_DEPTH_MODE_AUTO
+    def _num(value: Any) -> float | None:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return numeric if pd.notna(numeric) and numeric > 0.0 else None
+    return {
+        "mode": mode,
+        "d_mm": _num(raw.get("d_mm")),
+        "dv_mm": _num(raw.get("dv_mm")),
+        "note": str(raw.get("note") or "").strip(),
+    }
+
+
+def _store_shear_depth_settings_metadata(settings: dict[str, Any]) -> None:
+    clean = {
+        "mode": str(settings.get("mode") or SHEAR_DEPTH_MODE_AUTO),
+        "d_mm": settings.get("d_mm"),
+        "dv_mm": settings.get("dv_mm"),
+        "note": str(settings.get("note") or "").strip(),
+    }
+    st.session_state[SHEAR_DEPTH_SETTINGS_KEY] = clean
+    metadata = dict(st.session_state.get("project_metadata", {}) or {})
+    metadata[SHEAR_DEPTH_SETTINGS_KEY] = clean
+    st.session_state["project_metadata"] = metadata
+
+
+def _render_effective_shear_depth_settings() -> None:
+    st.markdown("#### Beam/Girder Effective Shear Depth Basis")
+    st.caption(
+        "Define the source of effective d / dv used by Analysis → ULS Shear. "
+        "Auto mode derives d from the active reinforcement/strand centroid and derives dv for the AASHTO route; manual mode lets the engineer lock audited design-depth values."
+    )
+    current = _shear_depth_settings_from_state()
+    mode_options = [SHEAR_DEPTH_MODE_AUTO, SHEAR_DEPTH_MODE_MANUAL]
+    mode = st.radio(
+        "Effective depth input mode",
+        options=mode_options,
+        index=mode_options.index(current["mode"]),
+        horizontal=True,
+        key="beam_girder_shear_depth_mode",
+        help="Use manual mode only when d/dv has been checked from the section detailing. Analysis reads this setting but does not own the input.",
+    )
+    col_d, col_dv, col_note = st.columns([1.0, 1.0, 2.0], gap="small")
+    with col_d:
+        d_mm = st.number_input(
+            "Manual d (mm)",
+            min_value=0.0,
+            value=float(current.get("d_mm") or 0.0),
+            step=10.0,
+            format="%.1f",
+            disabled=mode != SHEAR_DEPTH_MODE_MANUAL,
+            key="beam_girder_shear_depth_d_mm",
+            help="Effective depth to tension reinforcement/strand centroid. Used directly for ACI shear and as the d basis for bridge dv derivation when dv is not manually supplied.",
+        )
+    with col_dv:
+        dv_mm = st.number_input(
+            "Manual dv (mm)",
+            min_value=0.0,
+            value=float(current.get("dv_mm") or 0.0),
+            step=10.0,
+            format="%.1f",
+            disabled=mode != SHEAR_DEPTH_MODE_MANUAL,
+            key="beam_girder_shear_depth_dv_mm",
+            help="Effective shear depth for AASHTO/bridge shear. Leave as 0 to let the app derive dv from d and section depth in auto/bridge route.",
+        )
+    with col_note:
+        note = st.text_input(
+            "Depth basis note",
+            value=str(current.get("note") or ""),
+            disabled=mode != SHEAR_DEPTH_MODE_MANUAL,
+            key="beam_girder_shear_depth_note",
+            placeholder="e.g. d from centroid of bottom strand group; dv per project design basis",
+        )
+    settings = {
+        "mode": mode,
+        "d_mm": float(d_mm) if mode == SHEAR_DEPTH_MODE_MANUAL and float(d_mm) > 0.0 else None,
+        "dv_mm": float(dv_mm) if mode == SHEAR_DEPTH_MODE_MANUAL and float(dv_mm) > 0.0 else None,
+        "note": note if mode == SHEAR_DEPTH_MODE_MANUAL else "",
+    }
+    _store_shear_depth_settings_metadata(settings)
+    if mode == SHEAR_DEPTH_MODE_AUTO:
+        st.info("Auto mode: Analysis will calculate d from active longitudinal reinforcement/prestress centroid at the local tension face and derive dv for the bridge/AASHTO route. Review the d/dv values in the Shear audit table.")
+    else:
+        if not settings["d_mm"]:
+            st.warning("Manual mode is selected but manual d is not defined. Analysis will fall back to the auto d basis until a positive d is entered.")
+        elif settings["dv_mm"]:
+            st.success(f"Manual effective depth basis stored: d = {settings['d_mm']:.1f} mm, dv = {settings['dv_mm']:.1f} mm.")
+        else:
+            st.warning(f"Manual d = {settings['d_mm']:.1f} mm is stored, but manual dv is blank. Bridge/AASHTO shear will derive dv from d and section depth.")
+
+
 def _store_shear_reinforcement_metadata(table: pd.DataFrame) -> None:
     metadata = dict(st.session_state.get("project_metadata", {}) or {})
     metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(table).to_dict(orient="records")
@@ -940,6 +1052,8 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
         RebarMetric("Final use", "Provided layout", "Auto minimum will be a design aid only"),
     ]
     st.markdown(_strip_html(cards), unsafe_allow_html=True)
+
+    _render_effective_shear_depth_settings()
 
     action_cols = st.columns([1.0, 1.0, 3.0], gap="small")
     with action_cols[0]:

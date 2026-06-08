@@ -228,6 +228,8 @@ PMM_3D_LAYER_DEFAULTS = {
 # beam_uls_loads_table read-only and does not duplicate ULS input.
 BEAM_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Station x (m)", "Case Name", "Mux", "Vuy", "Tu", "Muy", "Vux", "Nu", "Note"]
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
+SHEAR_DEPTH_SETTINGS_KEY = "beam_girder_shear_depth_settings"
+SHEAR_DEPTH_MODE_MANUAL = "Manual effective d / dv"
 _BEAM_ULS_DEMAND_TOL = 1.0e-9
 _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS = 24
 _GIRDER_STRAND_FPU_MPA_DEFAULT = 1860.0
@@ -3330,7 +3332,95 @@ def _beam_uls_reinforcement_y_centroid_for_face(analysis_input: AnalysisInput, *
     return sum(y * a for y, a in candidates if a > 0.0) / area
 
 
-def _beam_uls_effective_shear_depth_mm(analysis_input: AnalysisInput, *, mux_kNm: float, strength_route: BeamGirderUlsStrengthRoute) -> tuple[float | None, str, str]:
+
+def _beam_uls_shear_depth_settings_from_state(state: Mapping[str, object] | None) -> dict[str, object]:
+    raw: object = None
+    if state is not None:
+        raw = _beam_uls_get_state_value(state, SHEAR_DEPTH_SETTINGS_KEY, None)
+        if raw is None:
+            raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get(SHEAR_DEPTH_SETTINGS_KEY)
+    if not isinstance(raw, Mapping):
+        raw = {}
+    mode = str(raw.get("mode") or "Auto from reinforcement centroid")
+    if mode != SHEAR_DEPTH_MODE_MANUAL:
+        mode = "Auto from reinforcement centroid"
+    def _positive(value: object) -> float | None:
+        numeric = _beam_uls_float(value)
+        return float(numeric) if math.isfinite(numeric) and numeric > 0.0 else None
+    return {
+        "mode": mode,
+        "d_mm": _positive(raw.get("d_mm")),
+        "dv_mm": _positive(raw.get("dv_mm")),
+        "note": str(raw.get("note") or "").strip(),
+    }
+
+
+def _beam_uls_bridge_dv_from_depth_mm(d_eff_mm: float, h_mm: float) -> float:
+    """Return the current first-pass AASHTO-compatible dv estimate.
+
+    This preserves the existing SHEAR1/2 behavior while making the d/dv basis
+    explicit and reusable for critical-section placement, cards, and audit rows.
+    """
+
+    if not all(math.isfinite(value) and value > 0.0 for value in [d_eff_mm, h_mm]):
+        return float("nan")
+    return max(0.72 * float(h_mm), min(0.90 * float(d_eff_mm), float(d_eff_mm)))
+
+
+def _beam_uls_effective_shear_depth_values_mm(
+    state: Mapping[str, object] | None,
+    analysis_input: AnalysisInput,
+    *,
+    mux_kNm: float,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    """Return explicit d/dv values and basis notes for the local shear station."""
+
+    d_eff_mm, tension_face, d_note = _beam_uls_effective_shear_depth_mm(
+        analysis_input,
+        mux_kNm=mux_kNm,
+        strength_route=strength_route,
+        state=state,
+    )
+    try:
+        _, y_min, _, y_max = _beam_uls_section_bounds(analysis_input.section_geometry)
+        h_mm = float(y_max) - float(y_min)
+    except Exception:
+        h_mm = float("nan")
+    settings = _beam_uls_shear_depth_settings_from_state(state)
+    dv_manual = settings.get("dv_mm")
+    if strength_route.is_bridge:
+        if dv_manual is not None and math.isfinite(float(dv_manual)) and float(dv_manual) > 0.0:
+            dv_mm = float(dv_manual)
+            dv_note = "Manual dv read from Sections → Rebar effective shear depth basis."
+            if settings.get("note"):
+                dv_note += f" Basis note: {settings.get('note')}"
+        elif d_eff_mm is not None and math.isfinite(float(d_eff_mm)) and math.isfinite(h_mm) and h_mm > 0.0:
+            dv_mm = _beam_uls_bridge_dv_from_depth_mm(float(d_eff_mm), float(h_mm))
+            dv_note = "dv derived from the active d and section depth using the current first-pass AASHTO-compatible basis."
+        else:
+            dv_mm = float("nan")
+            dv_note = "dv unavailable: d or section depth is not ready."
+    else:
+        dv_mm = float("nan")
+        dv_note = "ACI route uses d for this first-pass one-way shear check; dv is not separately used."
+    return {
+        "d_mm": d_eff_mm,
+        "dv_mm": dv_mm,
+        "h_mm": h_mm,
+        "tension_face": tension_face,
+        "d_note": d_note,
+        "dv_note": dv_note,
+    }
+
+
+def _beam_uls_effective_shear_depth_mm(
+    analysis_input: AnalysisInput,
+    *,
+    mux_kNm: float,
+    strength_route: BeamGirderUlsStrengthRoute,
+    state: Mapping[str, object] | None = None,
+) -> tuple[float | None, str, str]:
     """Estimate effective shear depth for the local station.
 
     The estimate is derived from the local bending sign and active reinforcement
@@ -3347,17 +3437,36 @@ def _beam_uls_effective_shear_depth_mm(analysis_input: AnalysisInput, *, mux_kNm
     if h <= 0.0:
         return None, "-", "Effective depth unavailable: invalid section depth."
     tension_face = "top" if _beam_uls_float(mux_kNm) < -_BEAM_ULS_DEMAND_TOL else "bottom"
+    settings = _beam_uls_shear_depth_settings_from_state(state)
+    manual_d = settings.get("d_mm")
+    if settings.get("mode") == SHEAR_DEPTH_MODE_MANUAL and manual_d is not None:
+        if 0.0 < float(manual_d) <= 1.05 * h:
+            note = "Effective d read from Sections → Rebar manual effective shear depth basis."
+            if settings.get("note"):
+                note += f" Basis note: {settings.get('note')}"
+            return float(manual_d), f"{tension_face} face", note
+        # Invalid manual values must not silently govern capacity; fall back to
+        # auto and keep the issue visible in the audit notes.
+        manual_note = f"Manual d = {manual_d} mm is outside a reasonable section-depth range; auto d basis used instead."
+    else:
+        manual_note = ""
     y_tension = _beam_uls_reinforcement_y_centroid_for_face(analysis_input, tension_face=tension_face)
     if y_tension is None:
         d_eff = 0.80 * h
-        return float(d_eff), f"{tension_face} face", "Effective depth estimated as 0.80h because no active tension reinforcement centroid was available."
+        note = "Effective depth estimated as 0.80h because no active tension reinforcement centroid was available."
+        if manual_note:
+            note = manual_note + " " + note
+        return float(d_eff), f"{tension_face} face", note
     if tension_face == "top":
         d_eff = float(y_tension) - float(y_min)
     else:
         d_eff = float(y_max) - float(y_tension)
     # Guard against pathological centroids without hiding the basis.
     d_eff = min(max(float(d_eff), 0.50 * h), 0.95 * h)
-    return d_eff, f"{tension_face} face", "Effective depth estimated from active reinforcement centroid at local tension face."
+    note = "Effective depth estimated from active reinforcement centroid at local tension face."
+    if manual_note:
+        note = manual_note + " " + note
+    return d_eff, f"{tension_face} face", note
 
 
 def _beam_uls_shear_reinforcement_dataframe_from_state(state: Mapping[str, object]) -> pd.DataFrame:
@@ -3653,8 +3762,16 @@ def _beam_uls_shear_result_for_row(
     concrete = analysis_input.concrete_material
     fc = float(concrete.fc_MPa)
     bw_mm, bw_note = _beam_uls_web_width_mm(analysis_input.section_geometry)
-    d_eff_mm, tension_face, d_note = _beam_uls_effective_shear_depth_mm(analysis_input, mux_kNm=mux_kNm, strength_route=strength_route)
-    notes.extend([bw_note, d_note])
+    depth_values = _beam_uls_effective_shear_depth_values_mm(
+        state,
+        analysis_input,
+        mux_kNm=mux_kNm,
+        strength_route=strength_route,
+    )
+    d_eff_mm = depth_values.get("d_mm")
+    dv_eff_mm = depth_values.get("dv_mm")
+    tension_face = str(depth_values.get("tension_face") or "-")
+    notes.extend([bw_note, str(depth_values.get("d_note") or ""), str(depth_values.get("dv_note") or "")])
     if bw_mm is None or d_eff_mm is None or fc <= 0.0:
         return {
             "Check": "Shear",
@@ -3692,12 +3809,11 @@ def _beam_uls_shear_result_for_row(
     avs_mm2_per_mm = float(stirrup_area) * float(legs) / float(spacing)
     if strength_route.is_bridge:
         phi = 0.90
-        dv_mm = max(0.72 * (float(_beam_uls_section_bounds(analysis_input.section_geometry)[3]) - float(_beam_uls_section_bounds(analysis_input.section_geometry)[1])), min(0.90 * float(d_eff_mm), float(d_eff_mm)))
         vc_factor = 0.17
         method = "AASHTO LRFD-compatible simplified sectional shear (θ=45° first-pass)"
         code_basis = "φVn — AASHTO LRFD-compatible"
         phi_policy = "AASHTO LRFD shear resistance factor φ = 0.90"
-        depth_for_vs = dv_mm
+        depth_for_vs = float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) and float(dv_eff_mm) > 0.0 else float(d_eff_mm)
         depth_label = "dv"
         notes.append("Detailed MCFT β/θ calibration and benchmark verification are pending.")
     else:
@@ -3786,6 +3902,7 @@ def _beam_uls_shear_result_for_row(
         "bw mm": float(bw_mm),
         f"{depth_label} mm": float(depth_for_vs),
         "d mm": float(d_eff_mm),
+        "dv mm": float(depth_for_vs) if depth_label == "dv" else (float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) else float("nan")),
         "Tension face": tension_face,
         "φ": phi,
         "Code basis": code_basis,
@@ -3976,23 +4093,18 @@ def _beam_uls_shear_default_critical_section_rows(
             if analysis_input is None:
                 continue
             mux_kNm = _beam_uls_float(support_row.get("Mux"))
-            d_eff_mm, _tension_face, _d_note = _beam_uls_effective_shear_depth_mm(
+            depth_values = _beam_uls_effective_shear_depth_values_mm(
+                state,
                 analysis_input,
                 mux_kNm=mux_kNm,
                 strength_route=strength_route,
             )
+            d_eff_mm = depth_values.get("d_mm")
             if d_eff_mm is None or not math.isfinite(float(d_eff_mm)) or float(d_eff_mm) <= 0.0:
                 continue
             if strength_route.is_bridge:
-                try:
-                    _, y_min, _, y_max = _beam_uls_section_bounds(analysis_input.section_geometry)
-                    h_mm = float(y_max) - float(y_min)
-                except Exception:
-                    h_mm = float("nan")
-                if math.isfinite(h_mm) and h_mm > 0.0:
-                    offset_mm = max(0.72 * h_mm, min(0.90 * float(d_eff_mm), float(d_eff_mm)))
-                else:
-                    offset_mm = float(d_eff_mm)
+                dv_eff_mm = depth_values.get("dv_mm")
+                offset_mm = float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) and float(dv_eff_mm) > 0.0 else float(d_eff_mm)
             else:
                 offset_mm = float(d_eff_mm)
             offset_m = min(max(float(offset_mm) / 1000.0, 0.0), 0.50 * float(span_m))
@@ -4885,10 +4997,13 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         shear_result = _beam_uls_governing_shear_row(shear_check_df)
         if shear_result is not None:
             shear_status = str(shear_result.get("Status") or "REVIEW")
+            d_text = _format_beam_uls_audit_number(shear_result.get("d mm"), unit="mm")
+            dv_text = _format_beam_uls_audit_number(shear_result.get("dv mm"), unit="mm")
+            depth_detail = f"d {d_text}" + (f" · dv {dv_text}" if dv_text != "-" else "")
             shear_cards = [
                 {"title": "Shear status", "value": shear_status, "detail": f"Strength {shear_result.get('Strength status', '-')} · Detailing {shear_result.get('Detailing status', '-')}", "status": "danger" if shear_status == "FAIL" else ("ready" if shear_status == "PASS" else "warning"), "strong": True},
                 {"title": "Governing Vu / D/C", "value": f"{shear_result.get('Demand', '-')} · {shear_result.get('Utilization', '-')}", "detail": f"{shear_result.get('Case', '-')} @ x={shear_result.get('Governing x', '-')}", "status": "info"},
-                {"title": "Shear capacity", "value": str(shear_result.get("Capacity") or "-"), "detail": str(shear_result.get("Stirrup") or "Active stirrup zone"), "status": "info"},
+                {"title": "Shear capacity", "value": str(shear_result.get("Capacity") or "-"), "detail": f"{shear_result.get('Stirrup') or 'Active stirrup zone'} · {depth_detail}", "status": "info"},
                 {"title": "Detailing guard", "value": str(shear_result.get("Detailing status") or "-"), "detail": f"Av/s min {_format_beam_uls_audit_number(shear_result.get('Av/s required mm2/m'), unit='mm²/m')} · smax {_format_beam_uls_audit_number(shear_result.get('s max mm'), unit='mm')}", "status": "danger" if str(shear_result.get("Detailing status")) == "FAIL" else ("ready" if str(shear_result.get("Detailing status")) == "PASS" else "warning")},
             ]
         else:
@@ -4945,6 +5060,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         with st.expander("Shear method notes", expanded=False):
             st.write(f"- Shear route: {strength_route.shear_basis_note}")
             st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
+            st.write("- Effective d / dv is read from Sections → Rebar effective shear depth basis when manually defined; otherwise d is estimated from the active reinforcement/prestress centroid and dv is derived for the AASHTO route.")
             st.write("- Critical shear section rows are inserted at approximately d from each support for ACI and dv from each support for AASHTO; their demand is interpolated from active ULS station rows and they are considered for governing shear D/C.")
             st.write("- The detailing guard screens provided Av/s against a first-pass minimum and checks stirrup spacing against a first-pass maximum; failed guards downgrade the shear status.")
             st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, high-shear spacing triggers, prestress shear effects, and benchmark calibration are added.")

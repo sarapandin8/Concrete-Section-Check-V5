@@ -1532,6 +1532,10 @@ def test_uls_vt1_combined_shear_torsion_review_check_produces_stress_and_transve
     assert not design_rows.empty
     assert design_rows["Stress D/C value"].notna().any()
     assert design_rows["Transverse D/C value"].notna().any()
+    assert design_rows["Longitudinal D/C value"].notna().any()
+    assert "Longitudinal status" in design_rows.columns
     assert "PASS — REVIEW" in set(design_rows["Status"]) or "FAIL" in set(design_rows["Status"])
     assert not audit.empty
     assert "(Av+2At)/s req" in audit.columns
+    assert "Al req" in audit.columns
+    assert "Al provided" in audit.columns

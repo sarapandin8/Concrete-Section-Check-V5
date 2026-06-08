@@ -62,6 +62,24 @@ DEFAULT_SHEAR_STIRRUP_LEGS = 2
 DEFAULT_SHEAR_STIRRUP_SPACING_MM = 150.0
 DEFAULT_SHEAR_STIRRUP_FY_MPA = 400.0
 
+# TORSION2 — dedicated review-only source of truth for longitudinal torsion
+# reinforcement around the closed-hoop perimeter.  Analysis reads this table but
+# does not own or edit it.
+TORSION_LONGITUDINAL_TABLE_KEY = "beam_girder_torsion_longitudinal_reinforcement_table"
+TORSION_LONGITUDINAL_VALID_KEY = "beam_girder_torsion_longitudinal_reinforcement_valid"
+TORSION_LONGITUDINAL_COLUMNS = [
+    "Active",
+    "Location",
+    "Bar Size",
+    "Diameter_mm",
+    "Count",
+    "fy_MPa",
+    "Note",
+]
+TORSION_LONGITUDINAL_BAR_OPTIONS = ["DB10", "DB12", "DB16", "DB20", "DB25", "DB28", "DB32"]
+DEFAULT_TORSION_LONGITUDINAL_BAR = "DB16"
+DEFAULT_TORSION_LONGITUDINAL_FY_MPA = 400.0
+
 REBAR_TABLE_COLUMNS = [
     "Active",
     "Label",
@@ -1023,6 +1041,190 @@ def _render_effective_shear_depth_settings() -> None:
             st.warning(f"Manual d = {settings['d_mm']:.1f} mm is stored, but manual dv is blank. Bridge/AASHTO shear will derive dv from d and section depth.")
 
 
+def _default_torsion_longitudinal_table() -> pd.DataFrame:
+    rows = [
+        ("Corner bars", 4, "Inactive template — activate when corner longitudinal torsion bars are provided."),
+        ("Top perimeter", 0, "Inactive template — add bars distributed along top side if required."),
+        ("Bottom perimeter", 0, "Inactive template — add bars distributed along bottom side if required."),
+        ("Left web", 0, "Inactive template — add web-side longitudinal torsion bars if required."),
+        ("Right web", 0, "Inactive template — add web-side longitudinal torsion bars if required."),
+    ]
+    return pd.DataFrame(
+        [
+            {
+                "Active": False,
+                "Location": location,
+                "Bar Size": DEFAULT_TORSION_LONGITUDINAL_BAR,
+                "Diameter_mm": 16.0,
+                "Count": count,
+                "fy_MPa": DEFAULT_TORSION_LONGITUDINAL_FY_MPA,
+                "Note": note,
+            }
+            for location, count, note in rows
+        ],
+        columns=TORSION_LONGITUDINAL_COLUMNS,
+    )
+
+
+def _ensure_torsion_longitudinal_columns(df: pd.DataFrame) -> pd.DataFrame:
+    table = df.copy()
+    for column in TORSION_LONGITUDINAL_COLUMNS:
+        if column not in table.columns:
+            table[column] = None
+    return table[TORSION_LONGITUDINAL_COLUMNS]
+
+
+def _normalize_torsion_longitudinal_table(edited_df: pd.DataFrame, previous_df: pd.DataFrame | None, rebar_db: pd.DataFrame) -> pd.DataFrame:
+    table = _ensure_torsion_longitudinal_columns(edited_df)
+    previous = _ensure_torsion_longitudinal_columns(previous_df) if previous_df is not None else pd.DataFrame(columns=TORSION_LONGITUDINAL_COLUMNS)
+    for index, row in table.iterrows():
+        bar_size = _normalized_bar_size(row.get("Bar Size")) or DEFAULT_TORSION_LONGITUDINAL_BAR
+        if bar_size not in TORSION_LONGITUDINAL_BAR_OPTIONS:
+            bar_size = DEFAULT_TORSION_LONGITUDINAL_BAR
+            table.at[index, "Bar Size"] = bar_size
+        default_diameter = _diameter_from_database(bar_size, rebar_db) or 16.0
+        previous_bar = _previous_bar_size(previous, index)
+        if bar_size != previous_bar or _is_blank(row.get("Diameter_mm")):
+            table.at[index, "Diameter_mm"] = default_diameter
+        if _is_blank(row.get("Count")):
+            table.at[index, "Count"] = 0
+        if _is_blank(row.get("fy_MPa")):
+            table.at[index, "fy_MPa"] = DEFAULT_TORSION_LONGITUDINAL_FY_MPA
+        if _is_blank(row.get("Active")):
+            table.at[index, "Active"] = False
+    return table
+
+
+def _torsion_longitudinal_column_config() -> dict[str, Any]:
+    return {
+        "Active": st.column_config.CheckboxColumn("Active", help="Only active rows are used as provided longitudinal torsion reinforcement in Analysis."),
+        "Location": st.column_config.TextColumn("Location", help="Perimeter location, e.g. corner bars, top, bottom, left web, right web."),
+        "Bar Size": st.column_config.SelectboxColumn("Bar Size", options=TORSION_LONGITUDINAL_BAR_OPTIONS, help="Database bar size. Diameter is auto-filled when the bar size changes."),
+        "Diameter_mm": st.column_config.NumberColumn("Diameter (mm)", min_value=0.0, step=1.0, format="%.1f"),
+        "Count": st.column_config.NumberColumn("Count", min_value=0, step=1, format="%d"),
+        "fy_MPa": st.column_config.NumberColumn("fy (MPa)", min_value=0.0, step=10.0, format="%.1f"),
+        "Note": st.column_config.TextColumn("Note"),
+    }
+
+
+def _torsion_longitudinal_preview_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
+    table = _ensure_torsion_longitudinal_columns(df)
+    rows: list[dict[str, object]] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    active_count = 0
+    total_area = 0.0
+    for index, row in table.iterrows():
+        row_number = int(index) + 1
+        if all(_is_blank(row.get(column)) for column in ["Location", "Bar Size", "Diameter_mm", "Count", "Note"]):
+            continue
+        active = _to_bool(row.get("Active"))
+        if active:
+            active_count += 1
+        diameter = _to_float(row.get("Diameter_mm"))
+        count = _to_count(row.get("Count"))
+        fy = _to_float(row.get("fy_MPa"))
+        row_errors: list[str] = []
+        if diameter is None or diameter <= 0.0:
+            row_errors.append("diameter must be positive")
+        if count is None or count < 0:
+            row_errors.append("count must be a nonnegative integer")
+        if fy is None or fy <= 0.0:
+            row_errors.append("fy must be positive")
+        area = None
+        if not row_errors:
+            area = 3.141592653589793 * float(diameter) ** 2 / 4.0 * float(count)
+            if active:
+                total_area += area
+        else:
+            errors.append(f"Row {row_number}: " + "; ".join(row_errors) + ".")
+        rows.append(
+            {
+                "Active": active,
+                "Location": str(row.get("Location") or f"Location {row_number}"),
+                "Bars": f"{count if count is not None else '-'}-{row.get('Bar Size') or '-'}",
+                "fy (MPa)": fy if fy is not None else "-",
+                "Al provided (mm²)": area if area is not None else "-",
+                "Note": str(row.get("Note") or ""),
+            }
+        )
+    if active_count == 0:
+        warnings.append("No active longitudinal torsion reinforcement rows are confirmed yet. Torsion longitudinal status will remain LAYOUT REQUIRED when Tu requires torsion design.")
+    return pd.DataFrame(rows), errors, warnings
+
+
+def _store_torsion_longitudinal_metadata(table: pd.DataFrame) -> None:
+    metadata = dict(st.session_state.get("project_metadata", {}) or {})
+    metadata[TORSION_LONGITUDINAL_TABLE_KEY] = _ensure_torsion_longitudinal_columns(table).to_dict(orient="records")
+    st.session_state["project_metadata"] = metadata
+
+
+def _render_torsion_longitudinal_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
+    st.markdown("#### Beam/Girder Torsion Longitudinal Reinforcement Layout")
+    st.caption(
+        "Define provided longitudinal bars distributed around the closed-hoop perimeter. "
+        "Analysis → ULS Torsion reads Active rows for a review-only Al check; final torsion certification still requires closed-hoop detailing and combined shear + torsion interaction."
+    )
+    if TORSION_LONGITUDINAL_TABLE_KEY not in st.session_state:
+        existing = (st.session_state.get("project_metadata", {}) or {}).get(TORSION_LONGITUDINAL_TABLE_KEY)
+        if isinstance(existing, list):
+            st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = _ensure_torsion_longitudinal_columns(pd.DataFrame(existing))
+        else:
+            st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = _default_torsion_longitudinal_table()
+    st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = _ensure_torsion_longitudinal_columns(pd.DataFrame(st.session_state[TORSION_LONGITUDINAL_TABLE_KEY]))
+
+    cols = st.columns([1.0, 1.0, 3.0], gap="small")
+    with cols[0]:
+        if st.button("Reset torsion Al template", use_container_width=True, key="torsion_longitudinal_reset_template"):
+            st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = _default_torsion_longitudinal_table()
+            _store_torsion_longitudinal_metadata(st.session_state[TORSION_LONGITUDINAL_TABLE_KEY])
+            st.rerun()
+    with cols[1]:
+        if st.button("Activate corner row", use_container_width=True, key="torsion_longitudinal_activate_corners"):
+            table = _ensure_torsion_longitudinal_columns(pd.DataFrame(st.session_state[TORSION_LONGITUDINAL_TABLE_KEY]))
+            if not table.empty:
+                table.at[0, "Active"] = True
+            st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = table
+            _store_torsion_longitudinal_metadata(table)
+            st.rerun()
+    with cols[2]:
+        st.info("Use Active only for bars actually detailed around the torsion hoop perimeter. Do not count flexural bars unless they are intentionally part of the torsion longitudinal system.")
+
+    previous = st.session_state.get(TORSION_LONGITUDINAL_TABLE_KEY)
+    edited = st.data_editor(
+        _ensure_torsion_longitudinal_columns(pd.DataFrame(previous)),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=_torsion_longitudinal_column_config(),
+        key="beam_girder_torsion_longitudinal_editor",
+    )
+    normalized = _normalize_torsion_longitudinal_table(edited, pd.DataFrame(previous), rebar_db)
+    st.session_state[TORSION_LONGITUDINAL_TABLE_KEY] = normalized
+    _store_torsion_longitudinal_metadata(normalized)
+
+    preview_df, errors, warnings = _torsion_longitudinal_preview_dataframe(normalized)
+    st.session_state[TORSION_LONGITUDINAL_VALID_KEY] = not errors and not warnings
+    with st.expander("Torsion longitudinal reinforcement status", expanded=bool(errors or warnings)):
+        active_rows = int(sum(_to_bool(value) for value in normalized.get("Active", []))) if not normalized.empty else 0
+        cols = st.columns(4)
+        cols[0].metric("Rows", f"{len(normalized):,}")
+        cols[1].metric("Active rows", f"{active_rows:,}")
+        cols[2].metric("Errors", f"{len(errors):,}")
+        cols[3].metric("Default bar", DEFAULT_TORSION_LONGITUDINAL_BAR)
+        for error in errors:
+            st.error(error)
+        for warning in warnings:
+            st.warning(warning)
+        if not errors and not warnings:
+            st.success("Longitudinal torsion reinforcement layout is ready for review-only Al comparison in Analysis → ULS Torsion.")
+    st.markdown("##### Al provided preview")
+    if preview_df.empty:
+        st.info("No longitudinal torsion reinforcement rows are defined yet.")
+    else:
+        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+
 def _store_shear_reinforcement_metadata(table: pd.DataFrame) -> None:
     metadata = dict(st.session_state.get("project_metadata", {}) or {})
     metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(table).to_dict(orient="records")
@@ -1140,6 +1342,8 @@ def render_rebar_page() -> None:
         st.session_state["rebars_valid_for_analysis"] = True
         st.divider()
         _render_shear_reinforcement_layout(rebar_db)
+        st.divider()
+        _render_torsion_longitudinal_reinforcement_layout(rebar_db)
         return
 
     if "rebar_table" not in st.session_state:
@@ -1258,3 +1462,5 @@ def render_rebar_page() -> None:
 
     st.divider()
     _render_shear_reinforcement_layout(rebar_db)
+    st.divider()
+    _render_torsion_longitudinal_reinforcement_layout(rebar_db)

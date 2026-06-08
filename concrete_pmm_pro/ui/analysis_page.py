@@ -4392,7 +4392,7 @@ def _beam_uls_torsion_diagram_boundary_dataframe(
                     or column.endswith("mm2")
                     or column.endswith("mm")
                     or column.endswith("mm2/mm")
-                    or column in {"D/C value", "θ deg", "cotθ", "φ"}
+                    or column in {"D/C value", "Al utilization", "θ deg", "cotθ", "φ"}
                     else "-",
                 )
             phi_tn = _beam_uls_float(result.get("φTn kN-m"))
@@ -4562,6 +4562,63 @@ def _beam_uls_torsion_hoop_geometry(
     }
 
 
+def _beam_uls_torsion_longitudinal_table_from_state(state: Mapping[str, object]) -> pd.DataFrame:
+    raw = _beam_uls_get_state_value(state, TORSION_LONGITUDINAL_TABLE_KEY)
+    if raw is None:
+        metadata = _beam_uls_get_state_value(state, "project_metadata", {})
+        if isinstance(metadata, Mapping):
+            raw = metadata.get(TORSION_LONGITUDINAL_TABLE_KEY)
+    table = pd.DataFrame(raw if raw is not None else [], columns=TORSION_LONGITUDINAL_COLUMNS)
+    for column in TORSION_LONGITUDINAL_COLUMNS:
+        if column not in table.columns:
+            table[column] = None
+    return table[TORSION_LONGITUDINAL_COLUMNS].copy()
+
+
+def _beam_uls_torsion_longitudinal_review(state: Mapping[str, object], al_req_mm2: float) -> dict[str, object]:
+    if not math.isfinite(float(al_req_mm2)) or float(al_req_mm2) <= 0.0:
+        return {
+            "status": "NOT CHECKED",
+            "provided_mm2": float("nan"),
+            "utilization": float("nan"),
+            "description": "Longitudinal torsion reinforcement is not required by the current first-pass torsion row.",
+        }
+    table = _beam_uls_torsion_longitudinal_table_from_state(state)
+    if table.empty:
+        return {
+            "status": "LAYOUT REQUIRED",
+            "provided_mm2": 0.0,
+            "utilization": float("nan"),
+            "description": "Define active longitudinal torsion reinforcement in Sections → Rebar.",
+        }
+    provided = 0.0
+    active_rows = 0
+    for _, row in table.iterrows():
+        if not _beam_uls_active_value(row.get("Active")):
+            continue
+        diameter = _beam_uls_float(row.get("Diameter_mm"))
+        count = _beam_uls_float(row.get("Count"))
+        if not all(math.isfinite(value) and value > 0.0 for value in [diameter, count]):
+            continue
+        active_rows += 1
+        provided += math.pi * float(diameter) ** 2 / 4.0 * float(count)
+    if active_rows == 0 or provided <= 0.0:
+        return {
+            "status": "LAYOUT REQUIRED",
+            "provided_mm2": provided,
+            "utilization": float("nan"),
+            "description": "No active longitudinal torsion reinforcement rows are provided.",
+        }
+    utilization = float(al_req_mm2) / provided if provided > 0.0 else float("nan")
+    status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 + 1.0e-9 else "FAIL"
+    return {
+        "status": status,
+        "provided_mm2": provided,
+        "utilization": utilization,
+        "description": f"Active torsion longitudinal rows: {active_rows}; Al,req/Al,prov = {_format_beam_uls_ratio(utilization)}.",
+    }
+
+
 def _beam_uls_torsion_result_for_row(
     state: Mapping[str, object],
     row: Mapping[str, object],
@@ -4692,6 +4749,8 @@ def _beam_uls_torsion_result_for_row(
             "At mm2": stirrup_area,
             "At/s mm2/mm": float("nan"),
             "Al req mm2": float("nan"),
+            "Al provided mm2": float("nan"),
+            "Al utilization": float("nan"),
             "Zone": str(zone.get("Zone") if zone is not None else "-"),
             "Stirrup": "-" if zone is None else f"{zone.get('Bar Size') or '-'} closed hoop @ {spacing:.0f} mm",
             "φ": phi,
@@ -4710,11 +4769,14 @@ def _beam_uls_torsion_result_for_row(
     phi_tn_kNm = phi * tn_nmm / 1.0e6
     utilization = abs(float(tu_kNm)) / phi_tn_kNm if phi_tn_kNm > 0.0 else float("nan")
     transverse_status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 + 1.0e-9 else "FAIL"
-    # Approximate longitudinal torsion steel demand is exposed for review only;
-    # no provided longitudinal torsion layout is certified in TORSION1.
+    # First-pass longitudinal torsion steel demand from the closed-hoop truss
+    # relationship. Provided longitudinal bars are checked from the dedicated
+    # Sections → Rebar torsion longitudinal table, but the overall torsion check
+    # remains REVIEW until hoop detailing and combined V+T interaction are added.
     al_req = at_per_s * ph * cot_theta * cot_theta if math.isfinite(ph) and ph > 0.0 else float("nan")
-    longitudinal_status = "REVIEW"
-    if transverse_status == "FAIL":
+    longitudinal_review = _beam_uls_torsion_longitudinal_review(state, al_req)
+    longitudinal_status = str(longitudinal_review.get("status") or "REVIEW")
+    if transverse_status == "FAIL" or longitudinal_status == "FAIL":
         status = "FAIL"
     elif threshold_status == "BELOW THRESHOLD":
         status = "BELOW THRESHOLD"
@@ -4722,7 +4784,8 @@ def _beam_uls_torsion_result_for_row(
         status = "REVIEW"
     if legs and math.isfinite(float(legs)):
         notes.append("Torsion At is taken as one closed-hoop bar area per spacing; shear leg count is not multiplied into At.")
-    notes.append("Longitudinal torsion reinforcement and closed-hoop detailing are reported as REVIEW, not certified PASS, in TORSION1.")
+    notes.append(str(longitudinal_review.get("description") or ""))
+    notes.append("Longitudinal torsion reinforcement is area-reviewed in TORSION2, but closed-hoop detailing and combined shear + torsion interaction are still not certified PASS.")
 
     return {
         "Check": "Torsion",
@@ -4750,6 +4813,8 @@ def _beam_uls_torsion_result_for_row(
         "At mm2": at_mm2,
         "At/s mm2/mm": at_per_s,
         "Al req mm2": al_req,
+        "Al provided mm2": longitudinal_review.get("provided_mm2", float("nan")),
+        "Al utilization": longitudinal_review.get("utilization", float("nan")),
         "Zone": str(zone.get("Zone") or "Zone"),
         "Stirrup": f"{zone.get('Bar Size') or '-'} closed hoop @ {float(spacing):.0f} mm",
         "θ deg": theta_deg,
@@ -4772,7 +4837,7 @@ def _beam_uls_torsion_check_dataframe(
     columns = [
         "Check", "Status", "Transverse status", "Longitudinal status", "Threshold status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
         "Demand kN-m", "Abs demand kN-m", "φTn kN-m", "φTcr kN-m", "Tn kN-m", "D/C value",
-        "Acp mm2", "Pcp mm", "Aoh mm2", "Ao mm2", "ph mm", "Hoop offset mm", "At mm2", "At/s mm2/mm", "Al req mm2",
+        "Acp mm2", "Pcp mm", "Aoh mm2", "Ao mm2", "ph mm", "Hoop offset mm", "At mm2", "At/s mm2/mm", "Al req mm2", "Al provided mm2", "Al utilization",
         "Zone", "Stirrup", "θ deg", "cotθ", "φ", "Code basis", "φ policy", "Method", "Threshold basis", "Notes",
     ]
     if active_df.empty:
@@ -4788,7 +4853,7 @@ def _beam_uls_torsion_check_dataframe(
                 or column.endswith("mm2")
                 or column.endswith("mm")
                 or column.endswith("mm2/mm")
-                or column in {"D/C value", "θ deg", "cotθ", "φ"}
+                or column in {"D/C value", "Al utilization", "θ deg", "cotθ", "φ"}
                 else "-",
             )
         rows.append(result)
@@ -4815,7 +4880,7 @@ def _beam_uls_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[str
 def _beam_uls_torsion_audit_dataframe(torsion_df: pd.DataFrame | None) -> pd.DataFrame:
     columns = [
         "Governing", "Station x", "Case", "Status", "Threshold", "Transverse", "Longitudinal", "Tu demand", "φTn", "φTcr", "D/C",
-        "Zone", "Stirrup", "At", "At/s", "Ao", "Aoh", "Acp", "Pcp", "ph", "Hoop offset", "Al req", "θ", "φ", "Code basis", "Method", "Notes",
+        "Zone", "Stirrup", "At", "At/s", "Ao", "Aoh", "Acp", "Pcp", "ph", "Hoop offset", "Al req", "Al provided", "Al D/C", "θ", "φ", "Code basis", "Method", "Notes",
     ]
     if torsion_df is None or torsion_df.empty:
         return pd.DataFrame(columns=columns)
@@ -4855,6 +4920,8 @@ def _beam_uls_torsion_audit_dataframe(torsion_df: pd.DataFrame | None) -> pd.Dat
                 "ph": _format_beam_uls_audit_number(row.get("ph mm"), unit="mm"),
                 "Hoop offset": _format_beam_uls_audit_number(row.get("Hoop offset mm"), unit="mm"),
                 "Al req": _format_beam_uls_audit_number(row.get("Al req mm2"), unit="mm²"),
+                "Al provided": _format_beam_uls_audit_number(row.get("Al provided mm2"), unit="mm²"),
+                "Al D/C": _format_beam_uls_ratio(row.get("Al utilization")),
                 "θ": _format_beam_uls_audit_number(row.get("θ deg"), unit="°"),
                 "φ": _format_beam_uls_ratio(row.get("φ")),
                 "Code basis": str(row.get("Code basis") or "-"),
@@ -5194,6 +5261,8 @@ _BEAM_ULS_DEMAND_MARKER_STYLE = {"color": "#1f77b4", "size": 7}
 # station resultants. Use this convention for future beam/girder design diagrams.
 _BEAM_ULS_CHECK_LINE_STYLE = {"color": "red", "dash": "dash", "width": 3}
 _BEAM_ULS_REFERENCE_LINE_STYLE = {"color": "orange", "dash": "dash", "width": 3}
+TORSION_LONGITUDINAL_TABLE_KEY = "beam_girder_torsion_longitudinal_reinforcement_table"
+TORSION_LONGITUDINAL_COLUMNS = ["Active", "Location", "Bar Size", "Diameter_mm", "Count", "fy_MPa", "Note"]
 
 
 def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title: str, y_label: str) -> go.Figure:

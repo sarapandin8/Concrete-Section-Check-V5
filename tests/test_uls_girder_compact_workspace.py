@@ -12,8 +12,11 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_shear_detailing_guard,
     _beam_uls_shear_reinforcement_status_dataframe,
     _beam_uls_summary_cards,
+    _beam_uls_torsion_audit_dataframe,
+    _beam_uls_torsion_check_dataframe,
     _beam_uls_torsion_interaction_status,
     _make_beam_uls_shear_capacity_figure,
+    _make_beam_uls_torsion_capacity_figure,
 )
 
 
@@ -51,7 +54,7 @@ def test_uls_girder1_check_table_reports_governing_primary_actions_and_planned_c
     assert flexure["Capacity"] == "-"
     assert flexure["Utilization"] == "-"
     assert shear["Case"] == "END"
-    assert torsion["Status"] == "PLANNED"
+    assert torsion["Status"] == "LAYOUT REQUIRED"
 
 
 def test_uls_girder1_empty_state_is_not_ready_without_fake_pass() -> None:
@@ -948,7 +951,7 @@ def test_uls_ui2_shear_torsion_interaction_status_does_not_fake_pass() -> None:
 
     assert no_torsion_status["value"] == "Not applicable — Tu not active"
     assert no_torsion_status["status"] == "neutral"
-    assert with_torsion_status["value"] == "CHECK REQUIRED — torsion interaction not implemented"
+    assert with_torsion_status["value"] == "CHECK REQUIRED — shear + torsion interaction not implemented"
     assert with_torsion_status["status"] == "warning"
     assert "45.00 kN-m" in with_torsion_status["detail"]
     assert "Do not certify" in with_torsion_status["detail"]
@@ -1156,3 +1159,153 @@ def test_uls_shear4_1_critical_markers_use_station_depth_when_support_input_path
     assert len(critical) == 2
     assert set(critical["Station type"]) == {"CRITICAL SHEAR SECTION"}
     assert any(trace.name == "Critical section for shear loading" for trace in fig.data)
+
+
+def test_uls_torsion1_aci_route_reports_first_pass_phi_tn_without_fake_final_pass() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Closed hoop zone",
+                "x_start_m": 0.0,
+                "x_end_m": 6.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "provided closed stirrup for first-pass torsion",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 3.0, "Case Name": "ACI19-ULS-2", "Mux": 100.0, "Vuy": 20.0, "Tu": 10.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19")
+
+    torsion = _beam_uls_torsion_check_dataframe(state, active, strength_route=route)
+
+    row = torsion.iloc[0]
+    assert row["Status"] in {"REVIEW", "BELOW THRESHOLD"}
+    assert row["Transverse status"] in {"PASS", "THRESHOLD OK"}
+    assert row["Longitudinal status"] in {"REVIEW", "NOT CHECKED"}
+    assert row["φTn kN-m"] > 0.0
+    assert row["D/C value"] > 0.0
+    assert row["φ"] == 0.75
+    assert "ACI 318" in row["Code basis"]
+    assert "Longitudinal torsion" in row["Notes"]
+
+
+def test_uls_torsion1_bridge_and_building_routes_use_different_phi() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=400.0, y=0.0),
+            Point2D(x=400.0, y=900.0),
+            Point2D(x=0.0, y=900.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C40", fc_MPa=40.0),
+        "rebars": [Rebar(x_mm=200.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40")],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Support", "x_start_m": 0.0, "x_end_m": 10.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 200.0, "fy_MPa": 400.0, "Note": "provided"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 2.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 20.0, "Tu": 20.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    bridge = _beam_uls_torsion_check_dataframe(state, active, strength_route=beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD"))
+    building = _beam_uls_torsion_check_dataframe(state, active, strength_route=beam_girder_uls_strength_route(is_bridge=False, is_building=True, code_edition="ACI 318-19"))
+
+    assert bridge.iloc[0]["φ"] == 0.90
+    assert building.iloc[0]["φ"] == 0.75
+    assert bridge.iloc[0]["φTn kN-m"] > building.iloc[0]["φTn kN-m"]
+    assert "AASHTO" in bridge.iloc[0]["Code basis"]
+    assert "ACI" in building.iloc[0]["Code basis"]
+
+
+def test_uls_torsion1_figure_uses_unmarked_red_check_lines_and_marked_demand() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": 5.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 0.0, "Vuy": 0.0, "Tu": -10.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    torsion = pd.DataFrame(
+        [
+            {"Status": "REVIEW", "Governing x": "0.000 m", "Case": "Strength I", "Demand kN-m": 5.0, "Abs demand kN-m": 5.0, "φTn kN-m": 40.0, "φTcr kN-m": 8.0, "D/C value": 0.125},
+            {"Status": "REVIEW", "Governing x": "5.000 m", "Case": "Strength I", "Demand kN-m": -10.0, "Abs demand kN-m": 10.0, "φTn kN-m": 40.0, "φTcr kN-m": 8.0, "D/C value": 0.25},
+        ]
+    )
+
+    fig = _make_beam_uls_torsion_capacity_figure(active, torsion, code_label="AASHTO LRFD")
+
+    demand = next(trace for trace in fig.data if str(trace.name).startswith("Demand Tu"))
+    phi_tn = next(trace for trace in fig.data if trace.name == "φTn")
+    assert demand.mode == "lines+markers"
+    assert phi_tn.mode == "lines"
+    assert phi_tn.line.color == "red"
+    assert phi_tn.line.dash == "dash"
+
+
+def test_uls_codeverify1_aci_318_19_uses_chapter_22_basis_not_legacy_chapter_11() -> None:
+    from concrete_pmm_pro.analysis.uls_shear_torsion_code_basis import ACI_318_19_CHAPTER_BASIS
+
+    assert ACI_318_19_CHAPTER_BASIS["strength_reduction_factors"] == "ACI 318-19 Chapter 21"
+    assert ACI_318_19_CHAPTER_BASIS["sectional_strength"] == "ACI 318-19 Chapter 22"
+    assert "22.5" in ACI_318_19_CHAPTER_BASIS["one_way_shear"]
+    assert "22.7" in ACI_318_19_CHAPTER_BASIS["torsional_strength"]
+    assert all("Chapter 11" not in value for value in ACI_318_19_CHAPTER_BASIS.values())
+
+
+def test_uls_codeverify1_blocks_us_aci_vc_coefficient_in_metric_calculations() -> None:
+    from concrete_pmm_pro.analysis.uls_shear_torsion_code_basis import (
+        ACI_METRIC_SIMPLIFIED_ONE_WAY_VC_FACTOR,
+        ACI_US_SIMPLIFIED_ONE_WAY_VC_FACTOR,
+        aci_metric_vc_is_unit_safe,
+    )
+
+    assert ACI_METRIC_SIMPLIFIED_ONE_WAY_VC_FACTOR == 0.17
+    assert ACI_US_SIMPLIFIED_ONE_WAY_VC_FACTOR == 2.0
+    assert aci_metric_vc_is_unit_safe(0.17)
+    assert not aci_metric_vc_is_unit_safe(2.0)
+
+
+def test_uls_codeverify1_audit_keeps_first_pass_bridge_and_psc_items_out_of_final_pass() -> None:
+    from concrete_pmm_pro.analysis.uls_shear_torsion_code_basis import audit_items_for_route
+
+    bridge_psc_items = audit_items_for_route("AASHTO_PSC")
+    assert bridge_psc_items
+    assert any(item.risk_level == "CRITICAL" for item in bridge_psc_items)
+    assert all(item.implementation_status in {"PARTIAL", "MISSING"} for item in bridge_psc_items)
+    assert any("Combined V+T" in item.check_item for item in bridge_psc_items)

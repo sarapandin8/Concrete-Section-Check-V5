@@ -83,12 +83,18 @@ def bridge_beam_girder_uls_strength_route(code_edition: object | None = None) ->
             "transverse reinforcement, and benchmark certification remain follow-up QA milestones."
         ),
         torsion_engine_label="AASHTO LRFD torsion route",
-        torsion_basis_note="Bridge torsion φTn is routed as a future AASHTO LRFD strength milestone.",
+        torsion_basis_note=(
+            "Bridge torsion uses an AASHTO LRFD-compatible first-pass closed-stirrup φTn route. "
+            "Detailed LRFD torsion calibration, longitudinal torsion reinforcement, closed-hoop detailing, "
+            "and shear+tortion interaction remain follow-up QA/design milestones."
+        ),
         overall_guard_note=(
-            "No overall Bridge ULS PASS/FAIL is issued until AASHTO LRFD torsion and required "
-            "detailing checks are implemented; flexure and first-pass sectional shear can be reviewed separately."
+            "No overall Bridge ULS certification is issued until AASHTO LRFD torsion detailing, "
+            "combined shear+tortion interaction, development, and benchmark checks are implemented; "
+            "flexure, first-pass sectional shear, and first-pass transverse torsion can be reviewed separately."
         ),
         is_code_specific_shear_ready=True,
+        is_code_specific_torsion_ready=True,
     )
 
 
@@ -119,12 +125,18 @@ def building_beam_girder_uls_strength_route(code_edition: object | None = None) 
             "and benchmark certification remain follow-up QA milestones."
         ),
         torsion_engine_label="ACI 318 torsion route",
-        torsion_basis_note="Building torsion φTn is routed as a future ACI 318 strength milestone.",
+        torsion_basis_note=(
+            "Building torsion uses an ACI 318 first-pass closed-stirrup φTn route. "
+            "Longitudinal torsion reinforcement, closed-hoop detailing, and shear+tortion interaction "
+            "remain follow-up QA/design milestones."
+        ),
         overall_guard_note=(
-            "No overall Building ULS PASS/FAIL is issued until ACI 318 torsion and required detailing "
-            "checks are implemented; flexure and first-pass sectional shear can be reviewed separately."
+            "No overall Building ULS certification is issued until ACI 318 torsion detailing, "
+            "combined shear+tortion interaction, development, and benchmark checks are implemented; "
+            "flexure, first-pass sectional shear, and first-pass transverse torsion can be reviewed separately."
         ),
         is_code_specific_shear_ready=True,
+        is_code_specific_torsion_ready=True,
     )
 
 

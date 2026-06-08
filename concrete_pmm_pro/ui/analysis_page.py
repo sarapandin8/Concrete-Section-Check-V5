@@ -4392,6 +4392,403 @@ def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFra
     return pd.DataFrame(rows, columns=columns)
 
 
+
+def _beam_uls_outer_polygon_metrics(section_geometry: SectionGeometry) -> dict[str, float | str]:
+    """Return outside-perimeter torsion geometry metrics in mm units.
+
+    Torsion threshold terms use the outside concrete perimeter quantities.  This
+    helper deliberately uses the outside polygon, not hole perimeters, so hollow
+    or voided sections do not inflate Pcp.  Dedicated multi-cell/box torsion
+    modelling remains a later milestone.
+    """
+
+    try:
+        outer_polygon = to_shapely_polygon(SectionGeometry(name=section_geometry.name, outer_polygon=section_geometry.outer_polygon, holes=[]))
+    except Exception:
+        outer_polygon = None
+    if outer_polygon is None or outer_polygon.is_empty or outer_polygon.area <= 0.0 or not outer_polygon.is_valid:
+        return {"Acp mm2": float("nan"), "Pcp mm": float("nan"), "Note": "Outside polygon torsion metrics are not available."}
+    try:
+        pcp = float(outer_polygon.exterior.length)
+    except Exception:
+        pcp = float("nan")
+    return {
+        "Acp mm2": float(outer_polygon.area),
+        "Pcp mm": pcp,
+        "Note": "Acp/Pcp from outside concrete perimeter; void perimeters are not included in Pcp.",
+    }
+
+
+def _beam_uls_torsion_hoop_geometry(
+    section_geometry: SectionGeometry,
+    *,
+    stirrup_diameter_mm: float,
+) -> dict[str, object]:
+    """Return first-pass closed-hoop torsion geometry.
+
+    The current shear reinforcement table does not yet own cover/closed-hoop
+    dimensions.  TORSION1 therefore estimates the closed transverse hoop
+    centerline by offsetting the outside polygon inward.  The assumption is
+    visible in audit output and must be replaced by a dedicated torsion layout
+    before certified torsion design.
+    """
+
+    metrics = _beam_uls_outer_polygon_metrics(section_geometry)
+    notes = [str(metrics.get("Note") or "")]
+    acp = _beam_uls_float(metrics.get("Acp mm2"))
+    pcp = _beam_uls_float(metrics.get("Pcp mm"))
+    try:
+        outer_polygon = to_shapely_polygon(SectionGeometry(name=section_geometry.name, outer_polygon=section_geometry.outer_polygon, holes=[]))
+    except Exception:
+        outer_polygon = None
+    if outer_polygon is None or outer_polygon.is_empty or outer_polygon.area <= 0.0 or not outer_polygon.is_valid:
+        return {
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": float("nan"),
+            "Ao mm2": float("nan"),
+            "ph mm": float("nan"),
+            "offset mm": float("nan"),
+            "Note": " ".join(note for note in notes if note) + " Closed-hoop centerline geometry could not be derived.",
+        }
+    minx, miny, maxx, maxy = outer_polygon.bounds
+    min_dim = min(float(maxx) - float(minx), float(maxy) - float(miny))
+    dia = float(stirrup_diameter_mm) if math.isfinite(float(stirrup_diameter_mm)) and float(stirrup_diameter_mm) > 0.0 else 12.0
+    # Conservative visible default: about 40 mm clear cover plus half stirrup
+    # diameter, but capped so small sections still produce a valid inset path.
+    offset = max(45.0 + 0.5 * dia, 0.04 * min_dim)
+    if math.isfinite(min_dim) and min_dim > 0.0:
+        offset = min(offset, 0.20 * min_dim)
+    try:
+        inset = outer_polygon.buffer(-float(offset), join_style=2)
+        if inset.is_empty or inset.area <= 0.0:
+            raise ValueError("empty inset")
+        if getattr(inset, "geoms", None):
+            inset = max(inset.geoms, key=lambda geom: float(geom.area))
+            notes.append("Inset closed-hoop path split into multiple regions; largest region used for first-pass torsion geometry.")
+        aoh = float(inset.area)
+        ph = float(inset.exterior.length)
+        ao = 0.85 * aoh
+        notes.append(f"Aoh estimated from outside polygon offset {offset:.1f} mm to the assumed closed stirrup centerline; Ao = 0.85Aoh.")
+    except Exception:
+        aoh = float("nan")
+        ph = float("nan")
+        ao = float("nan")
+        notes.append("Closed-hoop centerline offset failed; φTn is not ready until torsion hoop geometry is defined.")
+    return {
+        "Acp mm2": acp,
+        "Pcp mm": pcp,
+        "Aoh mm2": aoh,
+        "Ao mm2": ao,
+        "ph mm": ph,
+        "offset mm": float(offset),
+        "Note": " ".join(note for note in notes if note),
+    }
+
+
+def _beam_uls_torsion_result_for_row(
+    state: Mapping[str, object],
+    row: Mapping[str, object],
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> dict[str, object]:
+    """Return a first-pass code-routed torsion capacity row.
+
+    TORSION1 intentionally computes transverse closed-hoop φTn only.  It does
+    not certify longitudinal torsion reinforcement, combined V+T interaction,
+    or bridge MCFT/strut-angle calibration.
+    """
+
+    x_m = _beam_uls_float(row.get("Station x (m)"))
+    tu_kNm = _beam_uls_float(row.get("Tu"))
+    case = str(row.get("Case Name") or "-")
+    notes: list[str] = []
+    if not math.isfinite(tu_kNm) or abs(tu_kNm) <= _BEAM_ULS_DEMAND_TOL:
+        return {
+            "Check": "Torsion",
+            "Status": "NO DEMAND",
+            "Transverse status": "NO DEMAND",
+            "Longitudinal status": "NOT CHECKED",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": "-",
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": 0.0,
+            "Abs demand kN-m": 0.0,
+            "φTn kN-m": float("nan"),
+            "D/C value": float("nan"),
+            "Notes": "No finite Tu demand.",
+        }
+
+    zone = _beam_uls_active_shear_zone_for_station(state, x_m)
+    analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(state, row=row, strength_route=strength_route)
+    if input_messages:
+        notes.extend(input_messages)
+    if analysis_input is None:
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Transverse status": "NOT READY",
+            "Longitudinal status": "NOT CHECKED",
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "Abs demand kN-m": abs(float(tu_kNm)),
+            "φTn kN-m": float("nan"),
+            "D/C value": float("nan"),
+            "Notes": "; ".join(notes) or "Section/material input not ready for torsion check.",
+        }
+
+    concrete = analysis_input.concrete_material
+    fc = float(concrete.fc_MPa)
+    zone_note = ""
+    if zone is None:
+        zone_note = "No active transverse reinforcement zone covers this station; φTn from provided closed hoops is not ready."
+        stirrup_area = legs = spacing = fy = diameter = float("nan")
+    else:
+        stirrup_area = _beam_uls_stirrup_area_mm2(zone)
+        legs = _beam_uls_float(zone.get("Legs"))
+        spacing = _beam_uls_float(zone.get("Spacing_mm"))
+        fy = _beam_uls_float(zone.get("fy_MPa"))
+        diameter = _beam_uls_float(zone.get("Diameter_mm"))
+
+    geometry = _beam_uls_torsion_hoop_geometry(analysis_input.section_geometry, stirrup_diameter_mm=diameter)
+    notes.append(str(geometry.get("Note") or ""))
+    acp = _beam_uls_float(geometry.get("Acp mm2"))
+    pcp = _beam_uls_float(geometry.get("Pcp mm"))
+    ao = _beam_uls_float(geometry.get("Ao mm2"))
+    aoh = _beam_uls_float(geometry.get("Aoh mm2"))
+    ph = _beam_uls_float(geometry.get("ph mm"))
+    theta_deg = 45.0
+    cot_theta = 1.0
+
+    if strength_route.is_bridge:
+        phi = 0.90
+        code_basis = "φTn — AASHTO LRFD-compatible"
+        phi_policy = "AASHTO LRFD torsion resistance factor routed as φ = 0.90 for this first-pass check"
+        method = "AASHTO LRFD-compatible closed-stirrup torsion truss, θ = 45° first-pass"
+        threshold_basis = "AASHTO-compatible cracking torsion threshold screen"
+        notes.append("Bridge torsion is first-pass only; detailed LRFD β/θ/MCFT calibration, web-wall limits, and benchmark verification are pending.")
+    else:
+        phi = 0.75
+        code_basis = "φTn — ACI 318"
+        phi_policy = "ACI 318 torsion strength-reduction factor routed as φ = 0.75"
+        method = "ACI 318 closed-stirrup torsion truss, θ = 45° first-pass"
+        threshold_basis = "ACI 318 torsion threshold screen"
+        notes.append("ACI torsion transverse strength is checked; longitudinal torsion reinforcement and detailing checks remain separate.")
+
+    t_threshold_kNm = float("nan")
+    if all(math.isfinite(value) and value > 0.0 for value in [fc, acp, pcp]):
+        tcr_nmm = 0.083 * math.sqrt(fc) * acp * acp / pcp
+        t_threshold_kNm = phi * tcr_nmm / 1.0e6
+    threshold_status = "-"
+    if math.isfinite(t_threshold_kNm):
+        threshold_status = "BELOW THRESHOLD" if abs(float(tu_kNm)) <= t_threshold_kNm + 1.0e-9 else "DESIGN REQUIRED"
+
+    if not all(math.isfinite(value) and value > 0.0 for value in [stirrup_area, spacing, fy, ao]):
+        status = "BELOW THRESHOLD" if threshold_status == "BELOW THRESHOLD" else "LAYOUT REQUIRED"
+        return {
+            "Check": "Torsion",
+            "Status": status,
+            "Transverse status": "NOT READY" if status != "BELOW THRESHOLD" else "THRESHOLD OK",
+            "Longitudinal status": "NOT CHECKED",
+            "Threshold status": threshold_status,
+            "Governing x": _format_beam_uls_x(x_m),
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-" if status != "BELOW THRESHOLD" else f"φTcr ≈ {t_threshold_kNm:,.2f} kN-m",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "Abs demand kN-m": abs(float(tu_kNm)),
+            "φTn kN-m": float("nan"),
+            "φTcr kN-m": t_threshold_kNm,
+            "D/C value": float("nan"),
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": aoh,
+            "Ao mm2": ao,
+            "ph mm": ph,
+            "Hoop offset mm": _beam_uls_float(geometry.get("offset mm")),
+            "At mm2": stirrup_area,
+            "At/s mm2/mm": float("nan"),
+            "Al req mm2": float("nan"),
+            "Zone": str(zone.get("Zone") if zone is not None else "-"),
+            "Stirrup": "-" if zone is None else f"{zone.get('Bar Size') or '-'} closed hoop @ {spacing:.0f} mm",
+            "φ": phi,
+            "Code basis": code_basis,
+            "φ policy": phi_policy,
+            "Method": method,
+            "Threshold basis": threshold_basis,
+            "Notes": "; ".join(part for part in [zone_note, *notes] if part),
+        }
+
+    # Torsion uses the area of one closed-hoop leg, not the shear Av from two
+    # vertical legs. This is conservative for the current shared stirrup table.
+    at_mm2 = float(stirrup_area)
+    at_per_s = at_mm2 / float(spacing)
+    tn_nmm = 2.0 * float(ao) * at_per_s * float(fy) * cot_theta
+    phi_tn_kNm = phi * tn_nmm / 1.0e6
+    utilization = abs(float(tu_kNm)) / phi_tn_kNm if phi_tn_kNm > 0.0 else float("nan")
+    transverse_status = "PASS" if math.isfinite(utilization) and utilization <= 1.0 + 1.0e-9 else "FAIL"
+    # Approximate longitudinal torsion steel demand is exposed for review only;
+    # no provided longitudinal torsion layout is certified in TORSION1.
+    al_req = at_per_s * ph * cot_theta * cot_theta if math.isfinite(ph) and ph > 0.0 else float("nan")
+    longitudinal_status = "REVIEW"
+    if transverse_status == "FAIL":
+        status = "FAIL"
+    elif threshold_status == "BELOW THRESHOLD":
+        status = "BELOW THRESHOLD"
+    else:
+        status = "REVIEW"
+    if legs and math.isfinite(float(legs)):
+        notes.append("Torsion At is taken as one closed-hoop bar area per spacing; shear leg count is not multiplied into At.")
+    notes.append("Longitudinal torsion reinforcement and closed-hoop detailing are reported as REVIEW, not certified PASS, in TORSION1.")
+
+    return {
+        "Check": "Torsion",
+        "Status": status,
+        "Transverse status": transverse_status,
+        "Longitudinal status": longitudinal_status,
+        "Threshold status": threshold_status,
+        "Governing x": _format_beam_uls_x(x_m),
+        "Case": case,
+        "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+        "Capacity": f"φTn = {phi_tn_kNm:,.2f} kN-m",
+        "Utilization": _format_beam_uls_ratio(utilization),
+        "Demand kN-m": float(tu_kNm),
+        "Abs demand kN-m": abs(float(tu_kNm)),
+        "φTn kN-m": phi_tn_kNm,
+        "φTcr kN-m": t_threshold_kNm,
+        "Tn kN-m": tn_nmm / 1.0e6,
+        "D/C value": utilization,
+        "Acp mm2": acp,
+        "Pcp mm": pcp,
+        "Aoh mm2": aoh,
+        "Ao mm2": ao,
+        "ph mm": ph,
+        "Hoop offset mm": _beam_uls_float(geometry.get("offset mm")),
+        "At mm2": at_mm2,
+        "At/s mm2/mm": at_per_s,
+        "Al req mm2": al_req,
+        "Zone": str(zone.get("Zone") or "Zone"),
+        "Stirrup": f"{zone.get('Bar Size') or '-'} closed hoop @ {float(spacing):.0f} mm",
+        "θ deg": theta_deg,
+        "cotθ": cot_theta,
+        "φ": phi,
+        "Code basis": code_basis,
+        "φ policy": phi_policy,
+        "Method": method,
+        "Threshold basis": threshold_basis,
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _beam_uls_torsion_check_dataframe(
+    state: Mapping[str, object],
+    active_df: pd.DataFrame,
+    *,
+    strength_route: BeamGirderUlsStrengthRoute,
+) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Transverse status", "Longitudinal status", "Threshold status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
+        "Demand kN-m", "Abs demand kN-m", "φTn kN-m", "φTcr kN-m", "Tn kN-m", "D/C value",
+        "Acp mm2", "Pcp mm", "Aoh mm2", "Ao mm2", "ph mm", "Hoop offset mm", "At mm2", "At/s mm2/mm", "Al req mm2",
+        "Zone", "Stirrup", "θ deg", "cotθ", "φ", "Code basis", "φ policy", "Method", "Threshold basis", "Notes",
+    ]
+    if active_df.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for _, demand_row in active_df.iterrows():
+        result = _beam_uls_torsion_result_for_row(state, demand_row, strength_route=strength_route)
+        for column in columns:
+            result.setdefault(
+                column,
+                float("nan")
+                if column.endswith("kN-m")
+                or column.endswith("mm2")
+                or column.endswith("mm")
+                or column.endswith("mm2/mm")
+                or column in {"D/C value", "θ deg", "cotθ", "φ"}
+                else "-",
+            )
+        rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _beam_uls_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if torsion_df is None or torsion_df.empty:
+        return None
+    df = torsion_df.copy()
+    if "Abs demand kN-m" in df.columns:
+        df["__abs_tu"] = pd.to_numeric(df["Abs demand kN-m"], errors="coerce")
+        df = df[df["__abs_tu"].fillna(0.0) > _BEAM_ULS_DEMAND_TOL].copy()
+    if df.empty:
+        return None
+    df["__dc"] = pd.to_numeric(df.get("D/C value"), errors="coerce")
+    df["__abs_tu"] = pd.to_numeric(df.get("Abs demand kN-m"), errors="coerce")
+    status_priority = {"FAIL": 4, "LAYOUT REQUIRED": 3, "REVIEW": 2, "BELOW THRESHOLD": 1, "NO DEMAND": 0}
+    df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 0))
+    idx = df.sort_values(["__status_priority", "__dc", "__abs_tu"], ascending=[False, False, False]).index[0]
+    return torsion_df.loc[idx].drop(labels=["__dc", "__abs_tu", "__status_priority"], errors="ignore").to_dict()
+
+
+def _beam_uls_torsion_audit_dataframe(torsion_df: pd.DataFrame | None) -> pd.DataFrame:
+    columns = [
+        "Governing", "Station x", "Case", "Status", "Threshold", "Transverse", "Longitudinal", "Tu demand", "φTn", "φTcr", "D/C",
+        "Zone", "Stirrup", "At", "At/s", "Ao", "Aoh", "Acp", "Pcp", "ph", "Hoop offset", "Al req", "θ", "φ", "Code basis", "Method", "Notes",
+    ]
+    if torsion_df is None or torsion_df.empty:
+        return pd.DataFrame(columns=columns)
+    df = torsion_df.copy()
+    df["__dc"] = pd.to_numeric(df.get("D/C value"), errors="coerce")
+    df["__abs_tu"] = pd.to_numeric(df.get("Abs demand kN-m"), errors="coerce")
+    nonzero = df[df["__abs_tu"].fillna(0.0) > _BEAM_ULS_DEMAND_TOL]
+    governing_idx = None
+    if not nonzero.empty:
+        status_priority = {"FAIL": 4, "LAYOUT REQUIRED": 3, "REVIEW": 2, "BELOW THRESHOLD": 1, "NO DEMAND": 0}
+        ranked = nonzero.copy()
+        ranked["__status_priority"] = ranked.get("Status", pd.Series(index=ranked.index, dtype=object)).map(lambda value: status_priority.get(str(value), 0))
+        governing_idx = ranked.sort_values(["__status_priority", "__dc", "__abs_tu"], ascending=[False, False, False]).index[0]
+    rows: list[dict[str, object]] = []
+    for idx, row in df.iterrows():
+        rows.append(
+            {
+                "Governing": "Yes" if governing_idx is not None and idx == governing_idx else "",
+                "Station x": str(row.get("Governing x") or "-"),
+                "Case": str(row.get("Case") or "-"),
+                "Status": str(row.get("Status") or "-"),
+                "Threshold": str(row.get("Threshold status") or "-"),
+                "Transverse": str(row.get("Transverse status") or "-"),
+                "Longitudinal": str(row.get("Longitudinal status") or "-"),
+                "Tu demand": _format_beam_uls_audit_number(row.get("Demand kN-m"), unit="kN-m"),
+                "φTn": _format_beam_uls_audit_number(row.get("φTn kN-m"), unit="kN-m"),
+                "φTcr": _format_beam_uls_audit_number(row.get("φTcr kN-m"), unit="kN-m"),
+                "D/C": _format_beam_uls_ratio(row.get("D/C value")),
+                "Zone": str(row.get("Zone") or "-"),
+                "Stirrup": str(row.get("Stirrup") or "-"),
+                "At": _format_beam_uls_audit_number(row.get("At mm2"), unit="mm²"),
+                "At/s": _format_beam_uls_audit_number(row.get("At/s mm2/mm"), unit="mm²/mm"),
+                "Ao": _format_beam_uls_audit_number(row.get("Ao mm2"), unit="mm²"),
+                "Aoh": _format_beam_uls_audit_number(row.get("Aoh mm2"), unit="mm²"),
+                "Acp": _format_beam_uls_audit_number(row.get("Acp mm2"), unit="mm²"),
+                "Pcp": _format_beam_uls_audit_number(row.get("Pcp mm"), unit="mm"),
+                "ph": _format_beam_uls_audit_number(row.get("ph mm"), unit="mm"),
+                "Hoop offset": _format_beam_uls_audit_number(row.get("Hoop offset mm"), unit="mm"),
+                "Al req": _format_beam_uls_audit_number(row.get("Al req mm2"), unit="mm²"),
+                "θ": _format_beam_uls_audit_number(row.get("θ deg"), unit="°"),
+                "φ": _format_beam_uls_ratio(row.get("φ")),
+                "Code basis": str(row.get("Code basis") or "-"),
+                "Method": str(row.get("Method") or "-"),
+                "Notes": str(row.get("Notes") or ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _format_beam_uls_audit_number(value: object, *, digits: int = 2, unit: str = "") -> str:
     try:
         numeric = float(value)
@@ -4496,11 +4893,11 @@ def _beam_uls_torsion_interaction_status(active_df: pd.DataFrame) -> dict[str, s
         }
     return {
         "title": "Shear + torsion interaction",
-        "value": "CHECK REQUIRED — torsion interaction not implemented",
+        "value": "CHECK REQUIRED — shear + torsion interaction not implemented",
         "detail": (
             f"Tu = {_format_beam_uls_demand(torsion['demand'], 'kN-m')} at "
             f"x={_format_beam_uls_x(torsion['x_m'])} ({torsion['case']}). "
-            "Do not certify combined shear + torsion until a verified interaction engine is implemented."
+            "Do not certify combined shear + torsion even if separate shear and torsion checks look acceptable."
         ),
         "status": "warning",
     }
@@ -4516,6 +4913,7 @@ def _beam_uls_check_table(
     active_df: pd.DataFrame,
     flexure_preview_df: pd.DataFrame | None = None,
     shear_check_df: pd.DataFrame | None = None,
+    torsion_check_df: pd.DataFrame | None = None,
     *,
     state: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
@@ -4562,6 +4960,8 @@ def _beam_uls_check_table(
         )
 
     shear_result = _beam_uls_governing_shear_row(shear_check_df)
+    torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
+    torsion_status_text = str(torsion_result.get("Status") or "REVIEW") if torsion_result is not None else "OPTIONAL"
     if shear_result is not None:
         rows.append(
             {
@@ -4592,13 +4992,26 @@ def _beam_uls_check_table(
                 }
             )
 
-    if torsion is None or float(torsion["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
+    torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
+    if torsion_result is not None:
+        rows.append(
+            {
+                "Check": "Torsion",
+                "Status": str(torsion_result.get("Status") or "REVIEW"),
+                "Governing x": str(torsion_result.get("Governing x") or "-"),
+                "Case": str(torsion_result.get("Case") or "-"),
+                "Demand": str(torsion_result.get("Demand") or "-"),
+                "Capacity": str(torsion_result.get("Capacity") or "-"),
+                "Utilization": str(torsion_result.get("Utilization") or "-"),
+            }
+        )
+    elif torsion is None or float(torsion["abs_demand"]) <= _BEAM_ULS_DEMAND_TOL:
         rows.append({"Check": "Torsion", "Status": "OPTIONAL", "Governing x": "-", "Case": "-", "Demand": "-", "Capacity": "-", "Utilization": "-"})
     else:
         rows.append(
             {
                 "Check": "Torsion",
-                "Status": "PLANNED",
+                "Status": "LAYOUT REQUIRED",
                 "Governing x": _format_beam_uls_x(torsion["x_m"]),
                 "Case": str(torsion["case"]),
                 "Demand": _format_beam_uls_demand(torsion["demand"], "kN-m"),
@@ -4609,7 +5022,7 @@ def _beam_uls_check_table(
     return pd.DataFrame(rows, columns=["Check", "Status", "Governing x", "Case", "Demand", "Capacity", "Utilization"])
 
 
-def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str, flexure_preview_df: pd.DataFrame | None = None, shear_check_df: pd.DataFrame | None = None) -> list[dict[str, object]]:
+def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, code_label: str, flexure_preview_df: pd.DataFrame | None = None, shear_check_df: pd.DataFrame | None = None, torsion_check_df: pd.DataFrame | None = None) -> list[dict[str, object]]:
     if active_df.empty:
         return [
             {
@@ -4630,6 +5043,8 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
     shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
     shear_detail = f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy"
     shear_result = _beam_uls_governing_shear_row(shear_check_df)
+    torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
+    torsion_status_text = str(torsion_result.get("Status") or "REVIEW") if torsion_result is not None else "OPTIONAL"
     if shear_result is not None:
         shear_dc = str(shear_result.get("Utilization") or "-")
         shear_value = f"{shear_value} · D/C {shear_dc}" if shear_dc != "-" else shear_value
@@ -4642,18 +5057,18 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
         flexure_card_detail = f"{flexure_detail}; {flex_preview.get('Capacity', '-')}"
         shear_status_text = str(shear_result.get("Status") or "REVIEW") if shear_result is not None else "NOT READY"
         if shear_result is not None:
-            if status_text == "FAIL" or shear_status_text == "FAIL":
+            if status_text == "FAIL" or shear_status_text == "FAIL" or torsion_status_text == "FAIL":
                 overall_value = "ULS PARTIAL CHECK — FAIL"
                 overall_status = "danger"
-            elif status_text == "PASS" and shear_status_text == "PASS":
+            elif status_text == "PASS" and shear_status_text == "PASS" and torsion_status_text in {"OPTIONAL", "BELOW THRESHOLD"}:
                 overall_value = "ULS PARTIAL CHECK — PASS"
                 overall_status = "ready"
             else:
                 overall_value = "ULS PARTIAL CHECK — REVIEW"
                 overall_status = "warning"
             overall_detail = (
-                f"{len(active_df):,} active demand row(s). Flexure = {status_text}; shear = {shear_status_text}; "
-                "torsion/detailing remain incomplete, so no overall ULS certification is issued."
+                f"{len(active_df):,} active demand row(s). Flexure = {status_text}; shear = {shear_status_text}; torsion = {torsion_status_text}. "
+                "Combined shear+tortion, longitudinal torsion/detailing, development, and benchmark checks remain outside overall certification."
             )
         else:
             overall_value = f"FLEXURE CHECK — {status_text}"
@@ -4681,7 +5096,7 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
         {
             "title": "Design action",
             "value": "Review partial ULS checks",
-            "detail": f"Flexure and provided-stirrup shear can be reviewed now; φTn, detailing/development, and full {code_label} ULS certification remain future milestones.",
+            "detail": f"Flexure, provided-stirrup shear, and first-pass transverse torsion can be reviewed now; combined V+T, detailing/development, and full {code_label} ULS certification remain future milestones.",
             "status": "neutral",
         },
     ]
@@ -4953,6 +5368,94 @@ def _make_beam_uls_shear_capacity_figure(
     return fig
 
 
+
+def _make_beam_uls_torsion_capacity_figure(active_df: pd.DataFrame, torsion_check_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
+    fig = _make_beam_uls_demand_figure(
+        active_df,
+        column="Tu",
+        title=f"Torsion Check — Strength ULS<br><sup>{code_label}</sup>",
+        y_label="Torsion, Tu (kN-m)",
+    )
+    if torsion_check_df is None or torsion_check_df.empty:
+        fig.update_layout(title={"text": f"Torsion Check — Strength ULS<br><sup>{code_label} · demand only — φTn not ready</sup>"})
+        return fig
+    plot_df = torsion_check_df.copy()
+    plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+    plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
+    plot_df["__phi_tn"] = pd.to_numeric(plot_df.get("φTn kN-m"), errors="coerce")
+    plot_df["__phi_tcr"] = pd.to_numeric(plot_df.get("φTcr kN-m"), errors="coerce")
+    capacity_df = plot_df[plot_df["__x_m"].notna() & plot_df["__phi_tn"].notna()].copy()
+    has_capacity = not capacity_df.empty
+    if has_capacity:
+        capacity_df = capacity_df.sort_values(["Case", "__x_m"], kind="stable")
+        for case_name, case_df in capacity_df.groupby("Case", sort=False):
+            x_values = [float(value) for value in case_df["__x_m"].tolist()]
+            tn_values = [float(value) for value in case_df["__phi_tn"].tolist()]
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=tn_values,
+                    mode="lines",
+                    name="φTn",
+                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
+                    hovertemplate="x=%{x:.3f} m<br>φTn=%{y:.3f} kN-m<extra></extra>",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=[-v for v in tn_values],
+                    mode="lines",
+                    name="-φTn",
+                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
+                    hovertemplate="x=%{x:.3f} m<br>-φTn=%{y:.3f} kN-m<extra></extra>",
+                )
+            )
+            tcr_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_tcr"].tolist()]
+            if any(math.isfinite(value) for value in tcr_values):
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_values,
+                        y=tcr_values,
+                        mode="lines",
+                        name="φTcr",
+                        line=dict(_BEAM_ULS_REFERENCE_LINE_STYLE),
+                        hovertemplate="x=%{x:.3f} m<br>φTcr=%{y:.3f} kN-m<extra></extra>",
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_values,
+                        y=[-v if math.isfinite(v) else float("nan") for v in tcr_values],
+                        mode="lines",
+                        name="-φTcr",
+                        line=dict(_BEAM_ULS_REFERENCE_LINE_STYLE),
+                        hovertemplate="x=%{x:.3f} m<br>-φTcr=%{y:.3f} kN-m<extra></extra>",
+                    )
+                )
+    governing = _beam_uls_governing_torsion_row(torsion_check_df)
+    if governing is not None:
+        x_text = str(governing.get("Governing x") or "").replace(" m", "")
+        x_val = _beam_uls_float(x_text)
+        cap = _beam_uls_float(governing.get("φTn kN-m"))
+        util = _beam_uls_float(governing.get("D/C value"))
+        if math.isfinite(x_val) and math.isfinite(cap) and math.isfinite(util):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_val],
+                    y=[cap],
+                    mode="markers+text",
+                    text=[f"{governing.get('Status', 'REVIEW')} · D/C {util:.3f}"],
+                    textposition="top center",
+                    name="Governing torsion check",
+                    hovertemplate="x=%{x:.3f} m<br>Governing φTn=%{y:.3f} kN-m<extra></extra>",
+                )
+            )
+    subtitle = "demand vs φTn" if has_capacity else "demand only — φTn not ready"
+    fig.update_layout(title={"text": f"Torsion Check — Strength ULS<br><sup>{code_label} · {subtitle}</sup>"})
+    return fig
+
+
 def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> None:
     """Render compact ULS demand/flexure-check workspace for Bridge/Building Beam/Girder.
 
@@ -4975,7 +5478,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
         "Flexure uses the strain-compatibility section engine with workflow-specific code-compatible audit basis: "
         "Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. "
-        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion remains route-ready but not calculated."
+        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion uses a code-routed first-pass closed-stirrup φTn check while longitudinal torsion/detailing and combined V+T remain separate review items."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -5000,6 +5503,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         active_df,
         strength_route=strength_route,
     )
+    torsion_check_df = _beam_uls_torsion_check_dataframe(
+        st.session_state,
+        active_df,
+        strength_route=strength_route,
+    )
     _render_analysis_summary_strip(
         _beam_uls_summary_cards(
             active_df,
@@ -5007,6 +5515,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             code_label=code_label,
             flexure_preview_df=flexure_preview_df,
             shear_check_df=shear_check_df,
+            torsion_check_df=torsion_check_df,
         ),
         columns=4,
     )
@@ -5016,8 +5525,9 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         {"title": "Strength route", "value": code_label, "detail": strength_route.flexure_engine_label, "status": "info"},
         {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
         {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup φVn check", "status": "info"},
+        {"title": "Torsion route", "value": strength_route.torsion_engine_label, "detail": "First-pass closed-stirrup φTn", "status": "info"},
     ]
-    _render_analysis_summary_strip(basis_cards, columns=4)
+    _render_analysis_summary_strip(basis_cards, columns=5)
 
     if active_df.empty:
         st.warning("No Active Beam/Girder ULS station demand rows are available. Define or import them in Loads before ULS review.")
@@ -5025,7 +5535,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
     st.markdown("#### Compact ULS check table")
     st.dataframe(
-        _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, state=st.session_state),
+        _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, state=st.session_state),
         use_container_width=True,
         hide_index=True,
     )
@@ -5154,24 +5664,46 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     with torsion_tab:
         torsion = _beam_uls_governing_action(active_df, "Tu")
         torsion_has_demand = torsion is not None and float(torsion["abs_demand"]) > _BEAM_ULS_DEMAND_TOL
-        torsion_cards = [
-            {"title": "Torsion status", "value": "PLANNED" if torsion_has_demand else "OPTIONAL", "detail": "φTn is not implemented yet", "status": "warning" if torsion_has_demand else "neutral", "strong": True},
-            {"title": "Governing Tu", "value": _format_beam_uls_demand(torsion["demand"], "kN-m") if torsion else "-", "detail": f"{torsion['case']} @ x={_format_beam_uls_x(torsion['x_m'])}" if torsion else "No active torsion demand", "status": "info"},
-            {"title": "Torsion capacity", "value": "-", "detail": "φTn planned", "status": "neutral"},
-            {"title": "Route", "value": "Torsion route-ready", "detail": strength_route.torsion_basis_note, "status": "neutral"},
-        ]
+        torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
+        if torsion_result is not None:
+            torsion_status = str(torsion_result.get("Status") or "REVIEW")
+            torsion_cards = [
+                {"title": "Torsion status", "value": torsion_status, "detail": f"Transverse {torsion_result.get('Transverse status', '-')} · longitudinal {torsion_result.get('Longitudinal status', '-')}", "status": "danger" if torsion_status == "FAIL" else ("ready" if torsion_status == "BELOW THRESHOLD" else "warning"), "strong": True},
+                {"title": "Governing Tu / D/C", "value": f"{torsion_result.get('Demand', '-')} · {torsion_result.get('Utilization', '-')}", "detail": f"{torsion_result.get('Case', '-')} @ x={torsion_result.get('Governing x', '-')}", "status": "info"},
+                {"title": "Torsion capacity", "value": str(torsion_result.get("Capacity") or "-"), "detail": f"φTcr { _format_beam_uls_audit_number(torsion_result.get('φTcr kN-m'), unit='kN-m') }", "status": "info"},
+                {"title": "Route", "value": strength_route.torsion_engine_label, "detail": strength_route.torsion_basis_note, "status": "neutral"},
+            ]
+        else:
+            torsion_cards = [
+                {"title": "Torsion status", "value": "OPTIONAL" if not torsion_has_demand else "NOT READY", "detail": "No active Tu" if not torsion_has_demand else "φTn input path not ready", "status": "neutral" if not torsion_has_demand else "warning", "strong": True},
+                {"title": "Governing Tu", "value": _format_beam_uls_demand(torsion["demand"], "kN-m") if torsion else "-", "detail": f"{torsion['case']} @ x={_format_beam_uls_x(torsion['x_m'])}" if torsion else "No active torsion demand", "status": "info"},
+                {"title": "Torsion capacity", "value": "-", "detail": "φTn not ready", "status": "neutral"},
+                {"title": "Route", "value": strength_route.torsion_engine_label, "detail": strength_route.torsion_basis_note, "status": "neutral"},
+            ]
         _render_analysis_summary_strip(torsion_cards, columns=4)
         st.plotly_chart(
-            _make_beam_uls_demand_figure(active_df, column="Tu", title=f"Torsion Check — Strength ULS<br><sup>{code_label}</sup>", y_label="Torsion, Tu (kN-m)"),
+            _make_beam_uls_torsion_capacity_figure(active_df, torsion_check_df, code_label=code_label),
             use_container_width=True,
         )
+        st.caption(
+            "φTn is a first-pass transverse closed-stirrup torsion strength line from the active code route. "
+            "It uses the active provided stirrup zones as closed hoops for review. Longitudinal torsion reinforcement, closed-hoop detailing, and combined shear + torsion interaction are not certified in this milestone."
+        )
         if torsion_has_demand:
-            st.warning("Torsion demand is present, but φTn and torsion reinforcement checks are not implemented. Do not issue torsion PASS/FAIL from this workspace yet.")
+            st.warning("Torsion demand is present. Review φTn and threshold output here, but do not certify the member until longitudinal torsion reinforcement, closed-hoop detailing, and combined shear + torsion interaction are checked.")
         else:
             st.info("No active torsion demand is present in the ULS station rows. Keep torsion optional unless the design model produces nonzero Tu.")
+        with st.expander("Torsion strength audit / provided closed-stirrup output", expanded=False):
+            audit_df = _beam_uls_torsion_audit_dataframe(torsion_check_df)
+            if audit_df.empty:
+                st.info("Torsion audit output is not available until active ULS demand rows and section inputs are ready.")
+            else:
+                st.dataframe(audit_df, use_container_width=True, hide_index=True)
         with st.expander("Torsion method notes", expanded=False):
             st.write(f"- Torsion route: {strength_route.torsion_basis_note}")
-            st.write("- Future checks must include torsion threshold, torsion reinforcement, combined shear + torsion interaction, and code-specific detailing limits.")
+            st.write("- Bridge Beam/Girder routes to the AASHTO LRFD-compatible φTn basis; Building Beam/Girder routes to the ACI 318 φTn basis. The active workflow, not the section preset name, controls this route.")
+            st.write("- TORSION1 computes transverse closed-hoop φTn only. It does not certify longitudinal torsion reinforcement, hoop anchorage, torsion spacing/detailing, or combined shear + torsion interaction.")
+            st.write("- The current torsion hoop geometry uses an explicit first-pass offset of the outside section polygon because the app does not yet have a dedicated torsion hoop layout owner. Verify Ao/Aoh before final design.")
 
     with interaction_tab:
         interaction = _beam_uls_torsion_interaction_status(active_df)
@@ -5182,7 +5714,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.warning(interaction["detail"])
         st.caption(
             "This tab is intentionally separated from the shear tab because combined shear + torsion is a different design decision. "
-            "When Tu is active, a shear-only PASS must not be treated as a combined-interaction PASS."
+            "When Tu is active, separate shear and torsion checks must not be treated as a combined-interaction PASS."
         )
 
     with st.expander("ULS demand table — audit / source data", expanded=False):

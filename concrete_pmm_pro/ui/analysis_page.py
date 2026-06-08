@@ -5646,48 +5646,6 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
-    flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    shear_station_check_df = _beam_uls_shear_check_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
-    shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    torsion_check_df = _beam_uls_torsion_check_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
-        st.session_state,
-        active_df,
-        strength_route=strength_route,
-    )
-    _render_analysis_summary_strip(
-        _beam_uls_summary_cards(
-            active_df,
-            workflow_label=workflow_label,
-            code_label=code_label,
-            flexure_preview_df=flexure_preview_df,
-            shear_check_df=shear_check_df,
-            torsion_check_df=torsion_check_df,
-        ),
-        columns=4,
-    )
 
     basis_cards = [
         {"title": "Workflow", "value": workflow_label, "detail": "Selected in Setup", "status": "info"},
@@ -5702,7 +5660,72 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.warning("No Active Beam/Girder ULS station demand rows are available. Define or import them in Loads before ULS review.")
         return
 
+    selected_check_raw = st.radio(
+        "ULS check to calculate",
+        BEAM_ULS_CHECK_TAB_LABELS,
+        horizontal=True,
+        key="beam_girder_uls_lazy_check",
+        help="Only the selected ULS check is calculated on this rerun. This keeps Flexure/Shear/Torsion from all running at once.",
+    )
+    selected_check = str(selected_check_raw) if selected_check_raw in BEAM_ULS_CHECK_TAB_LABELS else BEAM_ULS_CHECK_TAB_LABELS[0]
+
+    flexure_preview_df: pd.DataFrame | None = None
+    flexure_preview_messages: list[str] = []
+    shear_check_df: pd.DataFrame | None = None
+    shear_critical_section_df = pd.DataFrame()
+    shear_boundary_capacity_df = pd.DataFrame()
+    torsion_check_df: pd.DataFrame | None = None
+    torsion_boundary_capacity_df = pd.DataFrame()
+
+    if selected_check == "Flexure":
+        flexure_preview_df, flexure_preview_messages = _beam_uls_flexure_preview_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+    elif selected_check == "Shear":
+        shear_station_check_df = _beam_uls_shear_check_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_critical_section_df = _beam_uls_shear_critical_section_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+        shear_check_df = _beam_uls_combine_shear_check_frames(shear_station_check_df, shear_critical_section_df)
+        shear_boundary_capacity_df = _beam_uls_shear_diagram_boundary_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+    elif selected_check == "Torsion":
+        torsion_check_df = _beam_uls_torsion_check_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+        torsion_boundary_capacity_df = _beam_uls_torsion_diagram_boundary_dataframe(
+            st.session_state,
+            active_df,
+            strength_route=strength_route,
+        )
+
+    _render_analysis_summary_strip(
+        _beam_uls_summary_cards(
+            active_df,
+            workflow_label=workflow_label,
+            code_label=code_label,
+            flexure_preview_df=flexure_preview_df,
+            shear_check_df=shear_check_df,
+            torsion_check_df=torsion_check_df,
+        ),
+        columns=4,
+    )
+
     st.markdown("#### Compact ULS check table")
+    st.caption("To keep ULS responsive, only the selected check below is calculated on the current rerun. Other rows remain demand/readiness summaries until opened.")
     st.dataframe(
         _beam_uls_check_table(active_df, flexure_preview_df=flexure_preview_df, shear_check_df=shear_check_df, torsion_check_df=torsion_check_df, state=st.session_state),
         use_container_width=True,
@@ -5710,10 +5733,9 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
     )
 
     st.markdown("#### ULS check workspace")
-    st.caption(_beam_uls_check_tab_caption())
-    flex_tab, shear_tab, torsion_tab, interaction_tab = st.tabs(BEAM_ULS_CHECK_TAB_LABELS)
+    st.caption(_beam_uls_check_tab_caption() + " PERF.ULS1 calculates only the selected check to avoid running all ULS engines at once.")
 
-    with flex_tab:
+    if selected_check == "Flexure":
         flexure = _beam_uls_governing_action(active_df, "Mux")
         flex_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
         if flex_preview is not None:
@@ -5757,7 +5779,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             if flexure_preview_messages:
                 st.caption("Flexure check notes: " + " | ".join(flexure_preview_messages[:5]))
 
-    with shear_tab:
+    if selected_check == "Shear":
         shear = _beam_uls_governing_action(active_df, "Vuy")
         shear_result = _beam_uls_governing_shear_row(shear_check_df)
         if shear_result is not None:
@@ -5830,7 +5852,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.write("- The detailing guard screens provided Av/s against a first-pass minimum and checks stirrup spacing against a first-pass maximum; failed guards downgrade the shear status.")
             st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, high-shear spacing triggers, prestress shear effects, and benchmark calibration are added.")
 
-    with torsion_tab:
+    if selected_check == "Torsion":
         torsion = _beam_uls_governing_action(active_df, "Tu")
         torsion_has_demand = torsion is not None and float(torsion["abs_demand"]) > _BEAM_ULS_DEMAND_TOL
         torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
@@ -5886,7 +5908,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.write("- TORSION1 computes transverse closed-hoop φTn only. It does not certify longitudinal torsion reinforcement, hoop anchorage, torsion spacing/detailing, or combined shear + torsion interaction.")
             st.write("- The current torsion hoop geometry uses an explicit first-pass offset of the outside section polygon because the app does not yet have a dedicated torsion hoop layout owner. Verify Ao/Aoh before final design.")
 
-    with interaction_tab:
+    if selected_check == "Shear + Torsion":
         interaction = _beam_uls_torsion_interaction_status(active_df)
         _render_analysis_summary_strip([interaction], columns=1)
         if interaction["value"].startswith("Not applicable"):

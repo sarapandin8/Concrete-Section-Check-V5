@@ -963,10 +963,11 @@ def test_uls_ui2_source_places_check_tabs_under_compact_table_without_general_di
 
     source = Path("concrete_pmm_pro/ui/analysis_page.py").read_text()
     compact_idx = source.index('st.markdown("#### Compact ULS check table")')
-    tabs_idx = source.index("st.tabs(BEAM_ULS_CHECK_TAB_LABELS)")
+    selector_idx = source.index('"ULS check to calculate"')
     audit_idx = source.index('with st.expander("ULS demand table — audit / source data"')
 
-    assert compact_idx < tabs_idx < audit_idx
+    assert selector_idx < compact_idx < audit_idx
+    assert "st.tabs(BEAM_ULS_CHECK_TAB_LABELS)" not in source
     assert 'with st.expander("ULS demand/capacity diagrams"' not in source
     assert 'with st.expander("Flexure strength audit / benchmark output"' in source
     assert 'with st.expander("Shear strength audit / provided stirrup output"' in source

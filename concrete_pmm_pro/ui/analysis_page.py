@@ -4696,6 +4696,15 @@ def _beam_uls_audit_dataframe(active_df: pd.DataFrame) -> pd.DataFrame:
     return df[BEAM_ULS_LOAD_COLUMNS_ANALYSIS]
 
 
+_BEAM_ULS_DEMAND_LINE_STYLE = {"color": "#1f77b4", "width": 3}
+_BEAM_ULS_DEMAND_MARKER_STYLE = {"color": "#1f77b4", "size": 7}
+# Section/check capacity curves are visual acceptance/check limits, not demand data.
+# Keep them as dashed red lines without point markers so they are not misread as
+# station resultants. Use this convention for future beam/girder design diagrams.
+_BEAM_ULS_CHECK_LINE_STYLE = {"color": "red", "dash": "dash", "width": 3}
+_BEAM_ULS_REFERENCE_LINE_STYLE = {"color": "orange", "dash": "dash", "width": 3}
+
+
 def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title: str, y_label: str) -> go.Figure:
     plot_df = active_df[["Station x (m)", "Case Name", column]].copy()
     plot_df = plot_df[pd.to_numeric(plot_df["Station x (m)"], errors="coerce").notna()]
@@ -4712,8 +4721,8 @@ def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title:
                     y=case_df[column],
                     mode="lines+markers",
                     name=f"Demand {column} — {case_name}",
-                    line={"color": "#1f77b4", "width": 3},
-                    marker={"color": "#1f77b4", "size": 7},
+                    line=dict(_BEAM_ULS_DEMAND_LINE_STYLE),
+                    marker=dict(_BEAM_ULS_DEMAND_MARKER_STYLE),
                     hovertemplate="x=%{x:.3f} m<br>Demand=%{y:.3f}<extra></extra>",
                 )
             )
@@ -4786,10 +4795,9 @@ def _make_beam_uls_flexure_preview_figure(active_df: pd.DataFrame, flexure_previ
             go.Scatter(
                 x=x_values,
                 y=y_values,
-                mode="markers+lines",
+                mode="lines",
                 name=f"φMn",
-                line={"color": "red", "dash": "dash", "width": 3},
-                marker={"color": "red", "size": 7},
+                line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
                 hovertemplate="x=%{x:.3f} m<br>φMn=%{y:.3f} kN-m<extra></extra>",
             )
         )
@@ -4865,10 +4873,9 @@ def _make_beam_uls_shear_capacity_figure(
                 go.Scatter(
                     x=x_values,
                     y=vn_values,
-                    mode="markers+lines",
+                    mode="lines",
                     name="φVn",
-                    line={"color": "red", "dash": "dash", "width": 3},
-                    marker={"color": "red", "size": 7},
+                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
                     hovertemplate="x=%{x:.3f} m<br>φVn=%{y:.3f} kN<extra></extra>",
                 )
             )
@@ -4876,10 +4883,9 @@ def _make_beam_uls_shear_capacity_figure(
                 go.Scatter(
                     x=x_values,
                     y=[-v for v in vn_values],
-                    mode="markers+lines",
+                    mode="lines",
                     name="-φVn",
-                    line={"color": "red", "dash": "dash", "width": 3},
-                    marker={"color": "red", "size": 7},
+                    line=dict(_BEAM_ULS_CHECK_LINE_STYLE),
                     hovertemplate="x=%{x:.3f} m<br>-φVn=%{y:.3f} kN<extra></extra>",
                 )
             )
@@ -4891,7 +4897,7 @@ def _make_beam_uls_shear_capacity_figure(
                         y=vc_values,
                         mode="lines",
                         name="φVc",
-                        line={"color": "orange", "dash": "dash", "width": 2},
+                        line=dict(_BEAM_ULS_REFERENCE_LINE_STYLE),
                         hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>",
                     )
                 )

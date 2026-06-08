@@ -239,9 +239,11 @@ def test_uls_flex1_4_flexure_figure_plots_phi_mn_zero_at_span_boundaries() -> No
     capacity_trace = next(trace for trace in fig.data if trace.name == "φMn")
     assert list(capacity_trace.x) == [0.0, 5.0, 10.0, 20.0]
     assert list(capacity_trace.y) == [0.0, 3500.0, 3580.44, 0.0]
+    assert capacity_trace.mode == "lines"
     assert capacity_trace.line.color == "red"
     assert capacity_trace.line.dash == "dash"
-    assert capacity_trace.line.width >= 3
+    assert capacity_trace.line.width == demand_trace.line.width
+    assert getattr(capacity_trace, "marker", None) is None or capacity_trace.marker.size is None
 
 
 def test_uls_flex1_4_engine_plots_zero_phi_mn_at_zero_mux_endpoints() -> None:
@@ -850,15 +852,20 @@ def test_uls_shear2_2_capacity_diagram_adds_end_boundary_values_without_governin
     vc_trace = next(trace for trace in fig.data if trace.name == "φVc")
     assert min(vn_trace.x) == 0.0
     assert max(vn_trace.x) == 20.0
+    assert vn_trace.mode == "lines"
     assert vn_trace.line.color == "red"
     assert vn_trace.line.dash == "dash"
-    assert vn_trace.line.width >= 3
+    assert vn_trace.line.width == demand_trace.line.width
+    assert getattr(vn_trace, "marker", None) is None or vn_trace.marker.size is None
+    assert neg_vn_trace.mode == "lines"
     assert neg_vn_trace.line.color == "red"
     assert neg_vn_trace.line.dash == "dash"
-    assert neg_vn_trace.line.width >= 3
+    assert neg_vn_trace.line.width == demand_trace.line.width
+    assert getattr(neg_vn_trace, "marker", None) is None or neg_vn_trace.marker.size is None
     assert vc_trace.mode == "lines"
     assert vc_trace.line.color == "orange"
     assert vc_trace.line.dash == "dash"
+    assert getattr(vc_trace, "marker", None) is None or vc_trace.marker.size is None
 
 
 

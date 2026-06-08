@@ -4712,6 +4712,8 @@ def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title:
                     y=case_df[column],
                     mode="lines+markers",
                     name=f"Demand {column} — {case_name}",
+                    line={"color": "#1f77b4", "width": 3},
+                    marker={"color": "#1f77b4", "size": 7},
                     hovertemplate="x=%{x:.3f} m<br>Demand=%{y:.3f}<extra></extra>",
                 )
             )
@@ -4725,6 +4727,7 @@ def _make_beam_uls_demand_figure(active_df: pd.DataFrame, *, column: str, title:
                     text=["Governing demand"],
                     textposition="top center",
                     name="Governing demand",
+                    marker={"color": "#1f77b4", "size": 10, "symbol": "diamond"},
                     hovertemplate="x=%{x:.3f} m<br>Demand=%{y:.3f}<extra></extra>",
                 )
             )
@@ -4882,7 +4885,16 @@ def _make_beam_uls_shear_capacity_figure(
             )
             vc_values = [float(value) if math.isfinite(float(value)) else float("nan") for value in case_df["__phi_vc"].tolist()]
             if any(math.isfinite(value) for value in vc_values):
-                fig.add_trace(go.Scatter(x=x_values, y=vc_values, mode="lines", name="φVc", hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>"))
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_values,
+                        y=vc_values,
+                        mode="lines",
+                        name="φVc",
+                        line={"color": "orange", "dash": "dash", "width": 2},
+                        hovertemplate="x=%{x:.3f} m<br>φVc=%{y:.3f} kN<extra></extra>",
+                    )
+                )
     critical_x_values: list[float] = []
     if critical_section_df is not None and not critical_section_df.empty:
         critical_df = critical_section_df.copy()

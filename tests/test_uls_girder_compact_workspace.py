@@ -232,6 +232,10 @@ def test_uls_flex1_4_flexure_figure_plots_phi_mn_zero_at_span_boundaries() -> No
     assert text_by_trace["Governing flexure check"] == ["FAIL · D/C 1.396"]
     assert all("PASS" not in text for values in text_by_trace.values() for text in values)
     assert not any(str(name).startswith("Endpoint review") for name in trace_names)
+    demand_trace = next(trace for trace in fig.data if trace.name == "Demand Mux — Strength I")
+    assert demand_trace.mode == "lines+markers"
+    assert demand_trace.line.width >= 3
+    assert demand_trace.marker.size >= 7
     capacity_trace = next(trace for trace in fig.data if trace.name == "φMn")
     assert list(capacity_trace.x) == [0.0, 5.0, 10.0, 20.0]
     assert list(capacity_trace.y) == [0.0, 3500.0, 3580.44, 0.0]
@@ -837,8 +841,13 @@ def test_uls_shear2_2_capacity_diagram_adds_end_boundary_values_without_governin
     assert set(boundary["Status"]) == {"DIAGRAM BOUNDARY"}
     assert boundary["φVn kN"].min() > 0.0
     assert boundary["D/C value"].isna().all()
+    demand_trace = next(trace for trace in fig.data if trace.name == "Demand Vuy — Strength I")
+    assert demand_trace.mode == "lines+markers"
+    assert demand_trace.line.width >= 3
+    assert demand_trace.marker.size >= 7
     vn_trace = next(trace for trace in fig.data if trace.name == "φVn")
     neg_vn_trace = next(trace for trace in fig.data if trace.name == "-φVn")
+    vc_trace = next(trace for trace in fig.data if trace.name == "φVc")
     assert min(vn_trace.x) == 0.0
     assert max(vn_trace.x) == 20.0
     assert vn_trace.line.color == "red"
@@ -847,6 +856,9 @@ def test_uls_shear2_2_capacity_diagram_adds_end_boundary_values_without_governin
     assert neg_vn_trace.line.color == "red"
     assert neg_vn_trace.line.dash == "dash"
     assert neg_vn_trace.line.width >= 3
+    assert vc_trace.mode == "lines"
+    assert vc_trace.line.color == "orange"
+    assert vc_trace.line.dash == "dash"
 
 
 

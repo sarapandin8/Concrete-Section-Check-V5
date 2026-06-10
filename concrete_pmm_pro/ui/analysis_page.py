@@ -6007,11 +6007,7 @@ def _make_beam_uls_combined_vt_utilization_figure(vt_df: pd.DataFrame | None, *,
         )
         return fig
 
-    plot_df = vt_df.copy()
-    plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
-    plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
-    plot_df = plot_df[plot_df["__x_m"].notna()].copy()
-    plot_df = plot_df[~plot_df.get("Status", pd.Series(index=plot_df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED"])].copy()
+    plot_df = _beam_uls_combined_vt_plot_dataframe(vt_df)
     traces = [
         ("Stress interaction D/C", "Stress D/C value"),
         ("Transverse reinforcement D/C", "Transverse D/C value"),

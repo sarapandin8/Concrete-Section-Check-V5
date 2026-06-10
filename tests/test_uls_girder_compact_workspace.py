@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 
 from concrete_pmm_pro.ui.analysis_page import (
@@ -1695,8 +1696,11 @@ def test_uls_vt2_6_combined_vt_adds_endpoint_boundaries_when_load_rows_start_ins
     fig = _make_beam_uls_combined_vt_utilization_figure(vt, code_label="AASHTO LRFD")
     for trace_name in ["Stress interaction D/C", "Transverse reinforcement D/C", "Longitudinal Al D/C"]:
         trace = next(trace for trace in fig.data if str(trace.name).startswith(trace_name))
+        pairs = {round(float(x), 6): y for x, y in zip(trace.x, trace.y)}
         assert min(float(x) for x in trace.x) == 0.0
         assert max(float(x) for x in trace.x) == 20.0
+        assert math.isfinite(float(pairs[0.0]))
+        assert math.isfinite(float(pairs[20.0]))
 
     table = _beam_uls_check_table(active, combined_vt_df=vt)
     combined = table.loc[table["Check"] == "Shear + Torsion"].iloc[0]

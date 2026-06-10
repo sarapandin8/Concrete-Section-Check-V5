@@ -153,3 +153,21 @@ def test_analysis_page_hides_beam_sls_subpages_for_column_pier_workflow() -> Non
     assert "SLS Deflection / Camber is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
     assert "Shear and torsion are planned capability guards" in source
     assert "no shear/torsion PASS/FAIL is issued yet" in source
+
+
+def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(encoding="utf-8")
+
+    assert "COLUMN_PIER_ULS_CHECK_SUBTABS" in source
+    assert '"Flexural (PMM)"' in source
+    assert '"Shear"' in source
+    assert '"Torsion"' in source
+    assert "_column_pier_uls_check_choice" in source
+    assert "_render_column_pier_flexural_pmm_workspace" in source
+    assert "_render_column_pier_shear_guarded_workspace" in source
+    assert "_render_column_pier_torsion_guarded_workspace" in source
+    assert "No PASS/FAIL" in source
+    assert "Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL" in source

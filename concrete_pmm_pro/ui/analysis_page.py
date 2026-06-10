@@ -218,6 +218,7 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
 
 ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "SLS Deflection / Camber", "Report / QA"]
 ANALYSIS_COLUMN_PIER_SUBTABS = ["ULS / PMM", "Report / QA"]
+COLUMN_PIER_ULS_CHECK_SUBTABS = ["Flexural (PMM)", "Shear", "Torsion"]
 # Legacy source-test token retained while PERF.RERUN1 switches from eager st.tabs
 # to lazy subpage rendering: uls_tab, sls_tab, sls_deflection_tab, report_tab
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
@@ -7636,6 +7637,104 @@ def _render_column_pier_analysis_decision_view() -> None:
     _render_analysis_summary_strip(_column_pier_analysis_scope_cards(), columns=5)
 
 
+def _column_pier_uls_check_choice() -> str:
+    """Select the active Column/Pier ULS check without executing inactive check bodies."""
+
+    key = "_column_pier_uls_check_subtab"
+    options = list(COLUMN_PIER_ULS_CHECK_SUBTABS)
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[0]
+    segmented = getattr(st, "segmented_control", None)
+    if callable(segmented):
+        try:
+            value = segmented("ULS check", options, key=key, selection_mode="single")
+            if value in options:
+                return str(value)
+        except TypeError:
+            pass
+    value = st.radio("ULS check", options, key=key, horizontal=True)
+    return str(value) if value in options else str(st.session_state.get(key, options[0]))
+
+
+def _column_pier_guarded_strength_check_cards(check_name: str) -> list[dict[str, object]]:
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    return [
+        {
+            "title": "Check status",
+            "value": "Not implemented",
+            "detail": f"{check_name} is a guarded future code-check module; no capacity result is calculated.",
+            "status": "warning",
+            "strong": True,
+        },
+        {
+            "title": "Code route",
+            "value": code,
+            "detail": f"{edition}. ACI 318 and AASHTO LRFD rules require separate future validation.",
+            "status": "warning" if code == PROJECT_CODE_AASHTO_LRFD else "info",
+        },
+        {
+            "title": "Result policy",
+            "value": "No PASS/FAIL",
+            "detail": "This view must not be used to accept or reject member strength until code logic is implemented.",
+            "status": "neutral",
+            "strong": True,
+        },
+        {
+            "title": "Interaction",
+            "value": "Guarded",
+            "detail": "Do not infer shear/torsion capacity from PMM D/C or flexural reserve.",
+            "status": "info",
+        },
+    ]
+
+
+def _render_column_pier_flexural_pmm_workspace() -> None:
+    st.markdown("#### Flexural (PMM)")
+    st.caption("Axial-biaxial PMM strength workspace for Pu, Mux, and Muy.")
+    st.info(
+        "ULS compression Pu remains positive. Prestress is treated as internal prestress/reinforcement action "
+        "and should not be duplicated as external Pu demand."
+    )
+    _render_analysis_mode_section()
+    _render_analysis_settings_panel()
+    _render_readiness_panel()
+    _render_input_summary()
+    _render_verification_expander()
+
+
+def _render_column_pier_shear_guarded_workspace() -> None:
+    st.markdown("#### Shear")
+    st.caption("Guarded future strength module for column, pier, wall, and pylon shear checks.")
+    _render_analysis_summary_strip(_column_pier_guarded_strength_check_cards("Shear"), columns=4)
+    st.warning(
+        "Shear code check is not implemented. Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL from this view."
+    )
+    with st.expander("Future shear code-check scope", expanded=False):
+        st.markdown(
+            "- Required demands: Vu or Vux/Vuy with load-combination traceability.\n"
+            "- Required section inputs: shear-critical section geometry, effective depth/dv, transverse reinforcement, and spacing.\n"
+            "- Required engineering logic: axial load and prestress effects, code-specific concrete contribution, reinforcement contribution, and strength-reduction rules.\n"
+            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any PASS/FAIL result is allowed."
+        )
+
+
+def _render_column_pier_torsion_guarded_workspace() -> None:
+    st.markdown("#### Torsion")
+    st.caption("Guarded future strength module for torsion and combined shear-torsion checks.")
+    _render_analysis_summary_strip(_column_pier_guarded_strength_check_cards("Torsion"), columns=4)
+    st.warning(
+        "Torsion code check is not implemented. Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL from this view."
+    )
+    with st.expander("Future torsion code-check scope", expanded=False):
+        st.markdown(
+            "- Required demands: Tu with load-combination traceability and concurrent Vu/Nu/Mu where interaction applies.\n"
+            "- Required section inputs: closed transverse reinforcement, longitudinal torsion reinforcement, and torsion-effective section properties.\n"
+            "- Required engineering logic: torsion threshold, compatibility torsion assumptions, combined shear-torsion interaction, and code-specific detailing limits.\n"
+            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any PASS/FAIL result is allowed."
+        )
+
+
 def _render_analysis_summary_strip(cards: list[dict[str, object]], columns: int = 4) -> None:
     for start in range(0, len(cards), columns):
         cols = st.columns(min(columns, len(cards) - start))
@@ -13541,15 +13640,15 @@ def render_analysis_uls_pmm() -> None:
 
     _render_project_design_code_guard(workflow="pmm")
     _render_column_pier_analysis_decision_view()
-    st.info(
-        "ULS compression Pu remains positive. Prestress is treated as internal prestress/reinforcement action "
-        "and should not be duplicated as external Pu demand."
-    )
-    _render_analysis_mode_section()
-    _render_analysis_settings_panel()
-    _render_readiness_panel()
-    _render_input_summary()
-    _render_verification_expander()
+    active_check = _column_pier_uls_check_choice()
+    if active_check == "Flexural (PMM)":
+        _render_column_pier_flexural_pmm_workspace()
+    elif active_check == "Shear":
+        _render_column_pier_shear_guarded_workspace()
+    elif active_check == "Torsion":
+        _render_column_pier_torsion_guarded_workspace()
+    else:
+        _render_column_pier_flexural_pmm_workspace()
 
 
 def render_analysis_sls_stress() -> None:

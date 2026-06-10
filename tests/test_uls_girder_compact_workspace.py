@@ -26,6 +26,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_torsion_check_dataframe,
     _beam_uls_torsion_diagram_boundary_dataframe,
     _beam_uls_torsion_interaction_status,
+    _beam_uls_governing_torsion_row,
+    _beam_uls_combined_vt_source_strength_gate,
     _make_beam_uls_shear_capacity_figure,
     _make_beam_uls_torsion_capacity_figure,
 )
@@ -1881,3 +1883,65 @@ def test_uls_vt_code1_compact_table_can_report_pass_when_sources_are_clear() -> 
     assert combined["Status"] == "PASS"
     assert combined["Capacity"] == "Interaction / (Av+2At)/s / Al"
     assert combined["Utilization"] == "0.454"
+
+
+def test_uls_torsion_code2_excludes_member_end_boundaries_from_governing_and_source_gate() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=500.0, y=0.0),
+            Point2D(x=500.0, y=1000.0),
+            Point2D(x=0.0, y=1000.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C45", fc_MPa=45.0),
+        "rebars": [Rebar(x_mm=60.0 + i * 35.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40") for i in range(12)],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "section_has_ordinary_rebar": True,
+        "beam_girder_system_settings": {"span_length_m": 20.0},
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Interior closed hoop", "x_start_m": 2.0, "x_end_m": 18.0, "Bar Size": "DB16", "Diameter_mm": 16.0, "Legs": 2, "Spacing_mm": 100.0, "fy_MPa": 400.0, "Note": "complete interior torsion zone"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 500.0, "Vuy": 75.0, "Tu": 100.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "member end"},
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 500.0, "Vuy": 75.0, "Tu": 100.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "design station"},
+            {"Active": True, "Station x (m)": 20.0, "Case Name": "ULS-G1", "Mux": 500.0, "Vuy": 75.0, "Tu": 100.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "member end"},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    torsion = _beam_uls_torsion_check_dataframe(state, active, strength_route=route)
+    assert set(torsion.loc[torsion["Governing x"].isin(["0.000 m", "20.000 m"]), "Station type"]) == {"DIAGRAM BOUNDARY"}
+
+    governing = _beam_uls_governing_torsion_row(torsion)
+    assert governing is not None
+    assert governing["Governing x"] == "7.000 m"
+    assert governing["Status"] == "PASS"
+
+    shear = pd.DataFrame(
+        [
+            {"Check": "Shear", "Status": "PASS", "Governing x": "7.000 m", "Case": "ULS-G1", "Demand": "75.00 kN", "Capacity": "φVn = 643.87 kN", "Utilization": "0.116", "Governing D/C value": 0.116},
+        ]
+    )
+    source_gate = _beam_uls_combined_vt_source_strength_gate(shear, torsion)
+    assert source_gate["value"] == "CLEAR"
+
+    vt = pd.DataFrame(
+        [
+            {"Check": "Shear + Torsion", "Status": "PASS", "Station type": "LOAD STATION", "Governing x": "7.000 m", "Case": "ULS-G1", "Vu kN": 75.0, "Tu kN-m": 100.0, "Overall D/C value": 0.454},
+        ]
+    )
+    compact = _beam_uls_check_table(active, shear_check_df=shear, torsion_check_df=torsion, combined_vt_df=vt)
+    torsion_row = compact.loc[compact["Check"] == "Torsion"].iloc[0]
+    combined_row = compact.loc[compact["Check"] == "Shear + Torsion"].iloc[0]
+    assert torsion_row["Status"] == "PASS"
+    assert torsion_row["Governing x"] == "7.000 m"
+    assert combined_row["Status"] == "PASS"

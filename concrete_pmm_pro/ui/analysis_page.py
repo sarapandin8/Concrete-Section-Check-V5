@@ -2689,6 +2689,52 @@ def _beam_uls_span_length_from_state(state: Mapping[str, object], *, is_building
         span_value = 20.0
     return span_value if span_value > 0.0 else 20.0
 
+def _beam_uls_member_end_side(x_m: object, span_m: object | None = None) -> str | None:
+    """Return LEFT/RIGHT when x is a diagram/member end station.
+
+    Endpoint rows are useful for plotting complete demand/capacity diagrams,
+    but they must not govern torsion or combined V+T source-strength decisions.
+    """
+
+    x_value = _beam_uls_float(x_m)
+    if not math.isfinite(x_value):
+        return None
+    tol = 1.0e-6
+    span_value = _beam_uls_float(span_m) if span_m is not None else float("nan")
+    if math.isfinite(span_value) and span_value > 0.0:
+        tol = max(tol, abs(float(span_value)) * 1.0e-8)
+    if abs(float(x_value)) <= tol:
+        return "LEFT"
+    if math.isfinite(span_value) and span_value > 0.0 and abs(float(x_value) - float(span_value)) <= tol:
+        return "RIGHT"
+    return None
+
+
+def _beam_uls_torsion_decision_dataframe(torsion_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Return torsion rows eligible for governing/source-gate decisions.
+
+    Torsion capacity boundary rows, and active demand rows located exactly at
+    member ends, are diagram boundary rows.  They remain available to plots and
+    audits but are excluded from governing torsion and combined V+T source gates.
+    """
+
+    if torsion_df is None or torsion_df.empty:
+        return pd.DataFrame()
+    df = torsion_df.copy()
+    if "Station type" in df.columns:
+        df = df[df["Station type"].astype(str) != "DIAGRAM BOUNDARY"].copy()
+    if df.empty:
+        return df
+    if "Support side" in df.columns:
+        df = df[~df["Support side"].astype(str).isin(["LEFT", "RIGHT"])].copy()
+    if df.empty:
+        return df
+    if "Governing x" in df.columns:
+        x_values = pd.to_numeric(df["Governing x"].astype(str).str.replace(" m", "", regex=False), errors="coerce")
+        left_end = x_values.map(lambda value: _beam_uls_member_end_side(value) == "LEFT")
+        df = df[~left_end].copy()
+    return df
+
 
 def _beam_uls_section_bounds(geometry: SectionGeometry) -> tuple[float, float, float, float]:
     polygon = to_shapely_polygon(geometry)
@@ -5003,11 +5049,19 @@ def _beam_uls_torsion_result_for_row(
     x_m = _beam_uls_float(row.get("Station x (m)"))
     tu_kNm = _beam_uls_float(row.get("Tu"))
     case = str(row.get("Case Name") or "-")
+    span_m = _beam_uls_span_length_from_state(state, is_building=strength_route.is_building)
+    support_side = _beam_uls_member_end_side(x_m, span_m)
+    explicit_boundary = bool(row.get("__Diagram boundary"))
+    station_type = "DIAGRAM BOUNDARY" if explicit_boundary or support_side else "LOAD STATION"
     notes: list[str] = []
+    if station_type == "DIAGRAM BOUNDARY":
+        notes.append("Member-end torsion row is plotted as a diagram boundary only; it is excluded from governing torsion and combined V+T source-strength decisions.")
     if not math.isfinite(tu_kNm) or abs(tu_kNm) <= _BEAM_ULS_DEMAND_TOL:
         return {
             "Check": "Torsion",
             "Status": "NO DEMAND",
+            "Station type": station_type,
+            "Support side": support_side or "-",
             "Transverse status": "NO DEMAND",
             "Longitudinal status": "NOT CHECKED",
             "Governing x": _format_beam_uls_x(x_m),
@@ -5030,6 +5084,8 @@ def _beam_uls_torsion_result_for_row(
         return {
             "Check": "Torsion",
             "Status": "REVIEW",
+            "Station type": station_type,
+            "Support side": support_side or "-",
             "Transverse status": "NOT READY",
             "Longitudinal status": "NOT CHECKED",
             "Governing x": _format_beam_uls_x(x_m),
@@ -5095,6 +5151,8 @@ def _beam_uls_torsion_result_for_row(
         return {
             "Check": "Torsion",
             "Status": status,
+            "Station type": station_type,
+            "Support side": support_side or "-",
             "Transverse status": "NOT READY" if status != "BELOW THRESHOLD" else "THRESHOLD OK",
             "Longitudinal status": "NOT CHECKED",
             "Threshold status": threshold_status,
@@ -5181,6 +5239,8 @@ def _beam_uls_torsion_result_for_row(
     return {
         "Check": "Torsion",
         "Status": status,
+        "Station type": station_type,
+        "Support side": support_side or "-",
         "Transverse status": transverse_status,
         "Longitudinal status": longitudinal_status,
         "Threshold status": threshold_status,
@@ -5232,7 +5292,7 @@ def _beam_uls_torsion_check_dataframe(
     strength_route: BeamGirderUlsStrengthRoute,
 ) -> pd.DataFrame:
     columns = [
-        "Check", "Status", "Transverse status", "Longitudinal status", "Threshold status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
+        "Check", "Status", "Station type", "Support side", "Transverse status", "Longitudinal status", "Threshold status", "Governing x", "Case", "Demand", "Capacity", "Utilization",
         "Demand kN-m", "Abs demand kN-m", "φTn kN-m", "φTcr kN-m", "Tn kN-m", "D/C value",
         "Acp mm2", "Pcp mm", "Aoh mm2", "Ao mm2", "ph mm", "Hoop offset mm", "At mm2", "At/s mm2/mm", "Torsion At/s req mm2/mm", "Al req mm2", "Al provided mm2", "Al utilization",
         "Detailing status", "s max torsion mm", "Spacing D/C", "Detailing D/C value", "Detailing notes",
@@ -5261,7 +5321,9 @@ def _beam_uls_torsion_check_dataframe(
 def _beam_uls_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[str, object] | None:
     if torsion_df is None or torsion_df.empty:
         return None
-    df = torsion_df.copy()
+    df = _beam_uls_torsion_decision_dataframe(torsion_df)
+    if df.empty:
+        return None
     if "Abs demand kN-m" in df.columns:
         df["__abs_tu"] = pd.to_numeric(df["Abs demand kN-m"], errors="coerce")
         df = df[df["__abs_tu"].fillna(0.0) > _BEAM_ULS_DEMAND_TOL].copy()
@@ -5272,7 +5334,7 @@ def _beam_uls_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[str
     status_priority = {"FAIL": 5, "LAYOUT REQUIRED": 4, "REVIEW": 3, "PASS": 2, "BELOW THRESHOLD": 1, "NO DEMAND": 0}
     df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 0))
     idx = df.sort_values(["__status_priority", "__dc", "__abs_tu"], ascending=[False, False, False]).index[0]
-    return torsion_df.loc[idx].drop(labels=["__dc", "__abs_tu", "__status_priority"], errors="ignore").to_dict()
+    return df.loc[idx].drop(labels=["__dc", "__abs_tu", "__status_priority"], errors="ignore").to_dict()
 
 
 def _beam_uls_torsion_audit_dataframe(torsion_df: pd.DataFrame | None) -> pd.DataFrame:
@@ -5285,7 +5347,11 @@ def _beam_uls_torsion_audit_dataframe(torsion_df: pd.DataFrame | None) -> pd.Dat
     df = torsion_df.copy()
     df["__dc"] = pd.to_numeric(df.get("D/C value"), errors="coerce")
     df["__abs_tu"] = pd.to_numeric(df.get("Abs demand kN-m"), errors="coerce")
-    nonzero = df[df["__abs_tu"].fillna(0.0) > _BEAM_ULS_DEMAND_TOL]
+    decision_df = _beam_uls_torsion_decision_dataframe(torsion_df)
+    if not decision_df.empty:
+        decision_df["__dc"] = pd.to_numeric(decision_df.get("D/C value"), errors="coerce")
+        decision_df["__abs_tu"] = pd.to_numeric(decision_df.get("Abs demand kN-m"), errors="coerce")
+    nonzero = decision_df[decision_df["__abs_tu"].fillna(0.0) > _BEAM_ULS_DEMAND_TOL] if "__abs_tu" in decision_df.columns else pd.DataFrame()
     governing_idx = None
     if not nonzero.empty:
         status_priority = {"FAIL": 5, "LAYOUT REQUIRED": 4, "REVIEW": 3, "PASS": 2, "BELOW THRESHOLD": 1, "NO DEMAND": 0}
@@ -6927,7 +6993,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
         "Flexure uses the strain-compatibility section engine with workflow-specific code-compatible audit basis: "
         "Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. "
-        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion uses a code-routed first-pass closed-stirrup φTn check while longitudinal torsion/detailing and combined V+T remain separate review items."
+        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion uses the CODE2 strength/detailing gate for φTn, longitudinal Al, closed-hoop spacing, and zone coverage. Combined V+T remains a separate interaction gate."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -6937,7 +7003,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         {"title": "Strength route", "value": code_label, "detail": strength_route.flexure_engine_label, "status": "info"},
         {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
         {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup φVn check", "status": "info"},
-        {"title": "Torsion route", "value": strength_route.torsion_engine_label, "detail": "First-pass closed-stirrup φTn", "status": "info"},
+        {"title": "Torsion route", "value": strength_route.torsion_engine_label, "detail": "Strength/detailing gate", "status": "info"},
     ]
     _render_analysis_summary_strip(basis_cards, columns=5)
 

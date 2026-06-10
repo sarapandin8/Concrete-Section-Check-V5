@@ -1006,6 +1006,9 @@ def render_project_page() -> None:
 
     _render_project_status_panel()
 
+    analysis_mode = _render_analysis_mode_selector(analysis_mode)
+    project = project_from_session_state(st.session_state)
+
     _render_dashboard_section(
         "Project Decision View",
         _next_action_cards(
@@ -1029,8 +1032,6 @@ def render_project_page() -> None:
 
     with st.expander("Edit Project Setup", expanded=False):
         _render_project_information_panel()
-
-        analysis_mode = _render_analysis_mode_selector(analysis_mode)
 
         _render_workflow_aware_design_code_selector(analysis_mode)
         project = project_from_session_state(st.session_state)

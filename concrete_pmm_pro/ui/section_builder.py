@@ -43,6 +43,11 @@ from concrete_pmm_pro.geometry.composite import (
 from concrete_pmm_pro.geometry.presets import load_section_categories, load_section_presets
 from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.geometry.validation import ValidationResult, validate_section_geometry
+from concrete_pmm_pro.serviceability.girder_sls_load_components import (
+    BEAM_GIRDER_SYSTEM_SETTINGS_KEY,
+    DEFAULT_SPAN_LENGTH_M,
+    system_settings_from_mapping,
+)
 from concrete_pmm_pro.visualization import create_section_preview
 
 
@@ -851,6 +856,39 @@ def _render_member_type_section_guidance(preset: dict[str, Any]) -> None:
         st.markdown("##### Member Workflow Guidance")
         st.markdown(_kv_panel_html(rows), unsafe_allow_html=True)
 
+def _setup_span_length_mm_for_section_builder() -> float:
+    """Return the Setup span length as the single source for girder span metadata."""
+
+    system = system_settings_from_mapping(st.session_state.get(BEAM_GIRDER_SYSTEM_SETTINGS_KEY))
+    span_m = float(system.span_length_m or DEFAULT_SPAN_LENGTH_M)
+    if span_m <= 0.0:
+        span_m = DEFAULT_SPAN_LENGTH_M
+    return span_m * 1000.0
+
+
+def _render_locked_setup_span_metadata(preset_key: str) -> float:
+    """Show read-only girder span metadata sourced from Setup and mirror legacy keys."""
+
+    span_mm = _setup_span_length_mm_for_section_builder()
+    # Keep the legacy metadata key synchronized for effective-width helpers,
+    # prestress previews, project save/load metadata, and old project files.
+    st.session_state[f"{preset_key}_girder_length_mm"] = float(span_mm)
+    st.session_state[f"{preset_key}_girder_length_mm_locked_from_setup"] = float(span_mm)
+    st.number_input(
+        "Girder length / span (mm)",
+        min_value=1.0,
+        max_value=1000000.0,
+        value=float(span_mm),
+        step=100.0,
+        format="%.1f",
+        disabled=True,
+        key=f"{preset_key}_girder_length_mm_locked_from_setup",
+        help="Read-only value from Setup → Span length L. Change the span in Setup, not in Section Builder.",
+    )
+    st.caption("Locked to Setup → 🟨 Span length L (m). Section Builder no longer owns girder span input.")
+    return float(span_mm)
+
+
 def _render_metadata_number_input(
     *,
     name: str,
@@ -1162,16 +1200,7 @@ def _render_precast_composite_girder_metadata_inputs(preset: dict[str, Any]) -> 
             step=5.0,
             help_text="Composite deck/topping thickness metadata. Not merged into the precast girder polygon.",
         )
-        girder_length = _render_metadata_number_input(
-            name="girder_length_mm",
-            label="Girder length / span (mm)",
-            preset_key=preset_key,
-            default=defaults["girder_length_mm"],
-            min_value=1.0,
-            max_value=1000000.0,
-            step=100.0,
-            help_text="Girder length metadata used by the AASHTO.BE1 effective slab-width helper and future Beam/Girder checks.",
-        )
+        girder_length = _render_locked_setup_span_metadata(preset_key)
     with columns[1]:
         be = _render_metadata_number_input(
             name="Be_mm",

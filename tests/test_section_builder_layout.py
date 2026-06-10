@@ -528,3 +528,15 @@ def test_section_builder_status_strip_helper_includes_workflow_and_material(monk
     assert "Precast Voided Plank Girder" in output
     assert "C45_PRECAST" in output
     assert "C35_TOPPING" in output
+
+
+def test_span_setup1_section_builder_locks_girder_span_to_setup_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "section_builder.py").read_text(encoding="utf-8")
+
+    assert "_setup_span_length_mm_for_section_builder" in source
+    assert "_render_locked_setup_span_metadata" in source
+    assert "BEAM_GIRDER_SYSTEM_SETTINGS_KEY" in source
+    assert "Locked to Setup" in source
+    assert "disabled=True" in source
+    assert "Change the span in Setup, not in Section Builder" in source
+    assert "girder_length_mm_locked_from_setup" in source

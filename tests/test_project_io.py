@@ -501,6 +501,57 @@ def test_project_session_round_trip_preserves_workflow_load_tables_metadata() ->
     assert restored["column_uls_loads_table"].iloc[0]["Vuy"] == "20"
 
 
+def test_project_io_empty_workflow_load_tables_overwrite_stale_metadata() -> None:
+    session = {
+        "project_metadata": {
+            "workflow_load_tables": {
+                "beam_uls_loads_table": [
+                    {
+                        "Active": True,
+                        "Station x (m)": 0.0,
+                        "Case Name": "OLD-ULS",
+                        "Mux": "1000",
+                        "Vuy": "250",
+                        "Tu": "0",
+                        "Muy": "0",
+                        "Vux": "0",
+                        "Nu": "0",
+                        "Note": "stale",
+                    }
+                ],
+                "beam_sls_loads_table": [
+                    {
+                        "Active": True,
+                        "Station x (m)": 0.0,
+                        "Case Name": "OLD-SLS",
+                        "Stage": "Service stage",
+                        "Load Component": "Total SLS resultant",
+                        "Section Basis": "Composite transformed",
+                        "N": "0",
+                        "Mx": "500",
+                        "My": "0",
+                        "Vy": "0",
+                        "Vx": "0",
+                        "T": "0",
+                        "Note": "stale",
+                    }
+                ],
+            }
+        },
+        "beam_uls_loads_table": [],
+        "beam_sls_loads_table": [],
+    }
+
+    project = project_from_session_state(session)
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert project.metadata["workflow_load_tables"]["beam_uls_loads_table"] == []
+    assert project.metadata["workflow_load_tables"]["beam_sls_loads_table"] == []
+    assert restored["beam_uls_loads_table"].empty
+    assert restored["beam_sls_loads_table"].empty
+
+
 def test_project_session_round_trip_preserves_girder_prestress_force_states_metadata() -> None:
     session_state = {
         "girder_prestress_force_states_table": [

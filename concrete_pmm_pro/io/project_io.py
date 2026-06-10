@@ -145,8 +145,7 @@ def _workflow_load_table_metadata_from_session(session_state: Any) -> dict[str, 
         if table is None:
             continue
         df = pd.DataFrame(table)
-        if not df.empty:
-            tables[key] = df.to_dict(orient="records")
+        tables[key] = df.to_dict(orient="records")
     return tables
 
 

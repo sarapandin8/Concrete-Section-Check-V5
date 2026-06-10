@@ -18,6 +18,7 @@ from concrete_pmm_pro.io.project_io import (
     project_to_json,
 )
 from concrete_pmm_pro.serviceability import dataframe_to_stress_check_points, stress_check_points_to_dataframe
+from concrete_pmm_pro.serviceability.girder_sls_load_components import BEAM_GIRDER_SYSTEM_SETTINGS_KEY
 from concrete_pmm_pro.serviceability.models import StressCheckPoint
 
 
@@ -680,3 +681,34 @@ def test_project_io_empty_rebar_tables_overwrite_stale_metadata() -> None:
 
     assert project.metadata["longitudinal_rebar_table"] == []
     assert project.metadata["beam_girder_shear_reinforcement_table"] == []
+
+
+def test_apply_project_syncs_section_girder_length_from_setup_span_source() -> None:
+    project = _sample_project().model_copy(
+        update={
+            "section_preset_key": "precast_i_girder",
+            "section_preset_name": "Precast I-Girder",
+            "section_parameters": {
+                "D_mm": 1800.0,
+                "Btop_mm": 900.0,
+                "girder_length_mm": 12000.0,
+            },
+            "metadata": {
+                BEAM_GIRDER_SYSTEM_SETTINGS_KEY: {
+                    "span_length_m": 30.0,
+                    "girder_spacing_m": 1.6,
+                    "number_of_girders": 6,
+                    "concrete_unit_weight_kN_m3": 24.0,
+                    "tributary_width_m": 1.6,
+                }
+            },
+        }
+    )
+
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    assert restored[BEAM_GIRDER_SYSTEM_SETTINGS_KEY]["span_length_m"] == pytest.approx(30.0)
+    assert restored["section_parameters"]["girder_length_mm"] == pytest.approx(30000.0)
+    assert restored["precast_i_girder_girder_length_mm"] == pytest.approx(30000.0)
+    assert restored["precast_i_girder_girder_length_mm_locked_from_setup"] == pytest.approx(30000.0)

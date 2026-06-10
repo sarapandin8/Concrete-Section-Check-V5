@@ -642,6 +642,27 @@ def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[d
     return pd.DataFrame(rows)
 
 
+def _sync_section_girder_length_from_setup_span(session_state: MutableMapping[str, Any], span_length_m: Any) -> None:
+    """Keep Section Builder girder-length display locked to Setup span on project load."""
+
+    try:
+        span_mm = float(span_length_m) * 1000.0
+    except (TypeError, ValueError):
+        return
+    if span_mm <= 0.0:
+        return
+
+    section_parameters = dict(session_state.get("section_parameters", {}) or {})
+    if section_parameters:
+        section_parameters["girder_length_mm"] = span_mm
+        session_state["section_parameters"] = section_parameters
+
+    preset_key = str(session_state.get("section_preset_key") or "").strip()
+    if preset_key:
+        session_state[f"{preset_key}_girder_length_mm"] = span_mm
+        session_state[f"{preset_key}_girder_length_mm_locked_from_setup"] = span_mm
+
+
 def apply_project_to_session_state(project: ProjectModel, session_state: MutableMapping[str, Any]) -> None:
     session_state["project_name"] = project.project_name
     session_state["designer"] = project.designer or ""
@@ -709,6 +730,7 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
         existing_ps_system = dict(session_state.get("girder_prestress_system_settings", {}) or {})
         existing_ps_system["span_length_m"] = normalized_system.get("span_length_m")
         session_state["girder_prestress_system_settings"] = existing_ps_system
+        _sync_section_girder_length_from_setup_span(session_state, normalized_system.get("span_length_m"))
     beam_girder_sls_auto_load_settings = project.metadata.get(BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY)
     if isinstance(beam_girder_sls_auto_load_settings, dict):
         session_state[BEAM_GIRDER_SLS_AUTO_LOAD_SETTINGS_KEY] = auto_load_settings_from_mapping(beam_girder_sls_auto_load_settings).as_metadata()

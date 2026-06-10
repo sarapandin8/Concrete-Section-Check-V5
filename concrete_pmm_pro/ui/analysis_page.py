@@ -6590,22 +6590,32 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
                 "strong": True,
             },
             {"title": "Critical flexure demand", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
-            {"title": "Critical shear demand", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
+            {"title": "Peak shear demand", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
+            {"title": "Governing shear check", "value": "-", "detail": "No active Loads → ULS row", "status": "neutral"},
             {"title": "Design action", "value": "Go to Loads", "detail": "Analysis is read-only for ULS demand input.", "status": "info"},
         ]
     flexure = _beam_uls_governing_action(active_df, "Mux")
     shear = _beam_uls_governing_action(active_df, "Vuy")
     flexure_value = _format_beam_uls_demand(flexure["demand"], "kN-m") if flexure else "-"
     flexure_detail = f"{flexure['case']} @ x={_format_beam_uls_x(flexure['x_m'])}" if flexure else "No finite Mux"
-    shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
-    shear_detail = f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}" if shear else "No finite Vuy"
+    peak_shear_value = _format_beam_uls_demand(shear["demand"], "kN") if shear else "-"
+    peak_shear_detail = (
+        f"{shear['case']} @ x={_format_beam_uls_x(shear['x_m'])}; diagram/support demand only"
+        if shear
+        else "No finite Vuy"
+    )
+    governing_shear_value = "-"
+    governing_shear_detail = "Calculate Shear to report governing check station."
     shear_result = _beam_uls_governing_shear_row(shear_check_df)
     torsion_result = _beam_uls_governing_torsion_row(torsion_check_df)
     torsion_status_text = str(torsion_result.get("Status") or "REVIEW") if torsion_result is not None else "OPTIONAL"
     if shear_result is not None:
         shear_dc = str(shear_result.get("Utilization") or "-")
-        shear_value = f"{shear_value} · D/C {shear_dc}" if shear_dc != "-" else shear_value
-        shear_detail = f"{shear_detail}; {shear_result.get('Capacity', '-')}"
+        shear_demand = _beam_uls_float(shear_result.get("Demand kN"))
+        governing_shear_value = _format_beam_uls_demand(shear_demand, "kN") if math.isfinite(shear_demand) else str(shear_result.get("Demand") or "-")
+        if shear_dc != "-":
+            governing_shear_value = f"{governing_shear_value} · D/C {shear_dc}"
+        governing_shear_detail = f"{shear_result.get('Case', '-')} @ x={shear_result.get('Governing x', '-')}; {shear_result.get('Capacity', '-')}"
     flex_preview = _beam_uls_governing_flexure_preview_row(flexure_preview_df)
     if flex_preview is not None:
         status_text = str(flex_preview.get("Status") or "REVIEW")
@@ -6649,7 +6659,8 @@ def _beam_uls_summary_cards(active_df: pd.DataFrame, *, workflow_label: str, cod
             "strong": True,
         },
         {"title": "Critical flexure demand / D/C", "value": flexure_card_value, "detail": flexure_card_detail, "status": "warning" if flex_preview is not None and str(flex_preview.get("Status")) == "FAIL" else "info"},
-        {"title": "Critical shear demand / D/C", "value": shear_value, "detail": shear_detail, "status": "warning" if shear_result is not None and str(shear_result.get("Status")) == "FAIL" else "info"},
+        {"title": "Peak shear demand", "value": peak_shear_value, "detail": peak_shear_detail, "status": "info"},
+        {"title": "Governing shear check", "value": governing_shear_value, "detail": governing_shear_detail, "status": "warning" if shear_result is not None and str(shear_result.get("Status")) == "FAIL" else "info"},
         {
             "title": "Design action",
             "value": "Review calculated ULS gates",
@@ -7165,7 +7176,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             shear_check_df=shear_check_df,
             torsion_check_df=torsion_check_df,
         ),
-        columns=4,
+        columns=5,
     )
 
     st.markdown("#### Compact ULS check table")

@@ -287,7 +287,7 @@ def test_uls_girder1_routes_beam_workflows_away_from_pmm_solver_workspace() -> N
 def test_uls_girder1_uses_primary_actions_only_in_default_decision_display() -> None:
     assert "max |Mux|" not in SOURCE  # avoid user-facing mathematical clutter
     assert "Critical flexure demand" in SOURCE
-    assert "Critical shear demand" in SOURCE
+    assert "Peak shear demand" in SOURCE
     assert "φMn" in SOURCE
     assert "_beam_uls_shear_layout_status" in SOURCE
     assert "Why no φVn line?" in SOURCE

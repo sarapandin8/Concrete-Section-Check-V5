@@ -83,6 +83,45 @@ def test_uls_girder1_empty_state_is_not_ready_without_fake_pass() -> None:
     assert all(card["value"] != "PASS" for card in cards)
 
 
+
+
+def test_uls_shear_code2_summary_separates_peak_demand_from_governing_check() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 0.0, "Case Name": "ULS-G1", "Mux": 100.0, "Vuy": 250.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "support peak"},
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 800.0, "Vuy": 75.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": "design check"},
+        ]
+    )
+    shear = pd.DataFrame(
+        [
+            {
+                "Check": "Shear",
+                "Status": "PASS",
+                "Governing x": "7.000 m",
+                "Case": "ULS-G1",
+                "Demand": "75.00 kN",
+                "Demand kN": 75.0,
+                "Capacity": "φVn = 638.79 kN",
+                "Utilization": "0.117 / det 0.333",
+                "D/C value": 0.117,
+                "Governing D/C value": 0.333,
+            }
+        ]
+    )
+
+    cards = _beam_uls_summary_cards(active, workflow_label="Bridge Beam/Girder", code_label="AASHTO LRFD", shear_check_df=shear)
+    peak_card = next(card for card in cards if card["title"] == "Peak shear demand")
+    check_card = next(card for card in cards if card["title"] == "Governing shear check")
+
+    assert peak_card["value"] == "250.00 kN"
+    assert "x=0.000 m" in peak_card["detail"]
+    assert "diagram/support demand only" in peak_card["detail"]
+    assert check_card["value"] == "75.00 kN · D/C 0.117 / det 0.333"
+    assert "x=7.000 m" in check_card["detail"]
+    assert "φVn = 638.79 kN" in check_card["detail"]
+    assert "250.00" not in check_card["value"]
+
+
 def test_uls_flex1_check_table_uses_flexure_preview_capacity_and_utilization() -> None:
     active = pd.DataFrame(
         [

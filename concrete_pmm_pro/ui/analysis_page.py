@@ -3682,7 +3682,7 @@ def _beam_uls_shear_depth_settings_from_state(state: Mapping[str, object] | None
 
 
 def _beam_uls_bridge_dv_from_depth_mm(d_eff_mm: float, h_mm: float) -> float:
-    """Return the current first-pass AASHTO-compatible dv estimate.
+    """Return the current AASHTO-compatible dv estimate.
 
     This preserves the existing SHEAR1/2 behavior while making the d/dv basis
     explicit and reusable for critical-section placement, cards, and audit rows.
@@ -3723,13 +3723,13 @@ def _beam_uls_effective_shear_depth_values_mm(
                 dv_note += f" Basis note: {settings.get('note')}"
         elif d_eff_mm is not None and math.isfinite(float(d_eff_mm)) and math.isfinite(h_mm) and h_mm > 0.0:
             dv_mm = _beam_uls_bridge_dv_from_depth_mm(float(d_eff_mm), float(h_mm))
-            dv_note = "dv derived from the active d and section depth using the current first-pass AASHTO-compatible basis."
+            dv_note = "dv derived from the active d and section depth using the current AASHTO-compatible basis."
         else:
             dv_mm = float("nan")
             dv_note = "dv unavailable: d or section depth is not ready."
     else:
         dv_mm = float("nan")
-        dv_note = "ACI route uses d for this first-pass one-way shear check; dv is not separately used."
+        dv_note = "ACI route uses d for the implemented one-way shear gate; dv is not separately used."
     return {
         "d_mm": d_eff_mm,
         "dv_mm": dv_mm,
@@ -3904,7 +3904,24 @@ def _render_beam_uls_shear_layout_readiness_panel(state: Mapping[str, object]) -
     st.markdown("##### Provided stirrup layout read from Sections → Rebar")
     st.dataframe(layout_df, use_container_width=True, hide_index=True)
 
-def _beam_uls_active_shear_zone_for_station(state: Mapping[str, object], x_m: float) -> dict[str, object] | None:
+def _beam_uls_shear_zone_covers_station(zone: Mapping[str, object] | None, x_m: float) -> bool:
+    if zone is None or not math.isfinite(float(x_m)):
+        return False
+    x_start = _beam_uls_float(zone.get("x_start_m"))
+    x_end = _beam_uls_float(zone.get("x_end_m"))
+    return (
+        math.isfinite(x_start)
+        and math.isfinite(x_end)
+        and float(x_start) - 1.0e-9 <= float(x_m) <= float(x_end) + 1.0e-9
+    )
+
+
+def _beam_uls_active_shear_zone_for_station(
+    state: Mapping[str, object],
+    x_m: float,
+    *,
+    require_coverage: bool = False,
+) -> dict[str, object] | None:
     zones = _beam_uls_shear_reinforcement_dataframe_from_state(state)
     if zones.empty:
         return None
@@ -3921,6 +3938,8 @@ def _beam_uls_active_shear_zone_for_station(state: Mapping[str, object], x_m: fl
         axis=1,
     )
     covered = active[active["__distance"] <= 1.0e-8]
+    if require_coverage and covered.empty:
+        return None
     source = covered if not covered.empty else active
     row = source.sort_values(["__distance", "x_start_m", "x_end_m"], kind="stable").iloc[0]
     return row.to_dict()
@@ -3947,12 +3966,13 @@ def _beam_uls_shear_detailing_guard(
     avs_mm2_per_mm: float,
     fy_MPa: float,
 ) -> dict[str, object]:
-    """Return first-pass stirrup minimum and spacing guard values.
+    """Return shear minimum-reinforcement and spacing detailing gate values.
 
-    This is intentionally a compact design guard, not the final shear design
-    engine.  It prevents a provided-stirrup φVn pass from being read as a
-    complete shear detailing pass when Av/s or spacing is obviously outside the
-    current route's first-pass limits.
+    SHEAR.CODE2 promotes the provided-stirrup shear check from a strength-only
+    preview to a deterministic design gate: the active zone must provide at
+    least the route minimum Av/s and must satisfy the route maximum spacing
+    screen.  Development length, anchorage, and shop-drawing details remain
+    project review items outside this sectional ULS gate.
     """
 
     notes: list[str] = []
@@ -3973,18 +3993,16 @@ def _beam_uls_shear_detailing_guard(
 
     sqrt_fc = math.sqrt(float(fc_MPa))
     if strength_route.is_bridge:
-        # First-pass AASHTO-compatible screen.  Detailed MCFT β/θ, high-shear
-        # spacing triggers, and code-calibrated exceptions remain future work.
         depth_for_spacing = float(dv_mm) if dv_mm is not None and math.isfinite(float(dv_mm)) and float(dv_mm) > 0.0 else float(d_eff_mm)
         avs_required = 0.083 * sqrt_fc * float(bw_mm) / float(fy_MPa)
         s_max = min(0.80 * depth_for_spacing, 600.0)
-        basis = "AASHTO first-pass Av/s and spacing guard"
-        notes.append("AASHTO guard is first-pass only; detailed MCFT β/θ and high-shear spacing calibration are pending.")
+        basis = "AASHTO LRFD minimum Av/s and maximum spacing gate"
+        notes.append("AASHTO shear detailing gate checks minimum Av/s and maximum stirrup spacing for the active provided zone.")
     else:
         avs_required = max(0.062 * sqrt_fc * float(bw_mm) / float(fy_MPa), 0.35 * float(bw_mm) / float(fy_MPa))
         s_max = min(0.50 * float(d_eff_mm), 600.0)
-        basis = "ACI 318 first-pass Av/s and spacing guard"
-        notes.append("ACI guard checks minimum Av/s and maximum spacing for the provided stirrup zone.")
+        basis = "ACI 318 minimum Av/s and maximum spacing gate"
+        notes.append("ACI shear detailing gate checks minimum Av/s and maximum spacing for the provided stirrup zone.")
 
     avs_dc = float(avs_required) / float(avs_mm2_per_mm) if avs_mm2_per_mm > 0.0 else float("nan")
     spacing_dc = float(spacing_mm) / float(s_max) if s_max > 0.0 else float("nan")
@@ -3999,9 +4017,9 @@ def _beam_uls_shear_detailing_guard(
     else:
         status = "FAIL"
         if math.isfinite(avs_dc) and avs_dc > 1.0 + 1.0e-9:
-            notes.append("Provided Av/s is less than the first-pass minimum guard.")
+            notes.append("Provided Av/s is less than the route minimum shear reinforcement gate.")
         if math.isfinite(spacing_dc) and spacing_dc > 1.0 + 1.0e-9:
-            notes.append("Provided stirrup spacing exceeds the first-pass maximum spacing guard.")
+            notes.append("Provided stirrup spacing exceeds the route maximum spacing gate.")
 
     return {
         "Detailing status": status,
@@ -4051,7 +4069,7 @@ def _beam_uls_shear_result_for_row(
             }
         vu_kN = 0.0
         notes.append("Diagram boundary capacity value only; not a governing shear design section.")
-    zone = _beam_uls_active_shear_zone_for_station(state, x_m)
+    zone = _beam_uls_active_shear_zone_for_station(state, x_m, require_coverage=not diagram_boundary)
     if zone is None:
         return {
             "Check": "Shear",
@@ -4065,7 +4083,7 @@ def _beam_uls_shear_result_for_row(
             "φVn kN": float("nan"),
             "D/C value": float("nan"),
             "Zone": "-",
-            "Notes": "No active stirrup zone covers this station.",
+            "Notes": "No active stirrup zone covers this design/check station. Extend or add a provided stirrup zone; nearest zones are not used for final shear acceptance.",
         }
     analysis_input, input_messages = _beam_uls_flexure_analysis_input_for_station(state, row=row, strength_route=strength_route)
     if input_messages:
@@ -4135,29 +4153,48 @@ def _beam_uls_shear_result_for_row(
     avs_mm2_per_mm = float(stirrup_area) * float(legs) / float(spacing)
     if strength_route.is_bridge:
         phi = 0.90
-        vc_factor = 0.17
-        method = "AASHTO LRFD-compatible simplified sectional shear (θ=45° first-pass)"
-        code_basis = "φVn — AASHTO LRFD-compatible"
+        beta = 2.0
+        theta_deg = 45.0
+        cot_theta = 1.0
+        vc_factor = 0.083 * beta
+        method = "AASHTO LRFD shear strength/detailing gate (β=2.0, θ=45° sectional route)"
+        code_basis = "φVn — AASHTO LRFD shear gate"
         phi_policy = "AASHTO LRFD shear resistance factor φ = 0.90"
         depth_for_vs = float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) and float(dv_eff_mm) > 0.0 else float(d_eff_mm)
         depth_label = "dv"
-        notes.append("Detailed MCFT β/θ calibration and benchmark verification are pending.")
+        notes.append("AASHTO SHEAR.CODE2 gate uses Vc = 0.083β√f'c bv dv with β=2.0, θ=45°, provided Av/s, and Vn capped at 0.25f'c bv dv; prestress vertical component Vp is zero unless included in imported resultants.")
     else:
         phi = 0.75
+        beta = float("nan")
+        theta_deg = 45.0
+        cot_theta = 1.0
         depth_for_vs = float(d_eff_mm)
         vc_factor = 0.17
-        method = "ACI 318 simplified one-way shear with provided stirrups"
-        code_basis = "φVn — ACI 318"
+        method = "ACI 318 shear strength/detailing gate with provided stirrups"
+        code_basis = "φVn — ACI 318 shear gate"
         phi_policy = "ACI 318 shear strength-reduction factor φ = 0.75"
         depth_label = "d"
-        notes.append("First-pass minimum Av/s and maximum spacing guard evaluated for active provided stirrup zone.")
+        notes.append("ACI SHEAR.CODE2 gate uses Vc = 0.17√f'c bw d, provided Av/s, ACI minimum Av/s, maximum spacing, and a Vs maximum screen.")
     vc_n = vc_factor * math.sqrt(fc) * float(bw_mm) * float(depth_for_vs)
-    vs_n = avs_mm2_per_mm * float(fy) * float(depth_for_vs)
-    vn_n = max(0.0, vc_n + vs_n)
+    vs_n = avs_mm2_per_mm * float(fy) * float(depth_for_vs) * float(cot_theta)
+    vn_uncapped_n = max(0.0, vc_n + vs_n)
+    if strength_route.is_bridge:
+        vn_limit_n = 0.25 * float(fc) * float(bw_mm) * float(depth_for_vs)
+        vn_limit_basis = "AASHTO Vn ≤ 0.25 f'c bv dv"
+    else:
+        vs_limit_n = 0.66 * math.sqrt(fc) * float(bw_mm) * float(depth_for_vs)
+        vn_limit_n = vc_n + vs_limit_n
+        vn_limit_basis = "ACI Vs maximum screen"
+    vn_n = min(vn_uncapped_n, vn_limit_n) if math.isfinite(vn_limit_n) and vn_limit_n > 0.0 else vn_uncapped_n
     phi_vn_kN = phi * vn_n / 1000.0
     strength_utilization = (
         float("nan") if diagram_boundary else abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
     )
+    vn_limit_dc = vn_uncapped_n / vn_limit_n if math.isfinite(vn_limit_n) and vn_limit_n > 0.0 else float("nan")
+    if math.isfinite(vn_limit_dc):
+        vn_limit_status = "CAPPED" if vn_limit_dc > 1.0 + 1.0e-9 else "PASS"
+    else:
+        vn_limit_status = "REVIEW"
     strength_status = "BOUNDARY" if diagram_boundary else ("PASS" if math.isfinite(strength_utilization) and strength_utilization <= 1.0 else "FAIL")
     detailing = _beam_uls_shear_detailing_guard(
         strength_route=strength_route,
@@ -4177,10 +4214,14 @@ def _beam_uls_shear_result_for_row(
         status = "DIAGRAM BOUNDARY"
     elif strength_status == "FAIL" or detailing_status == "FAIL":
         status = "FAIL"
-    elif detailing_status == "REVIEW":
+    elif detailing_status == "REVIEW" or vn_limit_status == "REVIEW":
         status = "REVIEW"
     else:
         status = "PASS"
+    if vn_uncapped_n > vn_n + 1.0e-6:
+        notes.append(f"Nominal Vn was capped by {vn_limit_basis}.")
+    if status == "PASS":
+        notes.append("SHEAR.CODE2 strength, Vn-limit, minimum Av/s, maximum spacing, and zone-coverage gates pass for this station.")
     if detailing.get("Detailing notes"):
         notes.append(str(detailing.get("Detailing notes")))
     if diagram_boundary:
@@ -4211,6 +4252,11 @@ def _beam_uls_shear_result_for_row(
         "Vc kN": vc_n / 1000.0,
         "Vs kN": vs_n / 1000.0,
         "Vn kN": vn_n / 1000.0,
+        "Vn uncapped kN": vn_uncapped_n / 1000.0,
+        "Vn limit kN": vn_limit_n / 1000.0 if math.isfinite(vn_limit_n) else float("nan"),
+        "φVn limit kN": phi * vn_limit_n / 1000.0 if math.isfinite(vn_limit_n) else float("nan"),
+        "Vn limit D/C": vn_limit_dc,
+        "Vn limit status": vn_limit_status,
         "D/C value": strength_utilization,
         "Strength D/C value": strength_utilization,
         "Detailing D/C value": detailing_dc,
@@ -4230,6 +4276,9 @@ def _beam_uls_shear_result_for_row(
         "d mm": float(d_eff_mm),
         "dv mm": float(depth_for_vs) if depth_label == "dv" else (float(dv_eff_mm) if dv_eff_mm is not None and math.isfinite(float(dv_eff_mm)) else float("nan")),
         "Tension face": tension_face,
+        "β": beta,
+        "θ deg": theta_deg,
+        "cotθ": cot_theta,
         "φ": phi,
         "Code basis": code_basis,
         "φ policy": phi_policy,
@@ -4246,10 +4295,10 @@ def _beam_uls_shear_check_dataframe(
 ) -> pd.DataFrame:
     columns = [
         "Check", "Status", "Strength status", "Detailing status", "Station type", "Support side", "Critical offset m", "Governing x", "Case", "Demand", "Capacity", "Utilization",
-        "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN",
-        "D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value",
+        "Demand kN", "Abs demand kN", "φVn kN", "φVc kN", "φVs kN", "Vc kN", "Vs kN", "Vn kN", "Vn uncapped kN", "Vn limit kN", "φVn limit kN",
+        "D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Vn limit D/C",
         "Zone", "Stirrup", "Av/s mm2/mm", "Av/s mm2/m", "Av/s required mm2/mm", "Av/s required mm2/m",
-        "Av/s min D/C", "s max mm", "Spacing D/C", "Detailing basis", "bw mm", "d mm", "dv mm", "Tension face", "φ", "Code basis", "φ policy", "Method", "Notes",
+        "Av/s min D/C", "s max mm", "Spacing D/C", "Detailing basis", "bw mm", "d mm", "dv mm", "Tension face", "Vn limit status", "β", "θ deg", "cotθ", "φ", "Code basis", "φ policy", "Method", "Notes",
     ]
     if active_df.empty:
         return pd.DataFrame(columns=columns)
@@ -4266,7 +4315,7 @@ def _beam_uls_shear_check_dataframe(
                 or column.endswith("mm")
                 or column.endswith("mm2/mm")
                 or column.endswith("mm2/m")
-                or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "φ"}
+                or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Vn limit D/C", "Av/s min D/C", "Spacing D/C", "β", "θ deg", "cotθ", "φ"}
                 else "-",
             )
         rows.append(result)
@@ -4644,7 +4693,7 @@ def _beam_uls_shear_diagram_boundary_dataframe(
                     or column.endswith("mm")
                     or column.endswith("mm2/mm")
                     or column.endswith("mm2/m")
-                    or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Av/s min D/C", "Spacing D/C", "φ"}
+                    or column in {"D/C value", "Strength D/C value", "Detailing D/C value", "Governing D/C value", "Vn limit D/C", "Av/s min D/C", "Spacing D/C", "β", "θ deg", "cotθ", "φ"}
                     else "-",
                 )
             if math.isfinite(_beam_uls_float(result.get("φVn kN"))):
@@ -4747,8 +4796,8 @@ def _beam_uls_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, ob
 
 def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFrame:
     columns = [
-        "Governing", "Station type", "Station x", "Support side", "Critical offset", "Case", "Status", "Strength", "Detailing", "Vu demand", "φVn", "D/C", "Strength D/C", "Detailing D/C",
-        "φVc", "φVs", "Zone", "Stirrup", "Av/s", "Av/s min", "s max", "Spacing D/C", "bw", "d", "dv", "φ", "Code basis", "Method", "Notes",
+        "Governing", "Station type", "Station x", "Support side", "Critical offset", "Case", "Status", "Strength", "Detailing", "Vn limit", "Vu demand", "φVn", "D/C", "Strength D/C", "Detailing D/C",
+        "φVc", "φVs", "φVn limit", "Zone", "Stirrup", "Av/s", "Av/s min", "s max", "Spacing D/C", "Vn limit D/C", "bw", "d", "dv", "β", "θ", "φ", "Code basis", "Method", "Notes",
     ]
     if shear_df is None or shear_df.empty:
         return pd.DataFrame(columns=columns)
@@ -4769,6 +4818,7 @@ def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFra
                 "Status": str(row.get("Status") or "-"),
                 "Strength": str(row.get("Strength status") or row.get("Status") or "-"),
                 "Detailing": str(row.get("Detailing status") or "-"),
+                "Vn limit": str(row.get("Vn limit status") or "-"),
                 "Vu demand": _format_beam_uls_audit_number(row.get("Demand kN"), unit="kN"),
                 "φVn": _format_beam_uls_audit_number(row.get("φVn kN"), unit="kN"),
                 "D/C": _format_beam_uls_ratio(row.get("D/C value")),
@@ -4776,15 +4826,19 @@ def _beam_uls_shear_audit_dataframe(shear_df: pd.DataFrame | None) -> pd.DataFra
                 "Detailing D/C": _format_beam_uls_ratio(row.get("Detailing D/C value")),
                 "φVc": _format_beam_uls_audit_number(row.get("φVc kN"), unit="kN"),
                 "φVs": _format_beam_uls_audit_number(row.get("φVs kN"), unit="kN"),
+                "φVn limit": _format_beam_uls_audit_number(row.get("φVn limit kN"), unit="kN"),
                 "Zone": str(row.get("Zone") or "-"),
                 "Stirrup": str(row.get("Stirrup") or "-"),
                 "Av/s": _format_beam_uls_audit_number(row.get("Av/s mm2/m"), unit="mm²/m"),
                 "Av/s min": _format_beam_uls_audit_number(row.get("Av/s required mm2/m"), unit="mm²/m"),
                 "s max": _format_beam_uls_audit_number(row.get("s max mm"), unit="mm"),
                 "Spacing D/C": _format_beam_uls_ratio(row.get("Spacing D/C")),
+                "Vn limit D/C": _format_beam_uls_ratio(row.get("Vn limit D/C")),
                 "bw": _format_beam_uls_audit_number(row.get("bw mm"), unit="mm"),
                 "d": _format_beam_uls_audit_number(row.get("d mm"), unit="mm"),
                 "dv": _format_beam_uls_audit_number(row.get("dv mm"), unit="mm"),
+                "β": _format_beam_uls_ratio(row.get("β")),
+                "θ": _format_beam_uls_audit_number(row.get("θ deg"), unit="deg"),
                 "φ": _format_beam_uls_ratio(row.get("φ")),
                 "Code basis": str(row.get("Code basis") or "-"),
                 "Method": str(row.get("Method") or "-"),
@@ -4909,7 +4963,7 @@ def _beam_uls_torsion_longitudinal_review(state: Mapping[str, object], al_req_mm
             "status": "NOT CHECKED",
             "provided_mm2": float("nan"),
             "utilization": float("nan"),
-            "description": "Longitudinal torsion reinforcement is not required by the current first-pass torsion row.",
+            "description": "Longitudinal torsion reinforcement is not required by the current torsion gate row.",
         }
     raw_rebars = _beam_uls_get_state_value(state, "rebars", []) or []
     try:
@@ -5881,7 +5935,7 @@ def _beam_uls_combined_vt_result_for_row(
     notes.append(str(longitudinal_review.get("description") or ""))
     if status == "PASS":
         notes.append("Combined V+T interaction/reinforcement gates pass for this station; source shear/torsion gates are evaluated separately in the source-strength gate.")
-    notes.append("Vp is treated as zero in this review screen unless already embedded in the imported ULS resultants / current first-pass shear route.")
+    notes.append("Vp is treated as zero in this combined V+T screen unless already embedded in the imported ULS resultants / current SHEAR.CODE2 route.")
     return {
         "Check": "Shear + Torsion",
         "Status": status,
@@ -6993,7 +7047,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         "Compact ULS workspace. Loads page is the source of truth; Analysis reads Active station rows only. "
         "Flexure uses the strain-compatibility section engine with workflow-specific code-compatible audit basis: "
         "Bridge → AASHTO LRFD-compatible strain compatibility; Building → ACI 318-compatible strain compatibility. "
-        "Shear uses the active provided stirrup layout for first-pass sectional φVn; torsion uses the CODE2 strength/detailing gate for φTn, longitudinal Al, closed-hoop spacing, and zone coverage. Combined V+T remains a separate interaction gate."
+        "Shear uses the SHEAR.CODE2 strength/detailing gate for provided stirrup zones, Vn limit, minimum Av/s, maximum spacing, and zone coverage; torsion uses the CODE2 strength/detailing gate for φTn, longitudinal Al, closed-hoop spacing, and zone coverage. Combined V+T remains a separate interaction gate."
     )
 
     active_df = _active_beam_uls_demand_dataframe_from_session(st.session_state)
@@ -7002,7 +7056,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         {"title": "Workflow", "value": workflow_label, "detail": "Selected in Setup", "status": "info"},
         {"title": "Strength route", "value": code_label, "detail": strength_route.flexure_engine_label, "status": "info"},
         {"title": "ULS source", "value": "Loads page", "detail": source_label, "status": "info"},
-        {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Provided stirrup φVn check", "status": "info"},
+        {"title": "Shear route", "value": strength_route.shear_engine_label, "detail": "Strength/detailing gate", "status": "info"},
         {"title": "Torsion route", "value": strength_route.torsion_engine_label, "detail": "Strength/detailing gate", "status": "info"},
     ]
     _render_analysis_summary_strip(basis_cards, columns=5)
@@ -7225,14 +7279,14 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         )
         st.caption(
             "Shear capacity is from the active provided stirrup layout by zone. Critical shear sections are inserted near the supports and included in the governing shear D/C; x=0 and x=L remain capacity-boundary graph values only. "
-            "The φVn / φVc / φVs diagram is extended to x=0 and x=L as capacity-boundary values when the provided layout is available. The status still combines strength D/C and a first-pass stirrup detailing guard for minimum Av/s and maximum spacing. "
-            "Detailed AASHTO MCFT β/θ calibration, high-shear spacing triggers, and benchmark certification remain separate QA/design steps."
+            "The φVn / φVc / φVs diagram is extended to x=0 and x=L as capacity-boundary values when the provided layout is available. The status combines strength D/C, Vn limit, minimum Av/s, maximum spacing, and zone coverage gates. "
+            "Development length, anchorage, and shop-drawing detailing remain separate project review items."
         )
         with st.expander("Shear strength audit / provided stirrup output", expanded=False):
             st.caption(
-                "First-pass sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
-                "Vu, φVc, φVs, φVn, strength D/C, Av/s, first-pass Av/s minimum, maximum spacing, bw, d/dv, and code route. "
-                "Detailed AASHTO MCFT calibration and benchmark certification remain follow-up QA milestones."
+                "SHEAR.CODE2 sectional shear output from active ULS Vuy rows and active provided stirrup zones: "
+                "Vu, φVc, φVs, φVn, Vn limit, strength D/C, Av/s, minimum Av/s, maximum spacing, bw, d/dv, β/θ, and code route. "
+                "Development length, anchorage, and shop-drawing detailing remain project review items."
             )
             shear_audit_df = _beam_uls_shear_audit_dataframe(shear_check_df)
             if shear_audit_df.empty:
@@ -7243,7 +7297,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             if shear_critical_section_df.empty:
                 st.info("Critical shear section locations are not available until span length, effective d/dv basis, and active ULS station rows are ready. Capacity at those critical sections also needs active stirrup-zone coverage.")
             else:
-                st.caption("First-pass critical shear sections inserted at approximately d from each support for ACI Building Beam/Girder and dv from each support for AASHTO Bridge Beam/Girder. These rows are included in the governing shear D/C.")
+                st.caption("Critical shear sections are inserted at approximately d from each support for ACI Building Beam/Girder and dv from each support for AASHTO Bridge Beam/Girder. These rows are included in the governing shear D/C.")
                 st.dataframe(_beam_uls_shear_audit_dataframe(shear_critical_section_df), use_container_width=True, hide_index=True)
 
         with st.expander("Shear end-boundary capacity values", expanded=False):
@@ -7255,11 +7309,11 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
 
         with st.expander("Shear method notes", expanded=False):
             st.write(f"- Shear route: {strength_route.shear_basis_note}")
-            st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
+            st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed; SHEAR.CODE2 also enforces zone coverage, Vn-limit, minimum Av/s, and spacing gates.")
             st.write("- Effective d / dv is read from Sections → Rebar effective shear depth basis when manually defined; otherwise d is estimated from the active reinforcement/prestress centroid and dv is derived for the AASHTO route.")
             st.write("- Critical shear section rows are inserted at approximately d from each support for ACI and dv from each support for AASHTO; their demand is interpolated from active ULS station rows and they are considered for governing shear D/C.")
-            st.write("- The detailing guard screens provided Av/s against a first-pass minimum and checks stirrup spacing against a first-pass maximum; failed guards downgrade the shear status.")
-            st.write("- Bridge shear remains first-pass until detailed AASHTO MCFT β/θ, high-shear spacing triggers, prestress shear effects, and benchmark calibration are added.")
+            st.write("- SHEAR.CODE2 checks provided Av/s against the route minimum, checks stirrup spacing, enforces the Vn limit, and requires the active stirrup zone to cover each design/check station.")
+            st.write("- Development length, anchorage, bearing/end-zone detailing, and shop-drawing constructability remain project review items outside this sectional shear gate.")
 
     if selected_check == "Torsion":
         torsion = _beam_uls_governing_action(active_df, "Tu")
@@ -7389,10 +7443,10 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
             st.write("- ULS.VT2.4 separates the combined interaction status from the separate shear/torsion source strength gate; an interaction PASS does not override a shear-only or torsion-only failure.")
             st.write("- ULS.VT2.1 checks combined compression-strut stress, combined transverse reinforcement, and a longitudinal Al review gate from the ordinary rebar source of truth.")
             st.write("- Calculate Shear + Torsion builds the required shear and torsion source rows internally; users do not need to calculate the separate Shear and Torsion tabs first.")
-            st.write("- AASHTO/Bridge uses the current first-pass AASHTO-compatible shear/torsion route; ACI/Building uses the current ACI-compatible route.")
+            st.write("- AASHTO/Bridge uses SHEAR.CODE2 and TORSION.CODE2 source gates; ACI/Building uses the corresponding ACI-compatible source gates.")
             st.write("- Solid sections use root-sum-square stress interaction; hollow sections use linear sum interaction based on the available section void geometry.")
             st.write("- Provided transverse reinforcement is taken from the active transverse/stirrup zone as (Av + 2At)/s; no reinforcement is silently assumed.")
-            st.write("- Final longitudinal combined flexure + shear-truss + torsion reinforcement, closed-hoop anchorage/detailing, AASHTO MCFT final β/θ calibration, and benchmark verification remain future gates before final PASS wording.")
+            st.write("- Development length, anchorage, bearing/end-zone detailing, shop-drawing constructability, and independent benchmark packages remain project review items outside this sectional interaction gate.")
         st.caption(
             "This tab is intentionally separated from the shear and torsion tabs because combined shear + torsion is a different design decision. "
             "Separate shear and torsion checks must not be treated as a combined-interaction final PASS."
@@ -7408,7 +7462,7 @@ def _render_beam_girder_uls_workspace(mode_settings: AnalysisModeSettings) -> No
         st.write("- Flexure audit output reports Mn nominal, route φ, φMn, D/C, bending direction, tension face, method, code-compatible strain-compatibility basis, and resistance-factor policy for benchmark comparison.")
         st.write("- Flexure φMn is plotted as a section-strength curve along the span; development length, debonding strength, anchorage, interface shear, and end-zone bursting are separate detailing/design checks.")
         st.write(f"- Shear route: {strength_route.shear_basis_note}")
-        st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed.")
+        st.write("- Shear φVn uses active provided stirrup zones only; no minimum stirrup layout is silently assumed; SHEAR.CODE2 also enforces zone coverage, Vn-limit, minimum Av/s, and spacing gates.")
         st.write(f"- Torsion route: {strength_route.torsion_basis_note}")
         st.write(f"- Overall guard: {strength_route.overall_guard_note}")
         st.write("- SLS stress, deflection/camber, prestress loss, PMM, and Loads formulas are unchanged.")

@@ -76,22 +76,22 @@ def bridge_beam_girder_uls_strength_route(code_edition: object | None = None) ->
             "basis with workflow-specific resistance-factor policy. Detailing/development "
             "checks remain separate ULS milestones."
         ),
-        shear_engine_label="AASHTO LRFD-compatible shear route",
+        shear_engine_label="AASHTO LRFD shear strength/detailing gate",
         shear_basis_note=(
-            "Bridge shear uses a provided-stirrup sectional φVn check with an AASHTO LRFD-compatible "
-            "basis for first-pass girder ULS review. Detailed MCFT calibration, maximum spacing, minimum "
-            "transverse reinforcement, and benchmark certification remain follow-up QA milestones."
+            "Bridge shear uses the SHEAR.CODE2 provided-stirrup sectional gate: Vc = 0.083β√f'c bv dv "
+            "with β=2.0, θ=45°, provided Av/s, Vn capped by 0.25f'c bv dv, minimum Av/s, maximum spacing, "
+            "critical shear sections, and active-zone coverage. Development length, anchorage, bearing/end-zone, "
+            "and shop-drawing details remain project review items."
         ),
         torsion_engine_label="AASHTO LRFD torsion route",
         torsion_basis_note=(
-            "Bridge torsion uses an AASHTO LRFD-compatible first-pass closed-stirrup φTn route. "
-            "Detailed LRFD torsion calibration, longitudinal torsion reinforcement, closed-hoop detailing, "
-            "and shear+tortion interaction remain follow-up QA/design milestones."
+            "Bridge torsion uses TORSION.CODE2: closed-hoop φTn, torsion threshold screen, longitudinal Al from ordinary rebar, "
+            "At/s, closed-hoop spacing, and active-zone coverage gates. Anchorage, hook geometry, bearing/end-zone detailing, "
+            "and shop-drawing checks remain project review items."
         ),
         overall_guard_note=(
-            "No overall Bridge ULS certification is issued until AASHTO LRFD torsion detailing, "
-            "combined shear+tortion interaction, development, and benchmark checks are implemented; "
-            "flexure, first-pass sectional shear, and first-pass transverse torsion can be reviewed separately."
+            "Bridge ULS calculated gates may report PASS when flexure, SHEAR.CODE2, TORSION.CODE2, and combined V+T pass. "
+            "Development length, anchorage, bearing/end-zone, shop-drawing detailing, and independent benchmark packages remain project review items."
         ),
         is_code_specific_shear_ready=True,
         is_code_specific_torsion_ready=True,
@@ -118,22 +118,20 @@ def building_beam_girder_uls_strength_route(code_edition: object | None = None) 
             "basis with ACI strain-based strength-reduction factor logic. Detailing/development "
             "checks remain separate ULS milestones."
         ),
-        shear_engine_label="ACI 318 shear route",
+        shear_engine_label="ACI 318 shear strength/detailing gate",
         shear_basis_note=(
-            "Building shear uses a provided-stirrup sectional φVn check with ACI 318 one-way shear "
-            "basis for first-pass beam/girder ULS review. Maximum spacing, minimum shear reinforcement, "
-            "and benchmark certification remain follow-up QA milestones."
+            "Building shear uses the SHEAR.CODE2 provided-stirrup sectional gate: Vc = 0.17√f'c bw d, "
+            "provided Av/s, ACI minimum Av/s, maximum spacing, a Vs maximum screen, critical shear sections, "
+            "and active-zone coverage. Development length, anchorage, and shop-drawing details remain project review items."
         ),
         torsion_engine_label="ACI 318 torsion route",
         torsion_basis_note=(
-            "Building torsion uses an ACI 318 first-pass closed-stirrup φTn route. "
-            "Longitudinal torsion reinforcement, closed-hoop detailing, and shear+tortion interaction "
-            "remain follow-up QA/design milestones."
+            "Building torsion uses TORSION.CODE2: closed-hoop φTn, torsion threshold screen, longitudinal Al from ordinary rebar, "
+            "At/s, closed-hoop spacing, and active-zone coverage gates. Anchorage, hook geometry, and shop-drawing checks remain project review items."
         ),
         overall_guard_note=(
-            "No overall Building ULS certification is issued until ACI 318 torsion detailing, "
-            "combined shear+tortion interaction, development, and benchmark checks are implemented; "
-            "flexure, first-pass sectional shear, and first-pass transverse torsion can be reviewed separately."
+            "Building ULS calculated gates may report PASS when flexure, SHEAR.CODE2, TORSION.CODE2, and combined V+T pass. "
+            "Development length, anchorage, shop-drawing detailing, and independent benchmark packages remain project review items."
         ),
         is_code_specific_shear_ready=True,
         is_code_specific_torsion_ready=True,

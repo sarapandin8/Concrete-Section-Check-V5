@@ -1110,14 +1110,14 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
             st.success("Shear reinforcement layout is ready as provided-zone input for the future φVn engine.")
 
     st.markdown("##### Av/s provided preview")
-    st.caption("Preview only. Final φVn, φVc, φVs, maximum spacing, and minimum shear reinforcement checks will be added in the next shear milestone.")
+    st.caption("Analysis ULS reads this table for SHEAR.CODE2 φVn, φVc, φVs, minimum Av/s, maximum spacing, and active-zone coverage gates.")
     if preview_df.empty:
         st.info("No shear reinforcement zones are defined yet.")
     else:
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
     with st.expander("Shear reinforcement workflow notes", expanded=False):
-        st.write("- Provided stirrup layout is the future source of truth for φVn checks.")
+        st.write("- Provided stirrup layout is the source of truth for SHEAR.CODE2 φVn checks.")
         st.write("- DB12 is the default stirrup size; users can select DB10, DB12, DB16, DB20, or DB25 by zone.")
         st.write("- Auto required/minimum stirrup design should be a design assistant only; the final check must use the provided active layout.")
         st.write("- No shear strength formula is calculated in SHEAR.REINF1.")
@@ -1280,7 +1280,7 @@ def _render_transverse_rebar_tab(rebar_db: pd.DataFrame) -> None:
 
     st.caption(
         "Transverse reinforcement and effective shear-depth inputs used by Analysis → ULS Shear and Torsion. "
-        "Active stirrup zones are the provided layout for φVn and the first-pass closed-hoop source for φTn review."
+        "Active stirrup zones are the provided layout for SHEAR.CODE2 φVn and the closed-hoop source for TORSION.CODE2 φTn."
     )
     _render_shear_reinforcement_layout(rebar_db)
 

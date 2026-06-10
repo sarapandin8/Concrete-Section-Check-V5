@@ -1945,3 +1945,108 @@ def test_uls_torsion_code2_excludes_member_end_boundaries_from_governing_and_sou
     assert torsion_row["Status"] == "PASS"
     assert torsion_row["Governing x"] == "7.000 m"
     assert combined_row["Status"] == "PASS"
+
+
+def test_uls_shear_code2_requires_active_zone_coverage_for_design_station() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Left support only",
+                "x_start_m": 0.0,
+                "x_end_m": 2.0,
+                "Bar Size": "DB12",
+                "Diameter_mm": 12.0,
+                "Legs": 2,
+                "Spacing_mm": 150.0,
+                "fy_MPa": 400.0,
+                "Note": "does not cover station 5 m",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 100.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+
+    row = shear.iloc[0]
+    assert row["Status"] == "LAYOUT REQUIRED"
+    assert "covers this design/check station" in row["Notes"]
+    assert not math.isfinite(float(row["φVn kN"]))
+
+
+def test_uls_shear_code2_caps_nominal_vn_without_failing_when_demand_is_below_capped_capacity() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=300.0, y=0.0),
+            Point2D(x=300.0, y=600.0),
+            Point2D(x=0.0, y=600.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C30", fc_MPa=30.0),
+        "rebars": [
+            Rebar(x_mm=75.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+            Rebar(x_mm=225.0, y_mm=50.0, diameter_mm=25.0, material_name="SD40"),
+        ],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "beam_girder_shear_depth_settings": {"mode": "Manual effective d / dv", "d_mm": 550.0, "dv_mm": 500.0},
+        "beam_girder_shear_reinforcement_table": [
+            {
+                "Active": True,
+                "Zone": "Dense",
+                "x_start_m": 0.0,
+                "x_end_m": 20.0,
+                "Bar Size": "DB32",
+                "Diameter_mm": 32.0,
+                "Legs": 8,
+                "Spacing_mm": 40.0,
+                "fy_MPa": 500.0,
+                "Note": "dense enough to trigger Vn cap",
+            }
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 5.0, "Case Name": "Strength I", "Mux": 100.0, "Vuy": 200.0, "Tu": 0.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    shear = _beam_uls_shear_check_dataframe(state, active, strength_route=route)
+
+    row = shear.iloc[0]
+    assert row["Status"] == "PASS"
+    assert row["Vn limit status"] == "CAPPED"
+    assert row["φVn kN"] == row["φVn limit kN"]
+    assert row["Vn uncapped kN"] > row["Vn limit kN"]
+    assert "capped" in row["Notes"].lower()

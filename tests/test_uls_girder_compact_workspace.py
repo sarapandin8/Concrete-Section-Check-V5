@@ -7,6 +7,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _beam_uls_check_table,
     _beam_uls_combined_vt_audit_dataframe,
     _beam_uls_combined_vt_check_dataframe,
+    _beam_uls_combined_vt_plot_dataframe,
     _beam_uls_combined_vt_source_readiness_dataframe,
     _beam_uls_combined_vt_source_readiness_notes,
     _make_beam_uls_combined_vt_utilization_figure,
@@ -1699,8 +1700,63 @@ def test_uls_vt2_6_combined_vt_adds_endpoint_boundaries_when_load_rows_start_ins
 
     table = _beam_uls_check_table(active, combined_vt_df=vt)
     combined = table.loc[table["Check"] == "Shear + Torsion"].iloc[0]
-    assert combined["Status"] in {"PASS — REVIEW", "FAIL", "DATA REQUIRED"}
+    assert combined["Status"] in {"PASS — REVIEW", "FAIL", "DATA REQUIRED", "REVIEW — SOURCE"}
     assert "Vu" in combined["Demand"] and "Tu" in combined["Demand"]
+
+
+def test_uls_vt2_7_combined_vt_plot_fills_endpoint_boundary_values_for_all_traces() -> None:
+    vt = pd.DataFrame(
+        [
+            {"Status": "DIAGRAM BOUNDARY", "Station type": "DIAGRAM BOUNDARY", "Governing x": "0.000 m", "Case": "Strength I", "Stress D/C value": float("nan"), "Transverse D/C value": float("nan"), "Longitudinal D/C value": float("nan"), "Overall D/C value": float("nan")},
+            {"Status": "PASS — REVIEW", "Station type": "LOAD STATION", "Governing x": "2.000 m", "Case": "Strength I", "Stress D/C value": 0.25, "Transverse D/C value": 0.55, "Longitudinal D/C value": 0.20, "Overall D/C value": 0.55},
+            {"Status": "PASS — REVIEW", "Station type": "LOAD STATION", "Governing x": "18.000 m", "Case": "Strength I", "Stress D/C value": 0.26, "Transverse D/C value": 0.56, "Longitudinal D/C value": 0.21, "Overall D/C value": 0.56},
+            {"Status": "DIAGRAM BOUNDARY", "Station type": "DIAGRAM BOUNDARY", "Governing x": "20.000 m", "Case": "Strength I", "Stress D/C value": float("nan"), "Transverse D/C value": float("nan"), "Longitudinal D/C value": float("nan"), "Overall D/C value": float("nan")},
+        ]
+    )
+
+    plot_df = _beam_uls_combined_vt_plot_dataframe(vt)
+    ends = plot_df[plot_df["__x_m"].isin([0.0, 20.0])]
+
+    assert len(ends) == 2
+    for column in ["Stress D/C value", "Transverse D/C value", "Longitudinal D/C value"]:
+        assert ends[column].notna().all()
+
+    fig = _make_beam_uls_combined_vt_utilization_figure(vt, code_label="AASHTO LRFD")
+    for trace_name in ["Stress interaction D/C", "Transverse reinforcement D/C", "Longitudinal Al D/C"]:
+        trace = next(trace for trace in fig.data if str(trace.name).startswith(trace_name))
+        assert min(float(x) for x in trace.x) == 0.0
+        assert max(float(x) for x in trace.x) == 20.0
+
+
+def test_uls_vt2_7_compact_table_blocks_combined_row_when_source_strength_fails() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 100.0, "Vuy": 75.0, "Tu": 100.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    vt = pd.DataFrame(
+        [
+            {"Check": "Shear + Torsion", "Status": "PASS — REVIEW", "Governing x": "7.000 m", "Case": "ULS-G1", "Vu kN": 75.0, "Tu kN-m": 100.0, "Overall D/C value": 0.567},
+        ]
+    )
+    torsion = pd.DataFrame(
+        [
+            {"Check": "Torsion", "Status": "FAIL", "Governing x": "7.000 m", "Case": "ULS-G1", "Demand": "100.00 kN-m", "Capacity": "φTn = 88.20 kN-m", "Utilization": "1.134", "D/C value": 1.134},
+        ]
+    )
+    shear = pd.DataFrame(
+        [
+            {"Check": "Shear", "Status": "PASS", "Governing x": "7.000 m", "Case": "ULS-G1", "Demand": "75.00 kN", "Capacity": "φVn = 558.26 kN", "Utilization": "0.134", "Governing D/C value": 0.134},
+        ]
+    )
+
+    table = _beam_uls_check_table(active, shear_check_df=shear, torsion_check_df=torsion, combined_vt_df=vt)
+    combined = table.loc[table["Check"] == "Shear + Torsion"].iloc[0]
+
+    assert combined["Status"] == "BLOCKED — SOURCE FAIL"
+    assert "source gate BLOCKED" in combined["Capacity"]
+    assert "interaction 0.567" in combined["Utilization"]
+    assert "Torsion FAIL" in combined["Utilization"]
 
 
 def test_uls_vt2_2_combined_vt_utilization_figure_plots_dc_and_limit() -> None:

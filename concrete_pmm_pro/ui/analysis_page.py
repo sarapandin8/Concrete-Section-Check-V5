@@ -5938,6 +5938,55 @@ def _beam_uls_combined_vt_source_readiness_dataframe(vt_df: pd.DataFrame | None)
     return pd.DataFrame(rows, columns=columns)
 
 
+def _beam_uls_combined_vt_plot_dataframe(vt_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Return V+T rows for diagram plotting with endpoint boundary values filled.
+
+    Endpoint rows are diagram-boundary values only.  When the actual endpoint
+    row cannot compute a finite utilization because the provided stirrup zone
+    starts away from the support, use the nearest finite interior value for the
+    same case/trace so the diagram reaches x=0 and x=L without creating a
+    governing design station.
+    """
+
+    if vt_df is None or vt_df.empty:
+        return pd.DataFrame()
+    plot_df = vt_df.copy()
+    plot_df["__x_m"] = plot_df["Governing x"].map(lambda value: str(value or "").replace(" m", ""))
+    plot_df["__x_m"] = pd.to_numeric(plot_df["__x_m"], errors="coerce")
+    plot_df = plot_df[plot_df["__x_m"].notna()].copy()
+    plot_df = plot_df[~plot_df.get("Status", pd.Series(index=plot_df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE", "BOUNDARY SKIPPED"])].copy()
+    if plot_df.empty:
+        return plot_df
+    trace_columns = ["Stress D/C value", "Transverse D/C value", "Longitudinal D/C value"]
+    plot_df["__is_boundary"] = plot_df.get("Station type", pd.Series(index=plot_df.index, dtype=object)).astype(str).eq("DIAGRAM BOUNDARY")
+    for column in trace_columns:
+        if column not in plot_df.columns:
+            continue
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    if "Case" not in plot_df.columns:
+        plot_df["Case"] = "-"
+    for case_name, case_idx in plot_df.groupby("Case", sort=False).groups.items():
+        case_df = plot_df.loc[list(case_idx)].copy()
+        interior_df = case_df[~case_df["__is_boundary"]].copy()
+        if interior_df.empty:
+            continue
+        for boundary_index, boundary_row in case_df[case_df["__is_boundary"]].iterrows():
+            bx = float(boundary_row["__x_m"])
+            for column in trace_columns:
+                current = _beam_uls_float(plot_df.at[boundary_index, column]) if column in plot_df.columns else float("nan")
+                if math.isfinite(current):
+                    continue
+                finite = interior_df[pd.to_numeric(interior_df.get(column), errors="coerce").notna()].copy()
+                if finite.empty:
+                    continue
+                finite["__dist"] = (finite["__x_m"].astype(float) - bx).abs()
+                nearest_index = finite.sort_values(["__dist", "__x_m"], kind="stable").index[0]
+                nearest_value = _beam_uls_float(plot_df.at[nearest_index, column])
+                if math.isfinite(nearest_value):
+                    plot_df.at[boundary_index, column] = nearest_value
+    return plot_df
+
+
 def _make_beam_uls_combined_vt_utilization_figure(vt_df: pd.DataFrame | None, *, code_label: str) -> go.Figure:
     fig = go.Figure()
     if vt_df is None or vt_df.empty:
@@ -6244,15 +6293,39 @@ def _beam_uls_check_table(
         vu_value = _beam_uls_float(combined_result.get("Vu kN"))
         tu_value = _beam_uls_float(combined_result.get("Tu kN-m"))
         dc_value = _beam_uls_float(combined_result.get("Overall D/C value"))
+        source_gate = _beam_uls_combined_vt_source_strength_gate(shear_check_df, torsion_check_df)
+        interaction_status = str(combined_result.get("Status") or "REVIEW")
+        if source_gate.get("has_blocker"):
+            compact_status = "BLOCKED — SOURCE FAIL"
+            compact_capacity = f"Interaction {interaction_status}; source gate BLOCKED"
+            source_detail = str(source_gate.get("detail") or "source check failed")
+            compact_util = (
+                f"interaction {dc_value:.3f}; {source_detail}"
+                if math.isfinite(dc_value)
+                else source_detail
+            )
+        elif source_gate.get("has_review"):
+            compact_status = "REVIEW — SOURCE"
+            compact_capacity = f"Interaction {interaction_status}; source review"
+            source_detail = str(source_gate.get("detail") or "source check requires review")
+            compact_util = (
+                f"interaction {dc_value:.3f}; {source_detail}"
+                if math.isfinite(dc_value)
+                else source_detail
+            )
+        else:
+            compact_status = interaction_status
+            compact_capacity = "Interaction / (Av+2At)/s / Al review"
+            compact_util = f"{dc_value:.3f}" if math.isfinite(dc_value) else "-"
         rows.append(
             {
                 "Check": "Shear + Torsion",
-                "Status": str(combined_result.get("Status") or "REVIEW"),
+                "Status": compact_status,
                 "Governing x": str(combined_result.get("Governing x") or "-"),
                 "Case": str(combined_result.get("Case") or "-"),
                 "Demand": f"Vu {_format_beam_uls_demand(vu_value, 'kN')}; Tu {_format_beam_uls_demand(tu_value, 'kN-m')}",
-                "Capacity": "Interaction / (Av+2At)/s / Al review",
-                "Utilization": f"{dc_value:.3f}" if math.isfinite(dc_value) else "-",
+                "Capacity": compact_capacity,
+                "Utilization": compact_util,
             }
         )
     elif torsion is not None and float(torsion["abs_demand"]) > _BEAM_ULS_DEMAND_TOL:

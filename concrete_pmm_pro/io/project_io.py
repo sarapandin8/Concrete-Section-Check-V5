@@ -85,6 +85,7 @@ def _clean_table_value(value: Any) -> Any:
 
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
 LONGITUDINAL_REBAR_TABLE_METADATA_KEY = "longitudinal_rebar_table"
+PRESTRESS_TABLE_METADATA_KEY = "prestress_table_metadata"
 REBAR_TABLE_COLUMNS = [
     "Active",
     "Label",
@@ -94,6 +95,36 @@ REBAR_TABLE_COLUMNS = [
     "Diameter_mm",
     "Material",
     "Count",
+    "Note",
+]
+PRESTRESS_TABLE_METADATA_COLUMNS = [
+    "Active",
+    "Label",
+    "Steel Type",
+    "Product",
+    "x_mm",
+    "y_mm",
+    "Area_mm2",
+    "Diameter_mm",
+    "Eq Steel Dia_mm",
+    "fpy_MPa",
+    "fpu_MPa",
+    "Ep_MPa",
+    "Input Mode",
+    "Pe_eff_kN",
+    "fpe_MPa",
+    "fpj_ratio",
+    "loss_percent",
+    "Bonded",
+    "Count",
+    "Strand Count",
+    "Strand Diameter_mm",
+    "Strand Area_mm2",
+    "Breaking Load_kN",
+    "Duct Type",
+    "Duct ID_mm",
+    "Tendon Description",
+    "Typical Use",
     "Note",
 ]
 
@@ -294,29 +325,9 @@ def _prestress_table_metadata_from_session(session_state: Any) -> list[dict[str,
     df = pd.DataFrame(table)
     if df.empty:
         return []
-    metadata_columns = [
-        "Label",
-        "Steel Type",
-        "Product",
-        "Area_mm2",
-        "Diameter_mm",
-        "Eq Steel Dia_mm",
-        "fpy_MPa",
-        "fpu_MPa",
-        "Ep_MPa",
-        "Strand Count",
-        "Strand Diameter_mm",
-        "Strand Area_mm2",
-        "Breaking Load_kN",
-        "Duct Type",
-        "Duct ID_mm",
-        "Tendon Description",
-        "Typical Use",
-        "Note",
-    ]
     rows: list[dict[str, Any]] = []
     for _, row in df.iterrows():
-        entry = {column: _clean_table_value(row.get(column)) for column in metadata_columns if column in df.columns}
+        entry = {column: _clean_table_value(row.get(column)) for column in PRESTRESS_TABLE_METADATA_COLUMNS if column in df.columns}
         if "Product" in entry and not _is_blank(entry.get("Product")):
             entry["Product"] = tendon_product_display_label(entry.get("Product"))
         if any(not _is_blank(value) for value in entry.values()):
@@ -338,7 +349,7 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
             metadata[flag_name] = flag_value
     prestress_table_metadata = _prestress_table_metadata_from_session(session_state)
     if prestress_table_metadata:
-        metadata["prestress_table_metadata"] = prestress_table_metadata
+        metadata[PRESTRESS_TABLE_METADATA_KEY] = prestress_table_metadata
     workflow_load_tables = _workflow_load_table_metadata_from_session(session_state)
     if workflow_load_tables:
         metadata["workflow_load_tables"] = workflow_load_tables
@@ -519,6 +530,11 @@ def _prestress_metadata_for_row(
     return {}
 
 
+def _prestress_metadata_row_key(row: dict[str, Any], index: int) -> str:
+    label = str(row.get("Label") or "").strip()
+    return f"label:{label}" if label else f"index:{index}"
+
+
 def _restore_tendon_product_metadata(row: dict[str, Any]) -> dict[str, Any]:
     product = str(row.get("Product") or "").strip()
     tendon_product = get_tendon_product(product)
@@ -585,6 +601,7 @@ def _normalize_tendon_group_table_row(row: dict[str, Any]) -> dict[str, Any]:
 def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[dict[str, Any]] | None = None) -> pd.DataFrame:
     metadata_rows = table_metadata or []
     rows: list[dict[str, Any]] = []
+    consumed_metadata_keys: set[str] = set()
     for index, element in enumerate(elements, start=1):
         label = element.label or f"PS{index}"
         row = {
@@ -619,6 +636,26 @@ def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[d
         }
         row = _restore_tendon_product_metadata(row)
         metadata = _prestress_metadata_for_row(metadata_rows, index, label)
+        if metadata:
+            consumed_metadata_keys.add(_prestress_metadata_row_key(metadata, index))
+        for column in (
+            "Active",
+            "x_mm",
+            "y_mm",
+            "Area_mm2",
+            "Diameter_mm",
+            "Eq Steel Dia_mm",
+            "Input Mode",
+            "Pe_eff_kN",
+            "fpe_MPa",
+            "fpj_ratio",
+            "loss_percent",
+            "Bonded",
+            "Count",
+        ):
+            value = metadata.get(column)
+            if not _is_blank(value):
+                row[column] = value
         for column in (
             "Product",
             "Steel Type",
@@ -639,6 +676,15 @@ def _prestress_to_table(elements: list[PrestressElement], table_metadata: list[d
             if not _is_blank(value):
                 row[column] = tendon_product_display_label(value) if column == "Product" else value
         rows.append(_normalize_tendon_group_table_row(row))
+    for index, metadata in enumerate(metadata_rows, start=1):
+        metadata_key = _prestress_metadata_row_key(metadata, index)
+        if metadata_key in consumed_metadata_keys:
+            continue
+        row = {column: _clean_table_value(metadata.get(column)) for column in PRESTRESS_TABLE_METADATA_COLUMNS if column in metadata}
+        if "Product" in row and not _is_blank(row.get("Product")):
+            row["Product"] = tendon_product_display_label(row.get("Product"))
+        if any(not _is_blank(value) for value in row.values()):
+            rows.append(_normalize_tendon_group_table_row(row))
     return pd.DataFrame(rows)
 
 
@@ -745,7 +791,7 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     session_state["rebar_editor_revision"] = int(session_state.get("rebar_editor_revision", 0) or 0) + 1
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,
-        _coerce_list(project.metadata.get("prestress_table_metadata")),
+        _coerce_list(project.metadata.get(PRESTRESS_TABLE_METADATA_KEY)),
     )
     session_state["custom_stress_check_points_table"] = stress_check_points_to_dataframe(project.custom_stress_check_points)
 

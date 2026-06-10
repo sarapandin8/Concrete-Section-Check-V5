@@ -356,6 +356,78 @@ def test_project_from_session_state_stores_prestress_table_metadata_for_reload()
     assert metadata["Duct ID_mm"] == pytest.approx(125.0)
 
 
+def test_project_io_preserves_raw_prestress_editor_table_including_inactive_rows() -> None:
+    element = PrestressElement(
+        x_mm=0.0,
+        y_mm=-200.0,
+        area_mm2=3500.0,
+        steel_type="tendon_group",
+        material_name="6-25",
+        fpy_mpa=1580.0,
+        fpu_mpa=1860.0,
+        ep_mpa=195000.0,
+        pe_eff_n=2_800_000.0,
+        initial_stress_mpa=800.0,
+        bonded=True,
+        count=1,
+        label="T25",
+    )
+    session = {
+        "prestress_elements": [element],
+        "prestress_table": [
+            {
+                "Active": True,
+                "Label": "T25",
+                "Product": "6-25",
+                "Steel Type": "tendon_group",
+                "x_mm": 0.0,
+                "y_mm": -200.0,
+                "Area_mm2": 3500.0,
+                "Input Mode": "Pe_eff",
+                "Pe_eff_kN": 2800.0,
+                "fpe_MPa": 800.0,
+                "Bonded": True,
+                "Count": 1,
+                "Strand Count": 25,
+                "Breaking Load_kN": 6500.0,
+                "Duct Type": "Round duct",
+                "Duct ID_mm": 125.0,
+                "Note": "active tendon group",
+            },
+            {
+                "Active": False,
+                "Label": "Future row",
+                "Product": "Custom",
+                "Steel Type": "strand",
+                "x_mm": 100.0,
+                "y_mm": -180.0,
+                "Area_mm2": 140.0,
+                "Input Mode": "fpe",
+                "Pe_eff_kN": 0.0,
+                "fpe_MPa": 1000.0,
+                "Bonded": False,
+                "Count": 2,
+                "Note": "stored inactive row",
+            },
+        ],
+    }
+
+    project = project_from_session_state(session)
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    table = restored["prestress_table"]
+    assert list(table["Label"]) == ["T25", "Future row"]
+    assert table.iloc[0]["Input Mode"] == "Pe_eff"
+    assert table.iloc[0]["Pe_eff_kN"] == pytest.approx(2800.0)
+    assert table.iloc[0]["Duct ID_mm"] == pytest.approx(125.0)
+    assert bool(table.iloc[1]["Active"]) is False
+    assert table.iloc[1]["Input Mode"] == "fpe"
+    assert bool(table.iloc[1]["Bonded"]) is False
+    assert table.iloc[1]["Count"] == 2
+    assert table.iloc[1]["Note"] == "stored inactive row"
+
+
 def test_old_project_json_without_custom_stress_points_loads_safely() -> None:
     project_data = json.loads(project_to_json(_sample_project()))
     project_data.pop("custom_stress_check_points")

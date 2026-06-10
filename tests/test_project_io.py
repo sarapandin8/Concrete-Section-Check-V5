@@ -552,3 +552,131 @@ def test_project_io_preserves_beam_girder_shear_reinforcement_layout() -> None:
     assert project.metadata["beam_girder_shear_reinforcement_table"][0]["Bar Size"] == "DB12"
     assert "beam_girder_shear_reinforcement_table" in restored
     assert restored["beam_girder_shear_reinforcement_table"].iloc[0]["Spacing_mm"] == 100.0
+
+
+def test_project_io_preserves_raw_longitudinal_rebar_editor_table() -> None:
+    session = {
+        "rebar_table": [
+            {
+                "Active": True,
+                "Label": "Top-Perimeter",
+                "x_mm": 125.0,
+                "y_mm": 450.0,
+                "Bar Size": "DB25",
+                "Diameter_mm": 25.0,
+                "Material": "SD40",
+                "Count": 4,
+                "Note": "torsion Al perimeter bars",
+            },
+            {
+                "Active": False,
+                "Label": "Future",
+                "x_mm": -125.0,
+                "y_mm": 450.0,
+                "Bar Size": "DB20",
+                "Diameter_mm": 20.0,
+                "Material": "SD40",
+                "Count": 2,
+                "Note": "stored inactive row",
+            },
+        ],
+        "rebars": [Rebar(x_mm=125.0, y_mm=450.0, diameter_mm=25.0, material_name="SD40", label="Top-Perimeter-1")],
+    }
+
+    project = project_from_session_state(session)
+    assert "longitudinal_rebar_table" in project.metadata
+    assert project.metadata["longitudinal_rebar_table"][0]["Bar Size"] == "DB25"
+    assert project.metadata["longitudinal_rebar_table"][0]["Count"] == 4
+    assert project.metadata["longitudinal_rebar_table"][1]["Active"] is False
+
+    restored: dict[str, object] = {}
+    apply_project_to_session_state(project, restored)
+
+    table = restored["rebar_table"]
+    assert list(table["Label"]) == ["Top-Perimeter", "Future"]
+    assert table.iloc[0]["Bar Size"] == "DB25"
+    assert table.iloc[0]["Count"] == 4
+    assert bool(table.iloc[1]["Active"]) is False
+    assert table.iloc[1]["Note"] == "stored inactive row"
+    assert restored["rebar_editor_revision"] == 1
+
+
+def test_apply_project_prefers_raw_rebar_table_metadata_over_expanded_rebar_objects() -> None:
+    project = _sample_project().model_copy(
+        update={
+            "rebars": [
+                Rebar(x_mm=0.0, y_mm=0.0, diameter_mm=25.0, material_name="SD40", label="Expanded-1"),
+                Rebar(x_mm=0.0, y_mm=0.0, diameter_mm=25.0, material_name="SD40", label="Expanded-2"),
+            ],
+            "metadata": {
+                "longitudinal_rebar_table": [
+                    {
+                        "Active": True,
+                        "Label": "Grouped",
+                        "x_mm": 0.0,
+                        "y_mm": 0.0,
+                        "Bar Size": "DB25",
+                        "Diameter_mm": 25.0,
+                        "Material": "SD40",
+                        "Count": 2,
+                        "Note": "preserve grouped editor row",
+                    }
+                ]
+            },
+        }
+    )
+
+    restored: dict[str, object] = {"rebar_editor_revision": 7}
+    apply_project_to_session_state(project, restored)
+
+    table = restored["rebar_table"]
+    assert len(table) == 1
+    assert table.iloc[0]["Label"] == "Grouped"
+    assert table.iloc[0]["Bar Size"] == "DB25"
+    assert table.iloc[0]["Count"] == 2
+    assert restored["rebar_editor_revision"] == 8
+
+
+def test_apply_project_bumps_transverse_rebar_editor_revision_on_load() -> None:
+    project = _sample_project().model_copy(
+        update={
+            "metadata": {
+                "beam_girder_shear_reinforcement_table": [
+                    {
+                        "Active": True,
+                        "Zone": "Support",
+                        "x_start_m": 0.0,
+                        "x_end_m": 2.0,
+                        "Bar Size": "DB12",
+                        "Diameter_mm": 12.0,
+                        "Legs": 2,
+                        "Spacing_mm": 100.0,
+                        "fy_MPa": 400.0,
+                        "Note": "loaded transverse zone",
+                    }
+                ]
+            },
+        }
+    )
+
+    restored: dict[str, object] = {"beam_girder_shear_reinforcement_editor_revision": 3}
+    apply_project_to_session_state(project, restored)
+
+    assert restored["beam_girder_shear_reinforcement_table"].iloc[0]["Zone"] == "Support"
+    assert restored["beam_girder_shear_reinforcement_editor_revision"] == 4
+
+
+def test_project_io_empty_rebar_tables_overwrite_stale_metadata() -> None:
+    session = {
+        "project_metadata": {
+            "longitudinal_rebar_table": [{"Active": True, "Label": "Old", "x_mm": 0, "y_mm": 0, "Bar Size": "DB20", "Diameter_mm": 20, "Material": "SD40", "Count": 1, "Note": "old"}],
+            "beam_girder_shear_reinforcement_table": [{"Active": True, "Zone": "Old", "x_start_m": 0, "x_end_m": 1, "Bar Size": "DB12", "Diameter_mm": 12, "Legs": 2, "Spacing_mm": 100, "fy_MPa": 400, "Note": "old"}],
+        },
+        "rebar_table": [],
+        "beam_girder_shear_reinforcement_table": [],
+    }
+
+    project = project_from_session_state(session)
+
+    assert project.metadata["longitudinal_rebar_table"] == []
+    assert project.metadata["beam_girder_shear_reinforcement_table"] == []

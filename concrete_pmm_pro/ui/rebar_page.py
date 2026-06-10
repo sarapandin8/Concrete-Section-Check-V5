@@ -1043,6 +1043,8 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
         else:
             st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _default_shear_reinforcement_table(span_m)
     st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY]))
+    if "beam_girder_shear_reinforcement_editor_revision" not in st.session_state:
+        st.session_state["beam_girder_shear_reinforcement_editor_revision"] = 0
 
     cards = [
         RebarMetric("Input method", "Zone table", "Commercial girder detailing"),
@@ -1059,6 +1061,7 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
     with action_cols[0]:
         if st.button("Reset to DB12 zone template", use_container_width=True, key="shear_reinf_reset_template"):
             st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = _default_shear_reinforcement_table(span_m)
+            st.session_state["beam_girder_shear_reinforcement_editor_revision"] += 1
             _store_shear_reinforcement_metadata(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY])
             st.rerun()
     with action_cols[1]:
@@ -1066,6 +1069,7 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
             table = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY]))
             table["Active"] = True
             st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = table
+            st.session_state["beam_girder_shear_reinforcement_editor_revision"] += 1
             _store_shear_reinforcement_metadata(table)
             st.rerun()
     with action_cols[2]:
@@ -1075,13 +1079,14 @@ def _render_shear_reinforcement_layout(rebar_db: pd.DataFrame) -> None:
         )
 
     previous = st.session_state.get(SHEAR_REINFORCEMENT_TABLE_KEY)
+    shear_editor_key = f"beam_girder_shear_reinforcement_editor_{st.session_state['beam_girder_shear_reinforcement_editor_revision']}"
     edited = st.data_editor(
         _ensure_shear_reinforcement_columns(pd.DataFrame(previous)),
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
         column_config=_shear_reinforcement_column_config(),
-        key="beam_girder_shear_reinforcement_editor",
+        key=shear_editor_key,
     )
     normalized = _normalize_shear_reinforcement_table(edited, pd.DataFrame(previous), rebar_db)
     st.session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = normalized

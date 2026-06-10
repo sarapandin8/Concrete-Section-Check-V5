@@ -895,7 +895,7 @@ def render_project_page() -> None:
     save_col, load_col = st.columns(2)
     with save_col:
         st.download_button(
-            "Download Project JSON",
+            "Save Project",
             data=project_to_json(project),
             file_name="concrete_pmm_project.json",
             mime="application/json",

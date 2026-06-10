@@ -52,6 +52,15 @@ def _get_session_value(session_state: Any, key: str, default: Any = None) -> Any
     return getattr(session_state, key, default)
 
 
+def _session_has_key(session_state: Any, key: str) -> bool:
+    if hasattr(session_state, "__contains__"):
+        try:
+            return key in session_state
+        except Exception:
+            pass
+    return hasattr(session_state, key)
+
+
 def _coerce_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -75,6 +84,18 @@ def _clean_table_value(value: Any) -> Any:
 
 
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
+LONGITUDINAL_REBAR_TABLE_METADATA_KEY = "longitudinal_rebar_table"
+REBAR_TABLE_COLUMNS = [
+    "Active",
+    "Label",
+    "x_mm",
+    "y_mm",
+    "Bar Size",
+    "Diameter_mm",
+    "Material",
+    "Count",
+    "Note",
+]
 
 WORKFLOW_LOAD_TABLE_METADATA_KEYS = (
     "column_uls_loads_table",
@@ -106,6 +127,47 @@ def _beam_girder_shear_reinforcement_metadata_from_session(session_state: Any) -
         return pd.DataFrame(value).to_dict(orient="records")
     except Exception:
         return []
+
+
+def _ensure_rebar_table_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a rebar input table with the project-save column contract.
+
+    This duplicates the visible Rebar editor contract intentionally so project
+    save/load can preserve the engineer's raw input table without importing UI
+    code from the IO layer.
+    """
+
+    table = df.copy()
+    for column in REBAR_TABLE_COLUMNS:
+        if column not in table.columns:
+            table[column] = None
+    return table[REBAR_TABLE_COLUMNS]
+
+
+def _longitudinal_rebar_table_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
+    """Serialize the raw Longitudinal Rebar editor table.
+
+    ``ProjectModel.rebars`` stores parsed individual bar objects, which is good
+    for analysis but loses editor-level information such as Bar Size dropdown,
+    Count, inactive rows, and notes.  The raw editor table is therefore stored
+    as metadata and restored preferentially on project load.
+    """
+
+    value = _get_session_value(session_state, "rebar_table", None)
+    if value is None:
+        return []
+    try:
+        df = _ensure_rebar_table_columns(pd.DataFrame(value))
+    except Exception:
+        return []
+    if df.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        entry = {column: _clean_table_value(row.get(column)) for column in REBAR_TABLE_COLUMNS}
+        if any(not _is_blank(value) for value in entry.values()):
+            rows.append(entry)
+    return rows
 
 
 def _girder_prestress_force_states_metadata_from_session(session_state: Any) -> list[dict[str, Any]]:
@@ -280,9 +342,10 @@ def project_from_session_state(session_state: Any) -> ProjectModel:
     workflow_load_tables = _workflow_load_table_metadata_from_session(session_state)
     if workflow_load_tables:
         metadata["workflow_load_tables"] = workflow_load_tables
-    beam_girder_shear_reinforcement = _beam_girder_shear_reinforcement_metadata_from_session(session_state)
-    if beam_girder_shear_reinforcement:
-        metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = beam_girder_shear_reinforcement
+    if _session_has_key(session_state, "rebar_table"):
+        metadata[LONGITUDINAL_REBAR_TABLE_METADATA_KEY] = _longitudinal_rebar_table_metadata_from_session(session_state)
+    if _session_has_key(session_state, SHEAR_REINFORCEMENT_TABLE_KEY):
+        metadata[SHEAR_REINFORCEMENT_TABLE_KEY] = _beam_girder_shear_reinforcement_metadata_from_session(session_state)
     girder_prestress_force_states = _girder_prestress_force_states_metadata_from_session(session_state)
     if girder_prestress_force_states:
         metadata["girder_prestress_force_states_table"] = girder_prestress_force_states
@@ -423,21 +486,23 @@ def _loads_to_table(loads: list[LoadCase]) -> pd.DataFrame:
 
 
 def _rebars_to_table(rebars: list[Rebar]) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "Active": True,
-                "Label": rebar.label or f"B{index}",
-                "x_mm": rebar.x_mm,
-                "y_mm": rebar.y_mm,
-                "Bar Size": "Custom",
-                "Diameter_mm": rebar.diameter_mm,
-                "Material": rebar.material_name,
-                "Count": 1,
-                "Note": "",
-            }
-            for index, rebar in enumerate(rebars, start=1)
-        ]
+    return _ensure_rebar_table_columns(
+        pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Label": rebar.label or f"B{index}",
+                    "x_mm": rebar.x_mm,
+                    "y_mm": rebar.y_mm,
+                    "Bar Size": "Custom",
+                    "Diameter_mm": rebar.diameter_mm,
+                    "Material": rebar.material_name,
+                    "Count": 1,
+                    "Note": "",
+                }
+                for index, rebar in enumerate(rebars, start=1)
+            ]
+        )
     )
 
 
@@ -621,6 +686,9 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     shear_reinforcement = project.metadata.get(SHEAR_REINFORCEMENT_TABLE_KEY)
     if isinstance(shear_reinforcement, list):
         session_state[SHEAR_REINFORCEMENT_TABLE_KEY] = pd.DataFrame(shear_reinforcement)
+        session_state["beam_girder_shear_reinforcement_editor_revision"] = int(
+            session_state.get("beam_girder_shear_reinforcement_editor_revision", 0) or 0
+        ) + 1
     girder_prestress_force_states = project.metadata.get("girder_prestress_force_states_table")
     if isinstance(girder_prestress_force_states, list):
         session_state["girder_prestress_force_states_table"] = pd.DataFrame(girder_prestress_force_states)
@@ -647,7 +715,12 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     building_service_load_settings = project.metadata.get(BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY)
     if isinstance(building_service_load_settings, dict):
         session_state[BUILDING_BEAM_GIRDER_SERVICE_LOAD_SETTINGS_KEY] = building_service_load_settings_from_mapping(building_service_load_settings).as_metadata()
-    session_state["rebar_table"] = _rebars_to_table(project.rebars)
+    raw_rebar_table = project.metadata.get(LONGITUDINAL_REBAR_TABLE_METADATA_KEY)
+    if isinstance(raw_rebar_table, list):
+        session_state["rebar_table"] = _ensure_rebar_table_columns(pd.DataFrame(raw_rebar_table))
+    else:
+        session_state["rebar_table"] = _rebars_to_table(project.rebars)
+    session_state["rebar_editor_revision"] = int(session_state.get("rebar_editor_revision", 0) or 0) + 1
     session_state["prestress_table"] = _prestress_to_table(
         project.prestress_elements,
         _coerce_list(project.metadata.get("prestress_table_metadata")),

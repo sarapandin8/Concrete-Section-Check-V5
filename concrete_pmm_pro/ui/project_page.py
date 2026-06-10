@@ -574,6 +574,121 @@ def _report_foundation_cards(manifest: Any, snapshot: Any) -> list[DashboardCard
     ]
 
 
+def _next_action_cards(
+    *,
+    section_geometry: Any,
+    load_cases: list[Any],
+    rebars: list[Any],
+    prestress_elements: list[Any],
+    analysis_mode: AnalysisModeSettings,
+    readiness: Any,
+) -> list[DashboardCard]:
+    """Return a compact project decision view for the top of the Project page."""
+
+    status = current_project_dirty_status(st.session_state)
+    reinforcement_count = len(rebars) + len(prestress_elements)
+    if section_geometry is None:
+        next_action = DashboardCard(
+            "Next Action",
+            "Build Section",
+            "Open Sections -> Section Builder before running analysis.",
+            "warning",
+            strong=True,
+        )
+    elif reinforcement_count == 0:
+        next_action = DashboardCard(
+            "Next Action",
+            "Define Reinforcement",
+            "Add ordinary rebar or prestress before strength/service checks.",
+            "warning",
+            strong=True,
+        )
+    elif not load_cases:
+        next_action = DashboardCard(
+            "Next Action",
+            "Define Loads",
+            "Add ULS or SLS load cases before running analysis.",
+            "warning",
+            strong=True,
+        )
+    elif status.analysis_status == "Out of date":
+        next_action = DashboardCard(
+            "Next Action",
+            "Run Analysis",
+            "Inputs changed after the last calculated result.",
+            "warning",
+            strong=True,
+        )
+    elif readiness.overall_status == "READY":
+        next_action = DashboardCard(
+            "Next Action",
+            "Review Results",
+            "Results are available; review warnings and report readiness.",
+            "ready",
+            strong=True,
+        )
+    else:
+        next_action = DashboardCard(
+            "Next Action",
+            "Review Setup",
+            "Complete setup and analysis gates before report issue.",
+            "info",
+            strong=True,
+        )
+
+    setup_value = "Ready" if section_geometry is not None and reinforcement_count > 0 and load_cases else "Incomplete"
+    return [
+        next_action,
+        DashboardCard(
+            "Setup Completeness",
+            setup_value,
+            "Section, reinforcement, and loads are the minimum analysis inputs.",
+            status_style_for_value("READY" if setup_value == "Ready" else "WARNING"),
+            strong=setup_value != "Ready",
+        ),
+        DashboardCard(
+            "Active Workflow",
+            analysis_mode_label(analysis_mode),
+            "Controls design-code routing and visible assumptions.",
+            "info",
+        ),
+        DashboardCard(
+            "Project File",
+            "Save / Load",
+            "Use project file actions before major edits or handoff.",
+            "neutral",
+        ),
+    ]
+
+
+def _render_project_information_panel() -> None:
+    with st.container(border=True):
+        st.markdown("#### Project Information")
+        st.text_input("Project Name", key="project_name")
+        st.text_input("Designer", key="designer")
+        st.text_area("Description", key="description")
+        if st.button("Update Project Info", use_container_width=False):
+            st.success("Project information updated.")
+
+
+def _render_project_file_actions(project: ProjectModel) -> None:
+    st.subheader("Save / Load Project")
+    save_col, load_col = st.columns(2)
+    with save_col:
+        st.download_button(
+            "Save Project",
+            data=project_to_json(project),
+            file_name="concrete_pmm_project.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    with load_col:
+        uploaded_file = st.file_uploader("Upload Project JSON", type=["json"])
+        if uploaded_file is not None and st.button("Load Project JSON", use_container_width=True):
+            st.session_state["_pending_project_json"] = uploaded_file.getvalue().decode("utf-8")
+            st.rerun()
+
+
 def _apply_pending_project_load() -> None:
     pending_json = st.session_state.pop("_pending_project_json", None)
     if pending_json is None:
@@ -853,6 +968,15 @@ def _render_project_status_panel() -> None:
     )
 
 
+def _render_workflow_system_settings(analysis_mode: AnalysisModeSettings) -> None:
+    """Render workflow-specific setup controls after the member workflow selector."""
+
+    if analysis_mode.member_type == "beam_girder":
+        _render_beam_girder_system_settings()
+    elif analysis_mode.member_type == "building_beam_girder":
+        _render_building_beam_girder_system_settings()
+
+
 def render_project_page() -> None:
     _apply_pending_project_load()
     _ensure_project_defaults()
@@ -867,46 +991,8 @@ def render_project_page() -> None:
     if error_message:
         st.error(f"Invalid project file: {error_message}")
 
-    _render_project_status_panel()
-
-    with st.container(border=True):
-        st.markdown("#### Project Information")
-        st.text_input("Project Name", key="project_name")
-        st.text_input("Designer", key="designer")
-        st.text_area("Description", key="description")
-        if st.button("Update Project Info", use_container_width=False):
-            st.success("Project information updated.")
-
     analysis_mode = _coerce_analysis_mode_settings(st.session_state.get("analysis_mode_settings", AnalysisModeSettings()))
-    analysis_mode = _render_analysis_mode_selector(analysis_mode)
-
-    _render_workflow_aware_design_code_selector(analysis_mode)
     project = project_from_session_state(st.session_state)
-    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
-
-    if analysis_mode.member_type == "beam_girder":
-        _render_beam_girder_system_settings()
-    elif analysis_mode.member_type == "building_beam_girder":
-        _render_building_beam_girder_system_settings()
-
-    project = project_from_session_state(st.session_state)
-
-    st.subheader("Save / Load Project")
-    save_col, load_col = st.columns(2)
-    with save_col:
-        st.download_button(
-            "Save Project",
-            data=project_to_json(project),
-            file_name="concrete_pmm_project.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-    with load_col:
-        uploaded_file = st.file_uploader("Upload Project JSON", type=["json"])
-        if uploaded_file is not None and st.button("Load Project JSON", use_container_width=True):
-            st.session_state["_pending_project_json"] = uploaded_file.getvalue().decode("utf-8")
-            st.rerun()
-
     section_geometry = st.session_state.get("section_geometry")
     load_cases = st.session_state.get("load_cases", [])
     rebars = st.session_state.get("rebars", [])
@@ -915,16 +1001,47 @@ def render_project_page() -> None:
     include_default_stress_points = bool(st.session_state.get("include_default_stress_check_points", True))
     rebar_valid = st.session_state.get("rebars_valid_for_analysis")
     prestress_valid = st.session_state.get("prestress_valid_for_analysis")
+    snapshot = build_result_traceability_snapshot(st.session_state)
+    readiness = check_report_readiness(snapshot)
+
+    _render_project_status_panel()
+
+    _render_dashboard_section(
+        "Project Decision View",
+        _next_action_cards(
+            section_geometry=section_geometry,
+            load_cases=load_cases,
+            rebars=rebars,
+            prestress_elements=prestress_elements,
+            analysis_mode=analysis_mode,
+            readiness=readiness,
+        ),
+        columns=4,
+    )
+
     _render_summary_strip(
         "Project Summary",
         _project_overview_cards(project, section_geometry, load_cases, rebars, prestress_elements, rebar_valid, prestress_valid),
     )
 
-    snapshot = build_result_traceability_snapshot(st.session_state)
-    readiness = check_report_readiness(snapshot)
-    _render_dashboard_section("Pre-Report Readiness", _pre_report_readiness_cards(snapshot, readiness), columns=5)
-
     _render_compact_panel("Analysis Configuration", _analysis_configuration_cards(analysis_mode), columns=2)
+    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
+
+    with st.expander("Edit Project Setup", expanded=False):
+        _render_project_information_panel()
+
+        analysis_mode = _render_analysis_mode_selector(analysis_mode)
+
+        _render_workflow_aware_design_code_selector(analysis_mode)
+        project = project_from_session_state(st.session_state)
+        _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
+
+        _render_workflow_system_settings(analysis_mode)
+
+    project = project_from_session_state(st.session_state)
+    _render_project_file_actions(project)
+
+    _render_dashboard_section("Pre-Report Readiness", _pre_report_readiness_cards(snapshot, readiness), columns=5)
 
     _render_compact_panel("SLS Stress Points", _sls_stress_point_cards(custom_points, include_default_stress_points), columns=1)
 

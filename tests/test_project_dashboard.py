@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from concrete_pmm_pro.core.analysis import AnalysisModeSettings
 from concrete_pmm_pro.core.project import ProjectModel
+from concrete_pmm_pro.ui import project_page
 from concrete_pmm_pro.ui.project_page import (
     DashboardCard,
     _analysis_configuration_cards,
@@ -142,6 +143,50 @@ def test_pre_report_readiness_cards_preserve_snapshot_values() -> None:
     assert by_title["High/Critical Limitations"].value == "2"
     assert by_title["High/Critical Limitations"].status == "danger"
     assert by_title["High/Critical Limitations"].strong is True
+
+
+def test_next_action_cards_prioritize_missing_section(monkeypatch) -> None:
+    monkeypatch.setattr(
+        project_page,
+        "current_project_dirty_status",
+        lambda _session_state: SimpleNamespace(analysis_status="Current"),
+    )
+
+    cards = project_page._next_action_cards(
+        section_geometry=None,
+        load_cases=[object()],
+        rebars=[object()],
+        prestress_elements=[],
+        analysis_mode=AnalysisModeSettings(member_type="beam_girder"),
+        readiness=SimpleNamespace(overall_status="READY"),
+    )
+
+    assert cards[0].title == "Next Action"
+    assert cards[0].value == "Build Section"
+    assert cards[0].status == "warning"
+    assert cards[0].strong is True
+    assert cards[1].value == "Incomplete"
+
+
+def test_next_action_cards_recommend_analysis_when_inputs_are_dirty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        project_page,
+        "current_project_dirty_status",
+        lambda _session_state: SimpleNamespace(analysis_status="Out of date"),
+    )
+
+    cards = project_page._next_action_cards(
+        section_geometry=object(),
+        load_cases=[object()],
+        rebars=[object()],
+        prestress_elements=[],
+        analysis_mode=AnalysisModeSettings(member_type="beam_girder"),
+        readiness=SimpleNamespace(overall_status="READY"),
+    )
+
+    assert cards[0].value == "Run Analysis"
+    assert cards[0].detail == "Inputs changed after the last calculated result."
+    assert cards[1].value == "Ready"
 
 
 def test_report_foundation_cards_count_manifest_items_or_snapshot_fallback() -> None:

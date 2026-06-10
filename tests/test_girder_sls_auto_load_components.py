@@ -115,7 +115,9 @@ def test_source_files_have_sls5a_ui_and_analysis_guardrails() -> None:
     assert "Number of girders" in PROJECT_SOURCE
     assert "Tributary width for load take-down" in PROJECT_SOURCE
     render_project_source = PROJECT_SOURCE.split("def render_project_page() -> None:", 1)[1]
-    assert render_project_source.index("_render_analysis_mode_selector") < render_project_source.index("_render_beam_girder_system_settings()")
+    assert render_project_source.index("_render_analysis_mode_selector") < render_project_source.index(
+        "_render_workflow_system_settings(analysis_mode)"
+    )
     assert 'if analysis_mode.member_type == "beam_girder":\n        _render_beam_girder_system_settings()' in PROJECT_SOURCE
     assert "Beam/Girder SLS Auto Load Components" in LOADS_SOURCE
     assert "Barrier / Parapet / Sidewalk total area for both sides" in LOADS_SOURCE

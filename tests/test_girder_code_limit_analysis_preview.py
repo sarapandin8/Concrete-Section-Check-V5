@@ -45,6 +45,14 @@ def test_analysis_page_exposes_stage_aware_code_limit_controls() -> None:
     assert "losses are not calculated automatically" in SOURCE.lower()
 
 
+def test_analysis_page_routes_girder_code_limit_preview_from_workflow_code() -> None:
+    preview_block = SOURCE[SOURCE.find("def _render_girder_code_limit_preview"):SOURCE.find("def _render_beam_girder_service_stress_preview")]
+
+    assert "_girder_sls_project_design_code_from_session()" in preview_block
+    assert "_girder_sls_profile_code_from_session()" in preview_block
+    assert "project_design_code = project_design_code_from_session(st.session_state)" not in preview_block
+
+
 def test_analysis_page_shows_limit_formulas_and_consistency_warnings() -> None:
     assert "Compression formula" in SOURCE
     assert "Tension formula" in SOURCE

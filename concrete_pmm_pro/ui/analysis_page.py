@@ -64,8 +64,9 @@ from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisModeSettings, 
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, RebarMaterial, SectionGeometry
 from concrete_pmm_pro.core.design_code import (
     PROJECT_CODE_AASHTO_LRFD,
+    default_project_design_code_for_workflow,
     girder_sls_code_for_project_code,
-    normalize_project_design_code,
+    normalize_project_code_edition,
     project_code_edition_from_session,
     project_design_code_from_session,
 )
@@ -561,6 +562,26 @@ def _analysis_mode_from_session() -> AnalysisModeSettings:
     if isinstance(value, dict):
         return AnalysisModeSettings.model_validate(value)
     return AnalysisModeSettings()
+
+
+def _girder_sls_project_design_code_from_session() -> str:
+    """Return workflow-enforced project code for Beam/Girder SLS previews."""
+
+    mode = _analysis_mode_from_session()
+    return default_project_design_code_for_workflow(mode.member_type, project_design_code_from_session(st.session_state))
+
+
+def _girder_sls_project_code_edition_from_session() -> str:
+    """Return a code-edition label compatible with the Beam/Girder SLS code."""
+
+    code = _girder_sls_project_design_code_from_session()
+    return normalize_project_code_edition(code, st.session_state.get("code_edition"))
+
+
+def _girder_sls_profile_code_from_session():
+    """Return AASHTO/ACI girder SLS preview profile selected by active workflow."""
+
+    return girder_sls_code_for_project_code(_girder_sls_project_design_code_from_session())
 
 
 def _serviceability_settings_from_session() -> ServiceabilitySettings:
@@ -7499,6 +7520,7 @@ def _project_design_code_status_cards(*, workflow: str) -> list[dict[str, object
 
     code = project_design_code_from_session(st.session_state)
     edition = project_code_edition_from_session(st.session_state)
+    code_detail = "Source of truth from Setup"
     if workflow == "pmm" and code == PROJECT_CODE_AASHTO_LRFD:
         capability = "REVIEW / planned"
         detail = "AASHTO LRFD PMM is planned; current PMM solver remains ACI-oriented until a named solver milestone."
@@ -7508,6 +7530,12 @@ def _project_design_code_status_cards(*, workflow: str) -> list[dict[str, object
         detail = "Current PMM workflow is ACI-oriented."
         status = "ready"
     elif workflow == "girder_sls":
+        raw_code = code
+        code = _girder_sls_project_design_code_from_session()
+        edition = _girder_sls_project_code_edition_from_session()
+        code_detail = "Workflow-enforced from active Analysis Mode"
+        if code == raw_code:
+            code_detail = "Source of truth from Setup"
         profile_code = girder_sls_code_for_project_code(code)
         capability = "Preview available"
         detail = f"Girder SLS stress-limit profile: {profile_code}. Final code-certified girder design remains future work."
@@ -7517,7 +7545,7 @@ def _project_design_code_status_cards(*, workflow: str) -> list[dict[str, object
         detail = "Confirm workflow-specific code support before final design use."
         status = "warning"
     return [
-        {"title": "Project design code", "value": code, "detail": "Source of truth from Setup", "status": "info", "strong": True},
+        {"title": "Project design code", "value": code, "detail": code_detail, "status": "info", "strong": True},
         {"title": "Code edition", "value": edition, "detail": "Saved project basis", "status": "info"},
         {"title": "Workflow code capability", "value": capability, "detail": detail, "status": status, "strong": status == "warning"},
     ]
@@ -9043,7 +9071,7 @@ def _girder_sls_diagram_profile_key(stage_label: str) -> str:
 def _girder_stage_limit_profile_for_diagram(stage_label: str):
     """Return the project-code preview stress-limit profile for a stage diagram."""
 
-    code = girder_sls_code_for_project_code(project_design_code_from_session(st.session_state))
+    code = _girder_sls_profile_code_from_session()
     limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
     profile_key = _girder_sls_diagram_profile_key(stage_label)
     option_keys = {option.key for option in girder_sls_limit_profile_options(code=code, stage=limit_stage)}
@@ -9082,7 +9110,7 @@ def _girder_sls_diagram_stress_limit_rows(df: pd.DataFrame) -> list[StressLimitI
 def _render_girder_sls_diagram_tensile_limit_guide(stage_label: str, df: pd.DataFrame) -> None:
     """Render visible tensile-limit guidance in the primary full-length SLS view."""
 
-    code = girder_sls_code_for_project_code(project_design_code_from_session(st.session_state))
+    code = _girder_sls_profile_code_from_session()
     limit_stage = _beam_sls_stage_default_code_limit_stage(stage_label)
     profile_options = girder_sls_limit_profile_options(code=code, stage=limit_stage)
     profile_key = _girder_sls_diagram_profile_key(stage_label)
@@ -11566,7 +11594,7 @@ def _is_building_aci_transfer_end_zone_applicable(stage_label: str) -> bool:
     mode = _analysis_mode_from_session()
     if not is_building_beam_girder_workflow(mode):
         return False
-    if girder_sls_code_for_project_code(project_design_code_from_session(st.session_state)) != "ACI 318":
+    if _girder_sls_profile_code_from_session() != "ACI 318":
         return False
     limit_stage = stage_label if stage_label in DEFAULT_GIRDER_SLS_STAGES else _beam_sls_stage_default_code_limit_stage(stage_label)
     if limit_stage != STAGE_TRANSFER:
@@ -11934,8 +11962,8 @@ def _render_girder_code_limit_preview(
             st.session_state[stage_key] = normalized_stage
 
     controls = st.columns([1.0, 1.05, 1.55, 0.85, 0.85])
-    project_design_code = project_design_code_from_session(st.session_state)
-    project_profile_code = girder_sls_code_for_project_code(project_design_code)
+    project_design_code = _girder_sls_project_design_code_from_session()
+    project_profile_code = _girder_sls_profile_code_from_session()
     code_key = f"girder_code_limit_code_{title}"
     code_sync_key = f"{code_key}_project_code_sync"
     with controls[0]:

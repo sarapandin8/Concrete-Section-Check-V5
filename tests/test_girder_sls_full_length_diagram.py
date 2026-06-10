@@ -134,6 +134,16 @@ def test_sls_limit4_1_tensile_limit_guide_is_visible_in_full_length_diagram() ->
     assert "graph limit lines and stage PASS/FAIL preview update from this profile" in SOURCE
 
 
+def test_sls_limit4_1_bridge_diagram_uses_workflow_enforced_code_profile() -> None:
+    profile_block = SOURCE[SOURCE.find("def _girder_stage_limit_profile_for_diagram"):SOURCE.find("def _girder_sls_diagram_stress_limit_rows")]
+    guide_block = SOURCE[SOURCE.find("def _render_girder_sls_diagram_tensile_limit_guide"):SOURCE.find("def _girder_sls_diagram_limit_summary")]
+
+    assert "_girder_sls_profile_code_from_session()" in profile_block
+    assert "_girder_sls_profile_code_from_session()" in guide_block
+    assert "project_design_code_from_session(st.session_state)" not in profile_block
+    assert "project_design_code_from_session(st.session_state)" not in guide_block
+
+
 def test_sls_limit4_2_visible_guide_shows_formula_and_non_service_aci_note() -> None:
     assert "CODE.SLS.LIMIT4.2" in SOURCE
     assert "Selected tensile limit" in SOURCE

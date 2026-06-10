@@ -77,6 +77,8 @@ def test_code_setup1_source_files_have_project_code_guardrails() -> None:
     assert "Project Design Code / Capability Guard" in PROJECT_SOURCE
     assert "Project code profile" in ANALYSIS_SOURCE
     assert "project-code preview stress-limit profile" in ANALYSIS_SOURCE
+    assert "Workflow-enforced from active Analysis Mode" in ANALYSIS_SOURCE
+    assert "_girder_sls_project_design_code_from_session" in ANALYSIS_SOURCE
     assert "Project Design Code is AASHTO LRFD" in ANALYSIS_SOURCE
     assert "AASHTO LRFD PMM is planned" in ANALYSIS_SOURCE
     assert "Prestress loss code basis" in PRESTRESS_SOURCE

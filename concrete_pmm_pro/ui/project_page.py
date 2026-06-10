@@ -264,13 +264,7 @@ def _render_analysis_mode_selector(current: AnalysisModeSettings) -> AnalysisMod
             key=widget_key,
             help="Bridge Beam/Girder activates AASHTO LRFD bridge girder tools. Building Beam/Girder is guarded for future ACI beam tools. Column/Pier can use ACI 318 or AASHTO LRFD with capability guards.",
         )
-        with st.expander("Optional workflow note", expanded=bool(current.note)):
-            note = st.text_area(
-                "Analysis mode note",
-                key=note_key,
-                height=80,
-                help="Optional project note for member/workflow interpretation. Saved with the project JSON.",
-            )
+        note = st.session_state.get(note_key, current.note or "")
         selected_member_type = _MEMBER_TYPE_OPTIONS[_LEGACY_MEMBER_TYPE_LABELS.get(selected_label, selected_label)]
         settings = AnalysisModeSettings(member_type=selected_member_type, note=note or None)
         st.session_state["analysis_mode_settings"] = settings
@@ -671,6 +665,20 @@ def _render_project_information_panel() -> None:
             st.success("Project information updated.")
 
 
+def _render_project_setup_editor(analysis_mode: AnalysisModeSettings) -> None:
+    st.markdown("### Edit Project Setup")
+    st.caption(
+        "Review project identity, workflow-locked design code, and system settings before defining detailed section, reinforcement, loads, or analysis inputs."
+    )
+    _render_project_information_panel()
+
+    _render_workflow_aware_design_code_selector(analysis_mode)
+    project = project_from_session_state(st.session_state)
+    _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
+
+    _render_workflow_system_settings(analysis_mode)
+
+
 def _render_project_file_actions(project: ProjectModel) -> None:
     st.subheader("Save / Load Project")
     save_col, load_col = st.columns(2)
@@ -1007,6 +1015,7 @@ def render_project_page() -> None:
     _render_project_status_panel()
 
     analysis_mode = _render_analysis_mode_selector(analysis_mode)
+    _render_project_setup_editor(analysis_mode)
     project = project_from_session_state(st.session_state)
 
     _render_dashboard_section(
@@ -1029,15 +1038,6 @@ def render_project_page() -> None:
 
     _render_compact_panel("Analysis Configuration", _analysis_configuration_cards(analysis_mode), columns=2)
     _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
-
-    with st.expander("Edit Project Setup", expanded=False):
-        _render_project_information_panel()
-
-        _render_workflow_aware_design_code_selector(analysis_mode)
-        project = project_from_session_state(st.session_state)
-        _render_compact_panel("Project Design Code / Capability Guard", _project_design_code_cards(project, analysis_mode), columns=2)
-
-        _render_workflow_system_settings(analysis_mode)
 
     project = project_from_session_state(st.session_state)
     _render_project_file_actions(project)

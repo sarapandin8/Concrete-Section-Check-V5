@@ -227,6 +227,18 @@ def test_project_page_member_type_selector_source_is_present() -> None:
     assert '"General Section": "general_section"' not in source
 
 
+def test_project_setup_editor_is_visible_and_workflow_note_is_removed() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "project_page.py").read_text(encoding="utf-8")
+    render_source = source[source.index("def render_project_page() -> None:") :]
+
+    assert "Optional workflow note" not in source
+    assert "_render_project_setup_editor(analysis_mode)" in render_source
+    assert "with st.expander(\"Edit Project Setup\"" not in source
+
+
 def test_analysis_mode_selector_initializes_widget_key_before_session_state_read() -> None:
     from pathlib import Path
 

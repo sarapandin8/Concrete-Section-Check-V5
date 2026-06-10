@@ -221,6 +221,12 @@ def _mode_guidance_lines(settings: AnalysisModeSettings) -> list[str]:
             "Bridge-specific girder spacing, number of girders, barrier/sidewalk/wearing surface, CSiBridge, and staged composite assumptions are hidden.",
             "Building beam/girder ULS/SLS engines are planned and guarded until implemented.",
         ]
+    sls_value = "Yes" if analysis_mode.allow_sls_workflow else "Not selected"
+    sls_detail = (
+        "Beam/Girder staged SLS stress workflow availability"
+        if analysis_mode.allow_sls_workflow
+        else "Column/Pier workflow is governed here by ULS PMM; member SLS checks are not active in this workspace"
+    )
     return [
         "Column/Pier/Wall/Pylon mode uses the existing Pu, Mux, Muy PMM workflow.",
         "This workflow may use ACI 318 or AASHTO LRFD as project code basis; unsupported engines show capability guards.",
@@ -461,9 +467,9 @@ def _analysis_configuration_cards(analysis_mode: AnalysisModeSettings) -> list[D
         ),
         DashboardCard(
             "SLS Workflow",
-            "Yes" if analysis_mode.allow_sls_workflow else "Guarded / planned",
-            "Service stress workflow availability",
-            "ready" if analysis_mode.allow_sls_workflow else "warning",
+            sls_value,
+            sls_detail,
+            "ready" if analysis_mode.allow_sls_workflow else "neutral",
             strong=not analysis_mode.allow_sls_workflow,
         ),
         DashboardCard("Beam/Girder Workflow", beam_status, beam_detail, status_style_for_value(beam_status)),

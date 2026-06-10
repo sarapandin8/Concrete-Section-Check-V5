@@ -109,6 +109,17 @@ def test_analysis_configuration_cards_show_workflow_statuses() -> None:
     assert by_title["Beam/Girder Workflow"].value == "Bridge active"
 
 
+def test_analysis_configuration_cards_show_column_sls_not_selected() -> None:
+    settings = AnalysisModeSettings(member_type="column_pier_pmm")
+    cards = _analysis_configuration_cards(settings)
+    by_title = {card.title: card for card in cards}
+
+    assert by_title["PMM Workflow"].value == "Available"
+    assert by_title["SLS Workflow"].value == "Not selected"
+    assert "ULS PMM" in by_title["SLS Workflow"].detail
+    assert by_title["Beam/Girder Workflow"].value == "Not active"
+
+
 def test_sls_stress_point_cards_count_custom_and_active_points() -> None:
     cards = _sls_stress_point_cards(
         [SimpleNamespace(active=True), SimpleNamespace(active=False), SimpleNamespace(active=True)],

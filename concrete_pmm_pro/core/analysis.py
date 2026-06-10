@@ -50,7 +50,7 @@ class AnalysisModeSettings(BaseModel):
         if self.member_type == "column_pier_pmm":
             object.__setattr__(self, "analysis_workflow", "pmm_section")
             object.__setattr__(self, "allow_pmm_workflow", True)
-            object.__setattr__(self, "allow_sls_workflow", True)
+            object.__setattr__(self, "allow_sls_workflow", False)
             object.__setattr__(self, "allow_beam_girder_placeholder", False)
         elif self.member_type == "beam_girder":
             # WORKFLOW.TYPE2: keep the legacy internal value ``beam_girder``
@@ -72,7 +72,7 @@ class AnalysisModeSettings(BaseModel):
             object.__setattr__(self, "member_type", "column_pier_pmm")
             object.__setattr__(self, "analysis_workflow", "pmm_section")
             object.__setattr__(self, "allow_pmm_workflow", True)
-            object.__setattr__(self, "allow_sls_workflow", True)
+            object.__setattr__(self, "allow_sls_workflow", False)
             object.__setattr__(self, "allow_beam_girder_placeholder", False)
         return self
 

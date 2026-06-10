@@ -27,7 +27,7 @@ def test_column_pier_pmm_maps_to_pmm_section_workflow() -> None:
 
     assert settings.analysis_workflow == "pmm_section"
     assert settings.allow_pmm_workflow is True
-    assert settings.allow_sls_workflow is True
+    assert settings.allow_sls_workflow is False
     assert settings.allow_beam_girder_placeholder is False
 
 
@@ -57,7 +57,7 @@ def test_legacy_general_section_is_migrated_to_column_pier_pmm() -> None:
     assert settings.member_type == "column_pier_pmm"
     assert settings.analysis_workflow == "pmm_section"
     assert settings.allow_pmm_workflow is True
-    assert settings.allow_sls_workflow is True
+    assert settings.allow_sls_workflow is False
 
 
 def test_analysis_mode_label_returns_readable_label() -> None:
@@ -139,3 +139,17 @@ def test_analysis_page_displays_project_owned_member_type_source() -> None:
     assert "Configured in Project" in source
     assert "single editable owner" in source
     assert "st.selectbox(\"Member Type\"" not in source
+
+
+def test_analysis_page_hides_beam_sls_subpages_for_column_pier_workflow() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "analysis_page.py").read_text(encoding="utf-8")
+
+    assert "ANALYSIS_COLUMN_PIER_SUBTABS" in source
+    assert "_analysis_subtabs_for_workflow" in source
+    assert "SLS / Stress & Cracking is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
+    assert "SLS Deflection / Camber is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
+    assert "Shear and torsion are planned capability guards" in source
+    assert "no shear/torsion PASS/FAIL is issued yet" in source

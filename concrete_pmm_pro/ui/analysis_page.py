@@ -217,6 +217,7 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
 )
 
 ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "SLS Deflection / Camber", "Report / QA"]
+ANALYSIS_COLUMN_PIER_SUBTABS = ["ULS / PMM", "Report / QA"]
 # Legacy source-test token retained while PERF.RERUN1 switches from eager st.tabs
 # to lazy subpage rendering: uls_tab, sls_tab, sls_deflection_tab, report_tab
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
@@ -555,6 +556,24 @@ def _render_runtime_diagnostics_expander() -> None:
             st.dataframe(timings_df, use_container_width=True, hide_index=True)
 
 
+def _workflow_sls_status_text(settings: AnalysisModeSettings) -> str:
+    if settings.member_type == "beam_girder":
+        return "Bridge staged preview"
+    if settings.member_type == "building_beam_girder":
+        return "Building preview guarded"
+    return "Not selected"
+
+
+def _workflow_shear_torsion_status_text(settings: AnalysisModeSettings) -> str:
+    if is_pmm_primary_workflow(settings):
+        return "Planned / guarded"
+    if settings.member_type == "beam_girder":
+        return "Bridge ULS guarded"
+    if settings.member_type == "building_beam_girder":
+        return "Building ULS planned"
+    return "Review"
+
+
 def _analysis_mode_from_session() -> AnalysisModeSettings:
     value = st.session_state.get("analysis_mode_settings")
     if isinstance(value, AnalysisModeSettings):
@@ -696,15 +715,16 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
         mode_cols = st.columns(4)
         mode_cols[0].metric("Analysis Workflow", settings.analysis_workflow)
         mode_cols[1].metric("PMM Workflow", "Available" if settings.allow_pmm_workflow else "Not applicable")
-        mode_cols[2].metric("SLS Workflow", "Available" if settings.allow_sls_workflow else "Unavailable")
+        mode_cols[2].metric("SLS Workflow", _workflow_sls_status_text(settings))
         mode_cols[3].metric(
-            "Beam/Girder Workflow",
-            "Bridge active" if settings.member_type == "beam_girder" else ("Building guarded" if settings.member_type == "building_beam_girder" else "Not selected"),
+            "Shear / Torsion",
+            _workflow_shear_torsion_status_text(settings),
         )
 
         if settings.member_type == "column_pier_pmm":
-            st.success("Current workflow uses Pu, Mux, and Muy with PMM interaction and prototype ULS D/C review.")
-            st.info("SLS stress checks remain available for selected service load cases.")
+            st.success("Current workflow uses Pu, Mux, and Muy with PMM interaction and ULS D/C review.")
+            st.info("Shear and torsion are planned capability guards for this member family; no shear/torsion PASS/FAIL is issued yet.")
+            st.info("Beam/Girder SLS stress and deflection/camber workflows are not selected for Column/Pier/Wall/Pylon analysis.")
             st.info("Prestress is treated as internal prestress/reinforcement action, not duplicated as Pu demand.")
         elif settings.member_type == "beam_girder":
             st.info("Bridge Beam/Girder workflow uses AASHTO LRFD project design basis.")
@@ -7561,6 +7581,61 @@ def _render_project_design_code_guard(*, workflow: str) -> None:
         )
 
 
+def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    pmm_status = "Preview available" if code != PROJECT_CODE_AASHTO_LRFD else "REVIEW / planned"
+    pmm_detail = (
+        "ACI-oriented PMM interaction engine with Pu, Mux, and Muy demand/capacity review"
+        if code != PROJECT_CODE_AASHTO_LRFD
+        else "AASHTO LRFD PMM is not implemented; current PMM remains ACI-oriented and must be treated as REVIEW"
+    )
+    return [
+        {
+            "title": "Primary check",
+            "value": "ULS PMM Interaction",
+            "detail": "Column/Pier/Wall/Pylon workflow is centered on axial-biaxial strength",
+            "status": "ready",
+            "strong": True,
+        },
+        {
+            "title": "PMM code basis",
+            "value": pmm_status,
+            "detail": f"{code} / {edition}. {pmm_detail}",
+            "status": "warning" if code == PROJECT_CODE_AASHTO_LRFD else "ready",
+            "strong": code == PROJECT_CODE_AASHTO_LRFD,
+        },
+        {
+            "title": "Shear",
+            "value": "Not implemented",
+            "detail": "Guarded future code check; do not infer Vn or PASS/FAIL from PMM results",
+            "status": "warning",
+            "strong": True,
+        },
+        {
+            "title": "Torsion",
+            "value": "Not implemented",
+            "detail": "Guarded future code check; no torsion capacity or interaction result is issued",
+            "status": "warning",
+            "strong": True,
+        },
+        {
+            "title": "Serviceability",
+            "value": "Not selected",
+            "detail": "Beam/Girder staged SLS stress and deflection/camber workflows are hidden for this member family",
+            "status": "neutral",
+        },
+    ]
+
+
+def _render_column_pier_analysis_decision_view() -> None:
+    st.markdown("### Column / Pier / Wall / Pylon Decision View")
+    st.caption(
+        "Commercial workflow focus: run PMM interaction for Pu-Mux-Muy strength, then review guarded future checks without issuing unsupported shear/torsion results."
+    )
+    _render_analysis_summary_strip(_column_pier_analysis_scope_cards(), columns=5)
+
+
 def _render_analysis_summary_strip(cards: list[dict[str, object]], columns: int = 4) -> None:
     for start in range(0, len(cards), columns):
         cols = st.columns(min(columns, len(cards) - start))
@@ -13465,6 +13540,7 @@ def render_analysis_uls_pmm() -> None:
         return
 
     _render_project_design_code_guard(workflow="pmm")
+    _render_column_pier_analysis_decision_view()
     st.info(
         "ULS compression Pu remains positive. Prestress is treated as internal prestress/reinforcement action "
         "and should not be duplicated as external Pu demand."
@@ -13478,6 +13554,11 @@ def render_analysis_uls_pmm() -> None:
 
 def render_analysis_sls_stress() -> None:
     st.subheader("SLS / Stress & Cracking")
+    mode_settings = _analysis_mode_from_session()
+    if is_pmm_primary_workflow(mode_settings):
+        st.info("SLS / Stress & Cracking is not selected for Column/Pier/Wall/Pylon PMM workflow.")
+        st.warning("Use the ULS / PMM workspace for axial-biaxial strength review. Beam/Girder staged SLS checks remain hidden for this member family.")
+        return
     _render_project_design_code_guard(workflow="girder_sls")
     st.info("SLS stress convention: compression is negative and tension is positive.")
     _render_beam_girder_service_stress_preview()
@@ -13494,7 +13575,7 @@ def render_analysis_sls_deflection_camber() -> None:
     is_bridge_workflow = is_beam_girder_future_workflow(mode_settings)
     is_building_workflow = is_building_beam_girder_workflow(mode_settings)
     if not (is_bridge_workflow or is_building_workflow):
-        st.info("SLS Deflection / Camber is available for Bridge and Building Beam/Girder workflows.")
+        st.info("SLS Deflection / Camber is not selected for Column/Pier/Wall/Pylon PMM workflow.")
         return
 
     section_geometry = st.session_state.get("section_geometry")
@@ -13517,22 +13598,29 @@ def render_analysis_report_qa() -> None:
     _render_pre_report_qa_expander()
 
 
+def _analysis_subtabs_for_workflow(settings: AnalysisModeSettings) -> list[str]:
+    if is_pmm_primary_workflow(settings):
+        return list(ANALYSIS_COLUMN_PIER_SUBTABS)
+    return list(ANALYSIS_SUBTABS)
+
+
 def _analysis_subpage_choice() -> str:
     """Select one Analysis subpage without executing inactive analysis bodies."""
 
     key = "_nav_analysis_subpage"
-    if st.session_state.get(key) not in ANALYSIS_SUBTABS:
-        st.session_state[key] = ANALYSIS_SUBTABS[0]
+    options = _analysis_subtabs_for_workflow(_analysis_mode_from_session())
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[0]
     segmented = getattr(st, "segmented_control", None)
     if callable(segmented):
         try:
-            value = segmented("Analysis subpage", ANALYSIS_SUBTABS, key=key, selection_mode="single")
-            if value in ANALYSIS_SUBTABS:
+            value = segmented("Analysis subpage", options, key=key, selection_mode="single")
+            if value in options:
                 return str(value)
         except TypeError:
             pass
-    value = st.radio("Analysis subpage", ANALYSIS_SUBTABS, key=key, horizontal=True, label_visibility="collapsed")
-    return str(value) if value in ANALYSIS_SUBTABS else str(st.session_state.get(key, ANALYSIS_SUBTABS[0]))
+    value = st.radio("Analysis subpage", options, key=key, horizontal=True, label_visibility="collapsed")
+    return str(value) if value in options else str(st.session_state.get(key, options[0]))
 
 
 def render_analysis_page() -> None:

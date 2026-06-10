@@ -40,6 +40,15 @@ from concrete_pmm_pro.serviceability.girder_sls_load_components import (
     building_service_load_settings_from_mapping,
     system_settings_from_mapping,
 )
+from concrete_pmm_pro.state.dirty_state import (
+    ANALYSIS_STATUS_KEY,
+    CHANGED_GROUPS_KEY,
+    CURRENT_INPUT_HASH_KEY,
+    LAST_ANALYSIS_HASH_KEY,
+    LAST_REFRESHED_WORKSPACE_KEY,
+    PREVIOUS_INPUT_HASH_KEY,
+    REPORT_STATUS_KEY,
+)
 
 
 class ProjectIOError(ValueError):
@@ -708,6 +717,22 @@ def _sync_section_girder_length_from_setup_span(session_state: MutableMapping[st
         session_state[f"{preset_key}_girder_length_mm_locked_from_setup"] = span_mm
 
 
+def _reset_loaded_project_dirty_state(session_state: MutableMapping[str, Any]) -> None:
+    """A loaded project must not inherit analysis freshness from the previous session."""
+
+    for key in (
+        CURRENT_INPUT_HASH_KEY,
+        PREVIOUS_INPUT_HASH_KEY,
+        LAST_ANALYSIS_HASH_KEY,
+        LAST_REFRESHED_WORKSPACE_KEY,
+        "_perf_input_group_hashes",
+    ):
+        session_state.pop(key, None)
+    session_state[ANALYSIS_STATUS_KEY] = "Not run"
+    session_state[REPORT_STATUS_KEY] = "Not run"
+    session_state[CHANGED_GROUPS_KEY] = []
+
+
 def apply_project_to_session_state(project: ProjectModel, session_state: MutableMapping[str, Any]) -> None:
     session_state["project_name"] = project.project_name
     session_state["designer"] = project.designer or ""
@@ -792,6 +817,7 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
         project.prestress_elements,
         _coerce_list(project.metadata.get(PRESTRESS_TABLE_METADATA_KEY)),
     )
+    session_state["prestress_editor_revision"] = int(session_state.get("prestress_editor_revision", 0) or 0) + 1
     session_state["custom_stress_check_points_table"] = stress_check_points_to_dataframe(project.custom_stress_check_points)
 
     for flag_name in ("rebars_valid_for_analysis", "prestress_valid_for_analysis", ORDINARY_REBAR_FLAG_KEY, PRESTRESSING_STEEL_FLAG_KEY):
@@ -800,3 +826,4 @@ def apply_project_to_session_state(project: ProjectModel, session_state: Mutable
     if REINFORCEMENT_FLAGS_PRESET_KEY in project.metadata:
         session_state[REINFORCEMENT_FLAGS_PRESET_KEY] = project.metadata[REINFORCEMENT_FLAGS_PRESET_KEY]
     session_state["project_metadata"] = dict(project.metadata)
+    _reset_loaded_project_dirty_state(session_state)

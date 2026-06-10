@@ -20,6 +20,15 @@ from concrete_pmm_pro.io.project_io import (
 from concrete_pmm_pro.serviceability import dataframe_to_stress_check_points, stress_check_points_to_dataframe
 from concrete_pmm_pro.serviceability.girder_sls_load_components import BEAM_GIRDER_SYSTEM_SETTINGS_KEY
 from concrete_pmm_pro.serviceability.models import StressCheckPoint
+from concrete_pmm_pro.state.dirty_state import (
+    ANALYSIS_STATUS_KEY,
+    CHANGED_GROUPS_KEY,
+    CURRENT_INPUT_HASH_KEY,
+    LAST_ANALYSIS_HASH_KEY,
+    LAST_REFRESHED_WORKSPACE_KEY,
+    PREVIOUS_INPUT_HASH_KEY,
+    REPORT_STATUS_KEY,
+)
 
 
 def _sample_project() -> ProjectModel:
@@ -788,6 +797,41 @@ def test_apply_project_bumps_transverse_rebar_editor_revision_on_load() -> None:
 
     assert restored["beam_girder_shear_reinforcement_table"].iloc[0]["Zone"] == "Support"
     assert restored["beam_girder_shear_reinforcement_editor_revision"] == 4
+
+
+def test_apply_project_bumps_prestress_editor_revision_on_load() -> None:
+    project = _sample_project()
+
+    restored: dict[str, object] = {"prestress_editor_revision": 5}
+    apply_project_to_session_state(project, restored)
+
+    assert restored["prestress_table"].iloc[0]["Label"] == "PS1"
+    assert restored["prestress_editor_revision"] == 6
+
+
+def test_apply_project_resets_stale_dirty_state_after_load() -> None:
+    project = _sample_project()
+    restored: dict[str, object] = {
+        CURRENT_INPUT_HASH_KEY: "old-current",
+        PREVIOUS_INPUT_HASH_KEY: "old-previous",
+        LAST_ANALYSIS_HASH_KEY: "old-analysis",
+        LAST_REFRESHED_WORKSPACE_KEY: "Analysis / ULS",
+        "_perf_input_group_hashes": {"Setup": "old"},
+        ANALYSIS_STATUS_KEY: "Current",
+        REPORT_STATUS_KEY: "Current",
+        CHANGED_GROUPS_KEY: ["Loads"],
+    }
+
+    apply_project_to_session_state(project, restored)
+
+    assert CURRENT_INPUT_HASH_KEY not in restored
+    assert PREVIOUS_INPUT_HASH_KEY not in restored
+    assert LAST_ANALYSIS_HASH_KEY not in restored
+    assert LAST_REFRESHED_WORKSPACE_KEY not in restored
+    assert "_perf_input_group_hashes" not in restored
+    assert restored[ANALYSIS_STATUS_KEY] == "Not run"
+    assert restored[REPORT_STATUS_KEY] == "Not run"
+    assert restored[CHANGED_GROUPS_KEY] == []
 
 
 def test_project_io_empty_rebar_tables_overwrite_stale_metadata() -> None:

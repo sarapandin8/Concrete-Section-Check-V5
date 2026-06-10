@@ -1258,7 +1258,7 @@ def test_uls_shear4_1_critical_markers_use_station_depth_when_support_input_path
     assert any(trace.name == "Critical section for shear loading" for trace in fig.data)
 
 
-def test_uls_torsion1_aci_route_reports_first_pass_phi_tn_without_fake_final_pass() -> None:
+def test_uls_torsion_code2_aci_route_reports_phi_tn_without_fake_unsafe_pass() -> None:
     from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
     from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
 
@@ -1354,7 +1354,7 @@ def test_uls_torsion2_uses_existing_rebar_table_as_longitudinal_al_source() -> N
     assert with_rebar["Al provided mm2"] > with_rebar["Al req mm2"]
     assert with_rebar["Al utilization"] <= 1.0
     assert "existing Rebar table" in with_rebar["Notes"]
-    assert with_rebar["Status"] in {"REVIEW", "BELOW THRESHOLD"}
+    assert with_rebar["Status"] in {"PASS", "REVIEW", "BELOW THRESHOLD"}
 
     disabled_state = dict(state)
     disabled_state["section_has_ordinary_rebar"] = False
@@ -1543,7 +1543,7 @@ def test_uls_vt1_combined_shear_torsion_review_check_produces_stress_and_transve
     assert design_rows["Transverse D/C value"].notna().any()
     assert design_rows["Longitudinal D/C value"].notna().any()
     assert "Longitudinal status" in design_rows.columns
-    assert "PASS — REVIEW" in set(design_rows["Status"]) or "FAIL" in set(design_rows["Status"])
+    assert "PASS" in set(design_rows["Status"]) or "PASS — REVIEW" in set(design_rows["Status"]) or "FAIL" in set(design_rows["Status"])
     assert not audit.empty
     assert "(Av+2At)/s req" in audit.columns
     assert "Al req" in audit.columns
@@ -1639,7 +1639,7 @@ def test_uls_vt2_5_combined_vt_treats_zero_shear_as_valid_and_plots_member_end_b
     assert set(ends["Status"]) == {"DIAGRAM BOUNDARY"}
     assert set(ends["Station type"]) == {"DIAGRAM BOUNDARY"}
     assert ends["Overall D/C value"].notna().any()
-    assert mid["Status"] in {"PASS — REVIEW", "FAIL"}
+    assert mid["Status"] in {"PASS", "PASS — REVIEW", "FAIL"}
     assert mid["Shear stress MPa"] == 0.0
     assert mid["Av shear req mm2/mm"] == 0.0
     assert "10.000 m" not in set(readiness["Station x"])
@@ -1810,3 +1810,74 @@ def test_uls_vt2_1_source_readiness_notes_explain_data_required_rows() -> None:
     assert "Missing section/material" in readiness.iloc[0]["Stress source"]
     assert "Missing active stirrup" in readiness.iloc[0]["Transverse source"]
     assert "Missing/insufficient" in readiness.iloc[0]["Longitudinal source"]
+
+
+def test_uls_torsion_code2_promotes_complete_strength_and_detailing_to_pass() -> None:
+    from concrete_pmm_pro.analysis.uls_strength_routing import beam_girder_uls_strength_route
+    from concrete_pmm_pro.core.models import ConcreteMaterial, Point2D, Rebar, RebarMaterial, SectionGeometry
+
+    geometry = SectionGeometry(
+        outer_polygon=[
+            Point2D(x=0.0, y=0.0),
+            Point2D(x=500.0, y=0.0),
+            Point2D(x=500.0, y=1000.0),
+            Point2D(x=0.0, y=1000.0),
+        ]
+    )
+    state = {
+        "section_geometry": geometry,
+        "concrete_material": ConcreteMaterial(name="C45", fc_MPa=45.0),
+        "rebars": [Rebar(x_mm=60.0 + i * 35.0, y_mm=80.0, diameter_mm=25.0, material_name="SD40") for i in range(12)],
+        "rebar_materials": [RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        "prestress_elements": [],
+        "section_has_ordinary_rebar": True,
+        "beam_girder_shear_reinforcement_table": [
+            {"Active": True, "Zone": "Closed Hoop", "x_start_m": 0.0, "x_end_m": 20.0, "Bar Size": "DB16", "Diameter_mm": 16.0, "Legs": 2, "Spacing_mm": 100.0, "fy_MPa": 400.0, "Note": "complete torsion zone"}
+        ],
+    }
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 500.0, "Vuy": 75.0, "Tu": 50.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    route = beam_girder_uls_strength_route(is_bridge=True, is_building=False, code_edition="AASHTO LRFD")
+
+    torsion = _beam_uls_torsion_check_dataframe(state, active, strength_route=route)
+    row = torsion.iloc[0]
+
+    assert row["Status"] == "PASS"
+    assert row["Transverse status"] == "PASS"
+    assert row["Longitudinal status"] == "PASS"
+    assert row["Detailing status"] == "PASS"
+    assert row["Spacing D/C"] <= 1.0
+    assert "TORSION.CODE2" in row["Notes"]
+
+
+def test_uls_vt_code1_compact_table_can_report_pass_when_sources_are_clear() -> None:
+    active = pd.DataFrame(
+        [
+            {"Active": True, "Station x (m)": 7.0, "Case Name": "ULS-G1", "Mux": 100.0, "Vuy": 75.0, "Tu": 50.0, "Muy": 0.0, "Vux": 0.0, "Nu": 0.0, "Note": ""},
+        ]
+    )
+    vt = pd.DataFrame(
+        [
+            {"Check": "Shear + Torsion", "Status": "PASS", "Governing x": "7.000 m", "Case": "ULS-G1", "Vu kN": 75.0, "Tu kN-m": 50.0, "Overall D/C value": 0.454},
+        ]
+    )
+    torsion = pd.DataFrame(
+        [
+            {"Check": "Torsion", "Status": "PASS", "Governing x": "7.000 m", "Case": "ULS-G1", "Demand": "50.00 kN-m", "Capacity": "φTn = 110.24 kN-m", "Utilization": "0.454", "D/C value": 0.454},
+        ]
+    )
+    shear = pd.DataFrame(
+        [
+            {"Check": "Shear", "Status": "PASS", "Governing x": "7.000 m", "Case": "ULS-G1", "Demand": "75.00 kN", "Capacity": "φVn = 558.26 kN", "Utilization": "0.134", "Governing D/C value": 0.134},
+        ]
+    )
+
+    table = _beam_uls_check_table(active, shear_check_df=shear, torsion_check_df=torsion, combined_vt_df=vt)
+    combined = table.loc[table["Check"] == "Shear + Torsion"].iloc[0]
+
+    assert combined["Status"] == "PASS"
+    assert combined["Capacity"] == "Interaction / (Av+2At)/s / Al"
+    assert combined["Utilization"] == "0.454"

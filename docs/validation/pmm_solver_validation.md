@@ -358,3 +358,13 @@ No PMM solver, D/C extraction, prestress model, or service-stress equation is ch
 ### SECTION.PRESET1B.2 — Plank Girder Stepped-Profile Geometry Hotfix
 
 The plank-girder geometry generator now follows the user-confirmed stepped profile.  Interior plank checks enforce the physical widths B at y = 0 and h1, b3 at h2, and B - 2*b1 at H.  Exterior plank checks enforce a full-depth right exterior edge and left-side offsets of 0 at y = 0/h1, b2 at h2, and b1 at H.  This milestone updates geometry generation and regression tests only; it does not alter solver equations or demand/capacity checks.
+
+### PMM.UI.STATUS1 - ACI RC Flexural PMM Production-Preview Status
+
+The Analysis validation-status panel may now display:
+
+> ACI RC Flexural PMM: Production Preview Ready
+
+This wording is allowed only through `PMM.FINAL.RC1.STATUS.READINESS1`. It is scoped to ACI 318-style ordinary RC Column/Pier/Wall/Pylon flexural PMM review and keeps QA diagnostics visible. It does not authorize final code-certified language, AASHTO LRFD PMM design, prestress finalization, shear, torsion, SLS, detailing, slenderness, or second-order effects.
+
+This milestone changes UI routing and wording only. It does not change PMM equations, phi logic, prestress behavior, demand/capacity extraction, load routing, or benchmark tolerances.

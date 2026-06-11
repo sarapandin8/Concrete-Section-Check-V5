@@ -24,6 +24,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     PMM_3D_MASTER_TOGGLE_KEY,
     _diagnostic_summary_message,
     _diagnostics_to_dataframe,
+    _aci_rc_pmm_ui_status,
     _method_validation_status_cards,
     _method_validation_status_rows,
     _readiness_actions_to_dataframe,
@@ -692,14 +693,37 @@ def test_method_validation_status_rows_include_core_commercial_status_items() ->
     areas = {row["Area"] for row in rows}
     case_ids = {row["Case ID"] for row in rows}
 
+    assert "ACI RC Flexural PMM status" in areas
     assert "RC PMM strain compatibility" in areas
     assert "Directional PMM D/C extraction" in areas
     assert "Prestress-aware axial cap" in areas
     assert "Active bonded prestress model" in areas
     assert "SLS / Stress & Cracking" in areas
+    assert "PMM.FINAL.RC1.STATUS.READINESS1" in case_ids
     assert "VALID.PMM.DC1" in case_ids
     assert "QA.PO1" in case_ids
     assert "VALID.PS1" in case_ids
+
+
+def test_aci_rc_pmm_ui_status_uses_guarded_production_preview_wording() -> None:
+    status = _aci_rc_pmm_ui_status()
+
+    assert status["label"] == "ACI RC Flexural PMM: Production Preview Ready"
+    assert "ACI 318 RC Column/Pier/Wall/Pylon PMM only" in status["detail"]
+    assert "not AASHTO LRFD" in status["detail"]
+    assert "not final code-certified" in status["detail"]
+    assert "Final code-certified ACI/AASHTO PMM design" not in status["label"]
+
+
+def test_method_validation_status_rows_surface_pmm_ui_status_scope_guard() -> None:
+    rows = _method_validation_status_rows(result_has_active_prestress=False, result_has_passive_prestress=False)
+    status_row = next(row for row in rows if row["Case ID"] == "PMM.FINAL.RC1.STATUS.READINESS1")
+
+    assert "Production Preview Ready" in status_row["Design Use Guidance"]
+    assert "AASHTO LRFD PMM" in status_row["Remaining Engineering Limitation"]
+    assert "shear" in status_row["Remaining Engineering Limitation"]
+    assert "torsion" in status_row["Remaining Engineering Limitation"]
+    assert "final code-certified" not in status_row["Design Use Guidance"].lower()
 
 
 def test_method_validation_status_rows_add_passive_ps_when_present() -> None:
@@ -722,7 +746,8 @@ def test_method_validation_status_cards_count_status_groups() -> None:
 
     assert int(card_map["Validated / Implemented"]["value"]) >= 4
     assert int(card_map["Planned Checks"]["value"]) >= 1
-    assert card_map["Method Basis"]["value"] == "ACI strain compatibility"
+    assert card_map["Method Basis"]["value"] == "ACI RC PMM"
+    assert card_map["Method Basis"]["detail"] == "ACI RC Flexural PMM: Production Preview Ready"
 
 
 

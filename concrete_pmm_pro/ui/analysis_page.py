@@ -1348,6 +1348,38 @@ def _validation_case_status_map() -> dict[str, object]:
     return {case.case_id: case for case in build_pmm_solver_validation_matrix()}
 
 
+def _aci_rc_pmm_ui_status(cases: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """Return guarded ACI RC PMM production-preview wording for the UI.
+
+    This is a wording/status helper only. It reads the validation matrix and
+    never changes PMM equations, demand/capacity extraction, or code routing.
+    """
+
+    case_map = cases or _validation_case_status_map()
+    readiness_case = case_map.get("PMM.FINAL.RC1.STATUS.READINESS1")
+    readiness_status = getattr(readiness_case, "status", "planned")
+    if readiness_status == "implemented":
+        return {
+            "label": "ACI RC Flexural PMM: Production Preview Ready",
+            "detail": "ACI 318 RC Column/Pier/Wall/Pylon PMM only; not AASHTO LRFD and not final code-certified.",
+            "table_guidance": (
+                "Use for ACI RC flexural PMM production-preview review with QA diagnostics retained."
+            ),
+            "remaining": (
+                "AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, "
+                "and second-order effects remain outside this readiness gate."
+            ),
+            "status": "ready",
+        }
+    return {
+        "label": "ACI RC Flexural PMM: Engineering Review",
+        "detail": "Production-preview wording is held until PMM.FINAL.RC1.STATUS.READINESS1 is implemented.",
+        "table_guidance": "Use as engineering-review output until the status-readiness gate is implemented.",
+        "remaining": "Complete PMM.FINAL.RC1.STATUS.READINESS1 before production-preview wording is shown.",
+        "status": "warning",
+    }
+
+
 def _method_validation_status_rows(
     *,
     result_has_active_prestress: bool,
@@ -1362,6 +1394,7 @@ def _method_validation_status_rows(
     """
 
     cases = _validation_case_status_map()
+    aci_rc_pmm_status = _aci_rc_pmm_ui_status(cases)
 
     def row(
         area: str,
@@ -1382,6 +1415,13 @@ def _method_validation_status_rows(
         }
 
     rows = [
+        row(
+            "ACI RC Flexural PMM status",
+            "PMM.FINAL.RC1.STATUS.READINESS1",
+            "PMM.FINAL.RC1 readiness gate covers RC scope, uniaxial/biaxial evidence, phi, D/C no-overestimate, and wording guard.",
+            aci_rc_pmm_status["remaining"],
+            f"{aci_rc_pmm_status['label']}. {aci_rc_pmm_status['table_guidance']}",
+        ),
         row(
             "RC PMM strain compatibility",
             "VALID.RC1",
@@ -1496,8 +1536,8 @@ def _method_validation_status_cards(rows: list[dict[str, str]]) -> list[dict[str
         },
         {
             "title": "Method Basis",
-            "value": "ACI strain compatibility",
-            "detail": "See validation table and QA notes",
+            "value": "ACI RC PMM",
+            "detail": _aci_rc_pmm_ui_status()["label"],
             "status": "info",
         },
     ]

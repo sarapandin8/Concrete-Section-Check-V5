@@ -25,8 +25,10 @@ from concrete_pmm_pro.ui.analysis_page import (
     _diagnostic_summary_message,
     _diagnostics_to_dataframe,
     _aci_rc_pmm_ui_status,
+    _filter_pmm_closeout_warnings,
     _method_validation_status_cards,
     _method_validation_status_rows,
+    _pmm_closeout_solver_mode_label,
     _readiness_actions_to_dataframe,
     _readiness_blocking_action,
     _validation_status_compact_dataframe,
@@ -464,6 +466,39 @@ def test_diagnostic_messages_are_classified_for_commercial_display() -> None:
     assert analysis_page_module._classify_diagnostic_message(
         "Directional moment D/C prefers a cleaned PMM slice envelope at Pu, then falls back to interpolated-slice or point-cloud methods when needed."
     ) == "Engineering review warning"
+
+
+def test_pmm_closeout_solver_mode_label_separates_rc_only_from_prestress() -> None:
+    settings = AnalysisSettings(include_prestress=True)
+
+    rc_only_label = _pmm_closeout_solver_mode_label(
+        settings,
+        prestress_system_enabled=True,
+        bonded_prestress_elements=[],
+    )
+    prestress_label = _pmm_closeout_solver_mode_label(
+        settings,
+        prestress_system_enabled=True,
+        bonded_prestress_elements=[object()],
+    )
+
+    assert rc_only_label == "ACI RC Flexural PMM: Production Preview Ready"
+    assert "Prototype" not in rc_only_label
+    assert prestress_label == "RC + Bonded Prestress PMM - Engineering Review"
+
+
+def test_pmm_closeout_warning_filter_removes_rc_only_blanket_prototype_warning() -> None:
+    warnings = [
+        "PMM results are prototype results for engineering review. Final production-grade validation is future work.",
+        "Demand/capacity check uses cleaned Pu-slice PMM capacity extraction with ray-intersection; benchmark validation remains in progress.",
+    ]
+
+    rc_only = _filter_pmm_closeout_warnings(warnings, result_has_bonded_prestress=False)
+    prestressed = _filter_pmm_closeout_warnings(warnings, result_has_bonded_prestress=True)
+
+    assert all("prototype results" not in warning for warning in rc_only)
+    assert any("Demand/capacity check uses cleaned Pu-slice" in warning for warning in rc_only)
+    assert any("prototype results" in warning for warning in prestressed)
 
 
 def test_diagnostic_guidance_explains_prestress_fpu_cap_action() -> None:

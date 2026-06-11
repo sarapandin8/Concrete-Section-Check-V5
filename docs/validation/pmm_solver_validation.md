@@ -374,3 +374,11 @@ This milestone changes UI routing and wording only. It does not change PMM equat
 Draft Word report and PMM figure-export wording now align with `PMM.UI.STATUS1`. Report text may refer to ACI RC Flexural PMM as production-preview only within the validated RC scope, while unsupported PMM routes, fallback capacity methods, AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, and second-order effects remain engineering-review or future-work items.
 
 This milestone changes report/export wording only. It does not change report data collection, PMM equations, demand/capacity extraction, validation benchmark tolerances, or solver execution.
+
+### PMM.CLOSEOUT.RC1 - ACI RC Flexural PMM Closeout Audit
+
+The Analysis UI now treats the ordinary RC-only Flexural PMM route as the closed production-preview scope supported by `PMM.FINAL.RC1.STATUS.READINESS1`, `PMM.UI.STATUS1`, and `PMM.REPORT.STATUS1`. RC-only first-screen solver labels no longer use blanket `Prototype` wording, and the raw PMM prototype warning is filtered out of RC-only first-screen diagnostics.
+
+This closeout is intentionally narrow. D/C fallback warnings, serviceability exclusions, prestressed PMM, AASHTO LRFD PMM, shear, torsion, detailing, slenderness, second-order effects, and final code certification remain outside the closeout scope. Raw solver/report QA traces may still retain conservative warnings where they protect unsupported routes or non-RC-only behavior.
+
+This milestone changes UI/status wording and diagnostic presentation only. It does not change PMM equations, phi logic, axial-cap logic, prestress behavior, demand/capacity extraction, validation benchmark tolerances, or solver execution.

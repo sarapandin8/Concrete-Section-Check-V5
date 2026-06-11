@@ -1243,6 +1243,27 @@ def _compression_reversal_metadata_present(df: pd.DataFrame | None) -> bool:
     return bool(pd.to_numeric(df["prestress_compression_reversal_count"], errors="coerce").fillna(0).gt(0).any())
 
 
+def _pmm_closeout_solver_mode_label(
+    settings: AnalysisSettings,
+    *,
+    prestress_system_enabled: bool,
+    bonded_prestress_elements: list,
+) -> str:
+    """Return commercial-facing PMM mode label without changing solver routing."""
+
+    if settings.include_prestress and prestress_system_enabled and bonded_prestress_elements:
+        return "RC + Bonded Prestress PMM - Engineering Review"
+    return _aci_rc_pmm_ui_status()["label"]
+
+
+def _filter_pmm_closeout_warnings(warnings: list[str], *, result_has_bonded_prestress: bool) -> list[str]:
+    """Keep raw QA trace conservative while removing RC-only blanket prototype wording from first-screen UI."""
+
+    if result_has_bonded_prestress:
+        return _deduplicate_diagnostic_messages(warnings)
+    return _deduplicate_diagnostic_messages([warning for warning in warnings if str(warning) != PMM_PROTOTYPE_WARNING])
+
+
 def _render_solver_diagnostic_messages(
     *,
     result_has_bonded_prestress: bool,
@@ -1261,10 +1282,11 @@ def _render_solver_diagnostic_messages(
     Analysis workspace.
     """
 
-    base_warnings: list[object] = [PMM_PROTOTYPE_WARNING, SERVICEABILITY_NOT_IMPLEMENTED_WARNING, DCR_PROTOTYPE_WARNING]
+    base_warnings: list[object] = [SERVICEABILITY_NOT_IMPLEMENTED_WARNING, DCR_PROTOTYPE_WARNING]
     if result_has_bonded_prestress:
         base_warnings.extend(
             [
+                PMM_PROTOTYPE_WARNING,
                 BONDED_PRESTRESS_PROTOTYPE_WARNING,
                 "PT Bar / Prestressing Bar material is supported through PrestressElement.",
                 RC_AXIAL_CAP_LIMITATION_WARNING,
@@ -1281,8 +1303,14 @@ def _render_solver_diagnostic_messages(
             "tensile strain is clamped to zero in the current model."
         )
 
-    warnings = _deduplicate_diagnostic_messages(base_warnings + list(result_warnings or []) + list(numeric_warnings or []))
+    warnings = _filter_pmm_closeout_warnings(
+        base_warnings + list(result_warnings or []) + list(numeric_warnings or []),
+        result_has_bonded_prestress=result_has_bonded_prestress,
+    )
     info_items = list(result_info or [])
+    if not result_has_bonded_prestress:
+        aci_rc_status = _aci_rc_pmm_ui_status()
+        info_items.append(f"{aci_rc_status['label']}: {aci_rc_status['detail']}")
     if _compression_reversal_metadata_present(df) and not _compression_reversal_near_governing(df, dc_summary):
         info_items.append(
             "Active prestress compression reversal occurred only as PMM stress-state metadata away from the governing region; "
@@ -1890,7 +1918,7 @@ def _render_pmm_runtime_control_panel(
     analysis_input: AnalysisInput | None,
     settings: AnalysisSettings,
     bonded_prestress_elements: list,
-    prototype_label: str,
+    solver_mode_label: str,
 ) -> str | None:
     preset = _analysis_accuracy_preset_from_session()
     current_hash = analysis_input_hash(analysis_input, preset) if analysis_input is not None else None
@@ -1927,7 +1955,7 @@ def _render_pmm_runtime_control_panel(
         run_clicked = st.button(
             "Run / Recalculate Analysis",
             disabled=analysis_input is None,
-            help=f"Runs or reuses the cached {prototype_label} result depending on the engineering input hash.",
+            help=f"Runs or reuses the cached {solver_mode_label} result depending on the engineering input hash.",
             use_container_width=True,
         )
         if analysis_input is None:
@@ -2006,7 +2034,11 @@ def _render_input_summary() -> None:
     unbonded_prestress_elements = [element for element in prestress_elements if not element.bonded]
     rebar_system_enabled = ordinary_rebar_enabled(st.session_state, default=True)
     prestress_system_enabled = prestressing_steel_enabled(st.session_state, default=True)
-    prototype_label = "RC + Bonded Prestress PMM Prototype" if settings.include_prestress and prestress_system_enabled and bonded_prestress_elements else "RC PMM Prototype"
+    solver_mode_label = _pmm_closeout_solver_mode_label(
+        settings,
+        prestress_system_enabled=prestress_system_enabled,
+        bonded_prestress_elements=bonded_prestress_elements,
+    )
     prestress_check_summary = check_prestress_elements_for_analysis(prestress_elements)
 
     st.subheader("Analysis Workspace Overview")
@@ -2037,7 +2069,7 @@ def _render_input_summary() -> None:
         },
         {
             "title": "Solver Mode",
-            "value": prototype_label,
+            "value": solver_mode_label,
             "detail": f"f'c {concrete_material.fc_MPa:g} MPa, beta1 {beta1:.3g}" if concrete_material is not None and beta1 is not None else "Concrete material missing",
             "status": "ready" if concrete_material is not None else "danger",
         },
@@ -2084,8 +2116,8 @@ def _render_input_summary() -> None:
         cols3[1].metric("Total Aps", f"{total_aps:,.1f} mm^2")
         cols3[2].metric("Total Pe_eff", f"{N_to_kN(total_pe):,.1f} kN")
 
-        st.info("PMM prototype status: RC-only or RC + bonded prestress depending on analysis settings.")
-        st.info(f"Current solver mode: {prototype_label}.")
+        st.info("PMM closeout status: ACI RC-only can use production-preview wording; bonded prestress remains engineering review.")
+        st.info(f"Current solver mode: {solver_mode_label}.")
         if is_beam_girder_future_workflow(mode_settings):
             st.warning("PMM interaction is not the primary design method for typical bridge girder flexural design. Bridge girder ULS design checks are future work.")
         elif not is_pmm_primary_workflow(mode_settings):
@@ -2107,7 +2139,7 @@ def _render_input_summary() -> None:
         analysis_input,
         settings,
         bonded_prestress_elements,
-        prototype_label,
+        solver_mode_label,
     )
 
     result = st.session_state.get("rc_pmm_result")
@@ -2125,7 +2157,16 @@ def _render_input_summary() -> None:
         else:
             result_label = "RC PMM"
         st.subheader(f"{result_label} Result")
-        st.caption("Method: ACI strain compatibility. Validation status is summarized below; QA diagnostics remain available for final engineering review.")
+        if result_has_bonded_prestress:
+            st.caption(
+                "Method: ACI strain compatibility with prestress contribution. "
+                "Prestressed PMM remains engineering review; QA diagnostics remain available."
+            )
+        else:
+            st.caption(
+                "Method: ACI strain compatibility. ACI RC Flexural PMM is production-preview ready within the validated RC scope; "
+                "QA diagnostics remain available."
+            )
         _render_method_validation_status_panel(
             result_has_active_prestress=result_has_active_prestress,
             result_has_passive_prestress=result_has_passive_prestress,
@@ -2221,8 +2262,8 @@ def _render_input_summary() -> None:
                 demand_df = demand_load_cases_to_display_dataframe(active_uls)
                 st.subheader("Active ULS Demand Points")
                 st.info(
-                    "Demand points are shown for visual reference. Prototype D/C results are shown below; "
-                    "formal production demand/capacity checks will be implemented in a future milestone."
+                    "Demand points are shown for visual reference. Stored D/C results are shown below; "
+                    "review method, fallback, and QA diagnostics before relying on the governing case."
                 )
                 st.dataframe(demand_df, use_container_width=True, hide_index=True)
 
@@ -2232,6 +2273,10 @@ def _render_input_summary() -> None:
                 prestress_check_summary.warnings,
                 dc_summary.warnings,
                 numeric_summary["warnings"],
+            )
+            engineering_warnings = _filter_pmm_closeout_warnings(
+                engineering_warnings,
+                result_has_bonded_prestress=result_has_bonded_prestress,
             )
             if engineering_warnings:
                 _render_diagnostic_summary_banner(engineering_warnings, df=df, dc_summary=dc_summary)
@@ -7987,11 +8032,11 @@ def _render_pmm_3d_surface_diagnostics(diagnostics: dict[str, object], show_surf
 
 
 def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
-    st.subheader("ULS Demand/Capacity Prototype")
+    st.subheader("ULS Demand/Capacity Review")
     st.warning(
-        "This PMM demand/capacity workflow remains under staged validation. Bonded prestress contribution is still being validated; "
-        "the axial cap now uses the QA.PO1-validated prestress-aware Po helper with bonded prestress steel. "
-        "Unbonded prestress, refined long-term effects, and full production validation remain future work."
+        "ACI RC PMM demand/capacity review is production-preview only within the validated RC scope. "
+        "Bonded prestress contribution, unsupported PMM routes, fallback capacity methods, unbonded prestress, "
+        "refined long-term effects, and final code certification remain engineering-review or future-work items."
     )
     cols = st.columns(3)
     cols[0].metric("Overall Status", summary.overall_status)

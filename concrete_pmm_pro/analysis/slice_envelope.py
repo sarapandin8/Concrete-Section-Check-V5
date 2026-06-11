@@ -229,7 +229,11 @@ def _estimate_capacity_by_ray_intersection(
         intersections = _positive_ray_intersections(polygon.boundary.intersection(ray), alpha_rad)
         if not intersections:
             return None, ["Demand direction ray did not intersect the slice envelope boundary."]
-        return max(intersections), warnings
+        if len(intersections) > 1:
+            warnings.append(
+                "Multiple positive ray intersections detected; nearest boundary used to avoid overestimating directional capacity."
+            )
+        return min(intersections), warnings
     except (GEOSException, TypeError, ValueError, ArithmeticError) as exc:
         return None, [f"Ray-intersection slice capacity failed: {exc}"]
 
@@ -390,7 +394,7 @@ def estimate_directional_capacity_from_envelope(
             "alpha_rad": alpha_rad,
             "method": "slice_envelope_ray",
             "status": PASS,
-            "warnings": warnings,
+            "warnings": warnings + ray_warnings,
         }
 
     # Fallback: angular interpolation is retained only as a secondary method for

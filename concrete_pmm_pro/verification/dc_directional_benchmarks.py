@@ -16,7 +16,7 @@ import pandas as pd
 
 from concrete_pmm_pro.analysis.capacity_check import check_uls_demands_against_rc_pmm
 from concrete_pmm_pro.analysis.result_models import PMMPoint, PMMSolverResult
-from concrete_pmm_pro.analysis.slice_envelope import build_slice_envelope, estimate_directional_capacity_from_envelope
+from concrete_pmm_pro.analysis.slice_envelope import SliceEnvelopeResult, build_slice_envelope, estimate_directional_capacity_from_envelope
 from concrete_pmm_pro.core.models import LoadCase
 from concrete_pmm_pro.verification.rc_rectangular_benchmarks import FAIL, PASS, WARNING
 
@@ -191,6 +191,67 @@ def _check_dc_summary_uses_primary_slice_method() -> DCDirectionalBenchmarkCheck
     )
 
 
+def _non_star_noisy_envelope() -> SliceEnvelopeResult:
+    """Return a synthetic noisy envelope whose +Mx ray intersects twice.
+
+    This is not an RC section benchmark. It is an algorithm guard: when the
+    ray crosses multiple positive boundary points, using the farthest point can
+    overestimate capacity. The conservative first boundary is the safe value.
+    """
+
+    envelope = pd.DataFrame(
+        [
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": -100.0},
+            {"phiMnx_kNm": 200.0, "phiMny_kNm": -100.0},
+            {"phiMnx_kNm": 200.0, "phiMny_kNm": 100.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": 100.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": 60.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": 60.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": 20.0},
+            {"phiMnx_kNm": 20.0, "phiMny_kNm": 20.0},
+            {"phiMnx_kNm": 20.0, "phiMny_kNm": -20.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": -20.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": -60.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": -60.0},
+        ]
+    )
+    return SliceEnvelopeResult(
+        envelope_df=envelope,
+        method="manual_non_star_guard",
+        point_count_input=len(envelope),
+        point_count_output=len(envelope),
+        warnings=[],
+        info=["Synthetic non-star/noisy envelope for D/C no-overestimate guard."],
+        is_valid=True,
+        used_convex_hull=False,
+        detected_self_crossing=False,
+    )
+
+
+def _check_non_star_ray_uses_nearest_boundary() -> DCDirectionalBenchmarkCheck:
+    estimate = estimate_directional_capacity_from_envelope(_non_star_noisy_envelope(), Mux_kNm=50.0, Muy_kNm=0.0)
+    solver = float(estimate["capacity_phiMn_kNm"] or 0.0)
+    reference = 20.0
+    diff = _percent_difference(reference, solver)
+    warnings = [str(warning) for warning in estimate.get("warnings", [])]
+    ok = diff <= 0.1 and any("nearest boundary" in warning for warning in warnings)
+    return DCDirectionalBenchmarkCheck(
+        check_id="SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY",
+        title="Non-star envelope uses nearest ray boundary",
+        status=PASS if ok else FAIL,
+        reference_value=reference,
+        solver_value=solver,
+        percent_difference=diff,
+        tolerance_percent=0.1,
+        message=(
+            "Multiple ray intersections use the nearest boundary to avoid directional capacity overestimate."
+            if ok
+            else "Multiple ray intersections did not use the expected nearest-boundary capacity guard."
+        ),
+        details={"method": estimate.get("method"), "warnings": warnings},
+    )
+
+
 def run_valid_dc1_directional_benchmark_pack() -> DCDirectionalBenchmarkSummary:
     """Run SOLVER.PMM.DC1 validation checks."""
 
@@ -199,5 +260,6 @@ def run_valid_dc1_directional_benchmark_pack() -> DCDirectionalBenchmarkSummary:
             _check_rectangular_ray_capacity_x_direction(),
             _check_rectangular_ray_capacity_diagonal(),
             _check_dc_summary_uses_primary_slice_method(),
+            _check_non_star_ray_uses_nearest_boundary(),
         ]
     )

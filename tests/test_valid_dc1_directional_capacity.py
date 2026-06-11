@@ -8,7 +8,7 @@ def test_valid_dc1_directional_benchmark_pack_passes() -> None:
 
     assert summary.overall_status == "PASS"
     assert summary.fail_count == 0
-    assert summary.pass_count == 3
+    assert summary.pass_count == 4
 
 
 def test_valid_dc1_summary_dataframe_contains_expected_checks() -> None:
@@ -19,4 +19,5 @@ def test_valid_dc1_summary_dataframe_contains_expected_checks() -> None:
         "SOLVER.PMM.DC1.RECT_X_RAY",
         "SOLVER.PMM.DC1.RECT_DIAGONAL_RAY",
         "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY",
+        "SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY",
     }

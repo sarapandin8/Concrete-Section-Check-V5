@@ -8,6 +8,7 @@ import pytest
 from concrete_pmm_pro.analysis.capacity_check import check_uls_demands_against_rc_pmm
 from concrete_pmm_pro.analysis.result_models import PMMPoint, PMMSolverResult
 from concrete_pmm_pro.analysis.slice_envelope import (
+    SliceEnvelopeResult,
     build_convex_hull_envelope,
     build_slice_envelope,
     compute_polar_angle_and_radius,
@@ -173,6 +174,37 @@ def test_estimate_directional_capacity_from_envelope_handles_angle_wrapping() ->
 
     assert estimate["capacity_phiMn_kNm"] is not None
     assert estimate["dcr"] is not None
+
+
+def test_estimate_directional_capacity_uses_nearest_boundary_for_multiple_ray_intersections() -> None:
+    envelope_df = pd.DataFrame(
+        [
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": -100.0},
+            {"phiMnx_kNm": 200.0, "phiMny_kNm": -100.0},
+            {"phiMnx_kNm": 200.0, "phiMny_kNm": 100.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": 100.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": 60.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": 60.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": 20.0},
+            {"phiMnx_kNm": 20.0, "phiMny_kNm": 20.0},
+            {"phiMnx_kNm": 20.0, "phiMny_kNm": -20.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": -20.0},
+            {"phiMnx_kNm": 100.0, "phiMny_kNm": -60.0},
+            {"phiMnx_kNm": -100.0, "phiMny_kNm": -60.0},
+        ]
+    )
+    envelope = SliceEnvelopeResult(
+        envelope_df=envelope_df,
+        method="manual_non_star_guard",
+        point_count_input=len(envelope_df),
+        point_count_output=len(envelope_df),
+        is_valid=True,
+    )
+
+    estimate = estimate_directional_capacity_from_envelope(envelope, Mux_kNm=50.0, Muy_kNm=0.0)
+
+    assert estimate["capacity_phiMn_kNm"] == pytest.approx(20.0)
+    assert any("nearest boundary" in warning for warning in estimate["warnings"])
 
 
 def test_dc_check_uses_slice_envelope_method_when_possible() -> None:

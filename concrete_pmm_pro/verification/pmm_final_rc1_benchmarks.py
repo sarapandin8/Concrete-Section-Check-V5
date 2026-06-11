@@ -119,6 +119,7 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
         "SOLVER.PMM.DC1.RECT_X_RAY",
         "SOLVER.PMM.DC1.RECT_DIAGONAL_RAY",
         "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY",
+        "SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY",
     ]
     dc_status = _status_from_child_statuses([dc1_statuses.get(check_id, FAIL) for check_id in dc_ids])
 
@@ -179,4 +180,3 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
         ),
     ]
     return _summary(checks)
-

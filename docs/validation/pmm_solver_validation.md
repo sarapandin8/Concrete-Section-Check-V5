@@ -229,8 +229,11 @@ Existing evidence credited by the gate includes `VALID.RC1`, `VALID.RC2`,
 `run_pmm_final_rc1_readiness_gate()` aggregator summarizes this evidence for
 reporting.  The gate is expected to remain `WARNING` until a true biaxial
 `P-Mx-My` reference benchmark and RC-specific D/C no-overestimate cases are
-added.  Published/reference uniaxial examples are still recommended before any
-final certification wording is considered.
+added.  `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` now guards synthetic noisy
+envelopes by using the nearest positive ray boundary instead of the farthest
+intersection, but this is still algorithm evidence rather than a true RC
+benchmark.  Published/reference uniaxial examples are still recommended before
+any final certification wording is considered.
 
 Until those items pass, the correct status is:
 

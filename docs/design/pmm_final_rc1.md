@@ -24,6 +24,7 @@ not change PMM equations.
 | RC rectangular axial cap and uniaxial spot check | `VALID.RC1` | Accepted as internal benchmark evidence |
 | ACI-style phi transition | `VALID.RC2` | Accepted as implemented phi classification evidence |
 | Directional D/C ray-envelope method | `VALID.PMM.DC1` | Accepted as internal D/C method evidence |
+| D/C no-overestimate guard | `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` | Guards noisy/non-star envelope rays by using the nearest positive boundary |
 | ACI axial cap helper | `VALID.RC.PO1` and `QA.PO1` | Accepted as axial-cap method evidence |
 | Sign convention | `pmm_solver.py`, `strain_compatibility.py`, README method notes | Accepted as documented and test-guarded convention |
 | Numeric hygiene | `VALID.RC1.NUMERIC_SCHEMA` and PMM result schema checks | Accepted as baseline numeric evidence |
@@ -67,7 +68,8 @@ The following wording is still not allowed:
 
 1. Add true biaxial ACI RC benchmark evidence for nonzero `Mux` and `Muy`.
 2. Confirm D/C extraction does not overestimate capacity for RC benchmark
-   shapes beyond the current synthetic rectangular slice checks.
+   shapes beyond the current synthetic rectangular and non-star/noisy envelope
+   checks.
 3. Add published/reference uniaxial examples before any final certification
    wording is considered, even though an internal independent uniaxial gate is
    now executable.
@@ -89,7 +91,8 @@ The following wording is still not allowed:
 The next safe implementation step is to add executable reference cases for:
 
 1. `PMM.FINAL.RC1.BIAXIAL.REF`
-2. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE`
+2. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE` using RC-specific shapes beyond the
+   synthetic `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` guard
 3. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
 
 Only after those pass should UI/report status wording be updated by a separate

@@ -77,7 +77,10 @@ def add_page_break(document: DocumentObject) -> None:
 def add_report_footer_note(document: DocumentObject) -> None:
     for section in document.sections:
         footer = section.footer.paragraphs[0]
-        footer.text = "Concrete PMM Pro draft report - prototype engineering review only"
+        footer.text = (
+            "Concrete PMM Pro draft report - engineering review; "
+            "production-preview only where explicitly validated"
+        )
         footer.style = document.styles["Footer"]
 
 
@@ -216,7 +219,9 @@ def _add_executive_summary(document: DocumentObject, manifest: ReportManifest) -
     add_report_heading(document, "Executive Summary", level=1)
     snapshot = manifest.traceability_snapshot
     document.add_paragraph(
-        "This is a draft engineering report generated from the current analysis results and implemented prototype checks."
+        "This is a draft engineering report generated from current stored analysis results. "
+        "ACI RC Flexural PMM may be treated as production-preview only within the validated RC scope; "
+        "unsupported routes remain engineering-review items."
     )
     summary = {
         "Readiness status": manifest.readiness_summary.overall_status,

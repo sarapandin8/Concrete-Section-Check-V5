@@ -187,7 +187,10 @@ def safe_report_figure_filename(
 def _limitations_for_key(key: str, session_state: Any) -> list[str]:
     limitations: list[str] = []
     if key.startswith("pmm"):
-        limitations.extend(["Directional PMM/D-C methods are prototype engineering review tools."])
+        limitations.append(
+            "ACI RC PMM figures may be used for production-preview review only within the validated RC scope; "
+            "unsupported PMM routes and fallback capacity methods remain engineering-review items."
+        )
     if key == "pmm_slice_envelope":
         limitations.append("Convex hull fallback may overestimate PMM capacity when used.")
     if key.startswith("pmm"):

@@ -368,3 +368,9 @@ The Analysis validation-status panel may now display:
 This wording is allowed only through `PMM.FINAL.RC1.STATUS.READINESS1`. It is scoped to ACI 318-style ordinary RC Column/Pier/Wall/Pylon flexural PMM review and keeps QA diagnostics visible. It does not authorize final code-certified language, AASHTO LRFD PMM design, prestress finalization, shear, torsion, SLS, detailing, slenderness, or second-order effects.
 
 This milestone changes UI routing and wording only. It does not change PMM equations, phi logic, prestress behavior, demand/capacity extraction, load routing, or benchmark tolerances.
+
+### PMM.REPORT.STATUS1 - Report Wording Alignment for ACI RC PMM
+
+Draft Word report and PMM figure-export wording now align with `PMM.UI.STATUS1`. Report text may refer to ACI RC Flexural PMM as production-preview only within the validated RC scope, while unsupported PMM routes, fallback capacity methods, AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, and second-order effects remain engineering-review or future-work items.
+
+This milestone changes report/export wording only. It does not change report data collection, PMM equations, demand/capacity extraction, validation benchmark tolerances, or solver execution.

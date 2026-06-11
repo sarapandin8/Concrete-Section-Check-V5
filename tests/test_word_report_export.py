@@ -98,6 +98,18 @@ def test_cover_page_includes_draft_disclaimer() -> None:
     assert "It is not a final design certification." in text
 
 
+def test_word_report_uses_guarded_production_preview_scope_wording() -> None:
+    report_bytes = build_draft_word_report(build_report_manifest({}))
+    text = _doc_text(report_bytes)
+    document = Document(BytesIO(report_bytes))
+    footer_text = "\n".join(paragraph.text for section in document.sections for paragraph in section.footer.paragraphs)
+
+    assert "ACI RC Flexural PMM may be treated as production-preview only within the validated RC scope" in text
+    assert "unsupported routes remain engineering-review items" in text
+    assert "production-preview only where explicitly validated" in footer_text
+    assert "prototype engineering review only" not in footer_text
+
+
 def test_word_report_includes_readiness_status() -> None:
     text = _doc_text(build_draft_word_report(build_report_manifest({})))
 

@@ -24,7 +24,7 @@ not change PMM equations.
 | RC rectangular axial cap, uniaxial spot check, and diagonal biaxial spot check | `VALID.RC1` | Accepted as internal benchmark evidence |
 | ACI-style phi transition | `VALID.RC2` | Accepted as implemented phi classification evidence |
 | Directional D/C ray-envelope method | `VALID.PMM.DC1` | Accepted as internal D/C method evidence |
-| D/C no-overestimate guard | `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` | Guards noisy/non-star envelope rays by using the nearest positive boundary |
+| D/C no-overestimate guard | `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` and `SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE` | Guards noisy/non-star envelope rays by using the nearest positive boundary and confirms an actual RC rectangular PMM route does not exceed its direct slice ray-boundary estimate |
 | ACI axial cap helper | `VALID.RC.PO1` and `QA.PO1` | Accepted as axial-cap method evidence |
 | Sign convention | `pmm_solver.py`, `strain_compatibility.py`, README method notes | Accepted as documented and test-guarded convention |
 | Numeric hygiene | `VALID.RC1.NUMERIC_SCHEMA` and PMM result schema checks | Accepted as baseline numeric evidence |
@@ -70,9 +70,9 @@ The following wording is still not allowed:
 
 1. Add published/reference biaxial ACI RC PMM examples before any final
    certification wording is considered.
-2. Confirm D/C extraction does not overestimate capacity for RC benchmark
-   shapes beyond the current synthetic rectangular and non-star/noisy envelope
-   checks.
+2. Add published/reference D/C examples and non-rectangular RC benchmark
+   shapes beyond the current rectangular RC and synthetic non-star/noisy
+   envelope checks.
 3. Add published/reference uniaxial examples before any final certification
    wording is considered, even though an internal independent uniaxial gate is
    now executable.
@@ -93,10 +93,10 @@ The following wording is still not allowed:
 
 The next safe implementation steps are:
 
-1. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE` using RC-specific shapes beyond the
-   synthetic `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` guard
-2. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
-3. Published/reference reinforcement of `PMM.FINAL.RC1.BIAXIAL.REF`
+1. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
+2. Published/reference reinforcement of `PMM.FINAL.RC1.BIAXIAL.REF`
+3. Published/reference or non-rectangular reinforcement of
+   `PMM.FINAL.RC1.DC.NO_OVERESTIMATE`
 
 Only after those pass should UI/report status wording be updated by a separate
 `PMM.UI.STATUS1` milestone.

@@ -24,6 +24,13 @@ def test_pmm_final_rc1_readiness_gate_tracks_core_gate_ids() -> None:
     assert "PMM.FINAL.RC1.WARNING" in check_ids
 
 
+def test_pmm_final_rc1_dc_gate_includes_rc_specific_no_overestimate_check() -> None:
+    summary = run_pmm_final_rc1_readiness_gate()
+    dc = next(check for check in summary.checks if check.check_id == "PMM.FINAL.RC1.DC.NO_OVERESTIMATE")
+
+    assert dc.details["SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE"] == "PASS"
+
+
 def test_pmm_final_rc1_biaxial_reference_is_executable() -> None:
     summary = run_pmm_final_rc1_readiness_gate()
     biaxial = next(check for check in summary.checks if check.check_id == "PMM.FINAL.RC1.BIAXIAL.REF")

@@ -15,10 +15,12 @@ from typing import Any
 import pandas as pd
 
 from concrete_pmm_pro.analysis.capacity_check import check_uls_demands_against_rc_pmm
-from concrete_pmm_pro.analysis.result_models import PMMPoint, PMMSolverResult
+from concrete_pmm_pro.analysis.pmm_solver import run_rc_pmm_solver
+from concrete_pmm_pro.analysis.result_models import PMMPoint, PMMSolverResult, pmm_result_to_display_dataframe
 from concrete_pmm_pro.analysis.slice_envelope import SliceEnvelopeResult, build_slice_envelope, estimate_directional_capacity_from_envelope
 from concrete_pmm_pro.core.models import LoadCase
-from concrete_pmm_pro.verification.rc_rectangular_benchmarks import FAIL, PASS, WARNING
+from concrete_pmm_pro.core.units import Nmm_to_kNm
+from concrete_pmm_pro.verification.rc_rectangular_benchmarks import FAIL, PASS, WARNING, build_valid_rc1_rectangular_input
 
 
 @dataclass(frozen=True)
@@ -252,6 +254,104 @@ def _check_non_star_ray_uses_nearest_boundary() -> DCDirectionalBenchmarkCheck:
     )
 
 
+def _check_rc_rectangular_primary_dc_no_overestimate() -> DCDirectionalBenchmarkCheck:
+    """Confirm the real RC PMM path does not exceed its direct slice ray bound."""
+
+    analysis_input = build_valid_rc1_rectangular_input()
+    demand = LoadCase(
+        name="ULS-DC1-RC-RECT",
+        Pu_N=1_200_000.0,
+        Mux_Nmm=120_000_000.0,
+        Muy_Nmm=60_000_000.0,
+        load_type="ULS",
+        active=True,
+    )
+    analysis_input.load_cases = [demand]
+    pmm_result = run_rc_pmm_solver(analysis_input)
+    summary = check_uls_demands_against_rc_pmm(pmm_result, [demand])
+    if not summary.results:
+        return DCDirectionalBenchmarkCheck(
+            check_id="SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE",
+            title="RC rectangular D/C uses primary ray capacity without overestimate",
+            status=FAIL,
+            reference_value=None,
+            solver_value=None,
+            percent_difference=None,
+            tolerance_percent=0.1,
+            message="RC rectangular D/C benchmark returned no demand/capacity result.",
+        )
+
+    result = summary.results[0]
+    from concrete_pmm_pro.visualization.pmm_dashboard import pmm_slice_at_pu
+
+    pmm_df = pmm_result_to_display_dataframe(pmm_result)
+    slice_df = pmm_slice_at_pu(pmm_df, demand.Pu_N / 1000.0)
+    envelope = build_slice_envelope(slice_df)
+    estimate = estimate_directional_capacity_from_envelope(envelope, Nmm_to_kNm(demand.Mux_Nmm), Nmm_to_kNm(demand.Muy_Nmm))
+    reference_capacity = estimate.get("capacity_phiMn_kNm")
+    solver_capacity = None if result.capacity_phiMn_Nmm is None else Nmm_to_kNm(result.capacity_phiMn_Nmm)
+    if reference_capacity is None or solver_capacity is None or reference_capacity <= 0.0:
+        return DCDirectionalBenchmarkCheck(
+            check_id="SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE",
+            title="RC rectangular D/C uses primary ray capacity without overestimate",
+            status=FAIL,
+            reference_value=reference_capacity,
+            solver_value=solver_capacity,
+            percent_difference=None,
+            tolerance_percent=0.1,
+            message="RC rectangular D/C benchmark could not establish a direct slice ray reference capacity.",
+            details={
+                "capacity_method": result.capacity_method,
+                "slice_method": result.slice_method,
+                "envelope_method": envelope.method,
+                "estimate_method": estimate.get("method"),
+                "estimate_warnings": estimate.get("warnings", []),
+            },
+        )
+
+    diff = _percent_difference(float(reference_capacity), float(solver_capacity))
+    overestimate_percent = max(0.0, (float(solver_capacity) / float(reference_capacity) - 1.0) * 100.0)
+    expected_method = (
+        result.capacity_method == "slice_envelope"
+        and result.used_fallback is False
+        and result.envelope_method == "polar_max"
+        and envelope.method == "polar_max"
+        and envelope.used_convex_hull is False
+        and estimate.get("method") == "slice_envelope_ray"
+    )
+    ok = expected_method and diff <= 0.1 and overestimate_percent <= 0.01
+    return DCDirectionalBenchmarkCheck(
+        check_id="SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE",
+        title="RC rectangular D/C uses primary ray capacity without overestimate",
+        status=PASS if ok else FAIL,
+        reference_value=float(reference_capacity),
+        solver_value=float(solver_capacity),
+        percent_difference=diff,
+        tolerance_percent=0.1,
+        message=(
+            "Actual RC rectangular PMM D/C result uses the primary slice-envelope ray capacity and does not exceed the direct ray-boundary estimate."
+            if ok
+            else "Actual RC rectangular PMM D/C result did not satisfy the primary no-overestimate path guard."
+        ),
+        details={
+            "capacity_method": result.capacity_method,
+            "slice_method": result.slice_method,
+            "envelope_method": envelope.method,
+            "result_envelope_method": result.envelope_method,
+            "used_convex_hull": envelope.used_convex_hull,
+            "estimate_method": estimate.get("method"),
+            "used_fallback": result.used_fallback,
+            "Pu_kN": demand.Pu_N / 1000.0,
+            "Mux_kNm": Nmm_to_kNm(demand.Mux_Nmm),
+            "Muy_kNm": Nmm_to_kNm(demand.Muy_Nmm),
+            "solver_dcr": result.dcr,
+            "overestimate_percent": overestimate_percent,
+            "estimate_warnings": estimate.get("warnings", []),
+            "summary_warning_count": result.warning_count,
+        },
+    )
+
+
 def run_valid_dc1_directional_benchmark_pack() -> DCDirectionalBenchmarkSummary:
     """Run SOLVER.PMM.DC1 validation checks."""
 
@@ -261,5 +361,6 @@ def run_valid_dc1_directional_benchmark_pack() -> DCDirectionalBenchmarkSummary:
             _check_rectangular_ray_capacity_diagonal(),
             _check_dc_summary_uses_primary_slice_method(),
             _check_non_star_ray_uses_nearest_boundary(),
+            _check_rc_rectangular_primary_dc_no_overestimate(),
         ]
     )

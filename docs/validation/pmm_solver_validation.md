@@ -185,6 +185,7 @@ Implemented or partially implemented items include:
 3. **SOLVER.PMM.DC1 — Robust directional PMM capacity check** — implemented.
    - Uses cleaned selected-Pu slice envelopes with ray-intersection capacity extraction as the primary D/C path.
    - Adds analytic rectangular slice benchmarks to prevent polar-radius interpolation from overestimating faceted envelopes.
+   - Adds `SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE`, an actual RC rectangular PMM route check against a direct slice ray-boundary estimate.
    - Remaining work: add published/reference biaxial PMM D/C examples before retiring all D/C validation limitation notes.
 
 4. **VALID.PS1 — Bonded prestress PMM benchmark pack** — executable pack added.
@@ -233,9 +234,10 @@ checks using an independent rectangular clipping calculation, so
 `PMM.FINAL.RC1.BIAXIAL.REF` is no longer a hard-coded missing-reference
 warning.  `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` guards synthetic noisy
 envelopes by using the nearest positive ray boundary instead of the farthest
-intersection, but RC-specific D/C no-overestimate cases and published
-uniaxial/biaxial references remain recommended before final certification
-wording.
+intersection.  `SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE` checks an
+actual RC rectangular PMM route against a direct slice ray-boundary estimate.
+Published uniaxial/biaxial PMM and D/C references remain recommended before
+final certification wording.
 
 Until UI/report wording is changed by a separate named milestone, the correct
 status is:

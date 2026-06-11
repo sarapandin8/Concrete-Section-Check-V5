@@ -122,6 +122,7 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
         "SOLVER.PMM.DC1.RECT_DIAGONAL_RAY",
         "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY",
         "SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY",
+        "SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE",
     ]
     dc_status = _status_from_child_statuses([dc1_statuses.get(check_id, FAIL) for check_id in dc_ids])
 
@@ -160,7 +161,7 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
             title="Directional D/C no-overestimate evidence",
             status=dc_status,
             message=(
-                "VALID.PMM.DC1 ray-envelope checks guard against polar overestimate in synthetic rectangular slices."
+                "VALID.PMM.DC1 ray-envelope checks guard against polar overestimate in synthetic slices and an actual RC rectangular PMM route."
                 if dc_status != FAIL
                 else "VALID.PMM.DC1 directional D/C checks failed or are missing."
             ),

@@ -25,6 +25,7 @@ def test_pmm_final_rc1_validation_matrix_tracks_reference_cases() -> None:
     source = _read("concrete_pmm_pro/verification/validation_framework.py")
     runner = _read("concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py")
     rc1 = _read("concrete_pmm_pro/verification/rc_rectangular_benchmarks.py")
+    dc1 = _read("concrete_pmm_pro/verification/dc_directional_benchmarks.py")
 
     assert 'case_id="PMM.FINAL.RC1.SCOPE"' in source
     assert 'case_id="PMM.FINAL.RC1.UNIAXIAL.REF"' in source
@@ -35,6 +36,8 @@ def test_pmm_final_rc1_validation_matrix_tracks_reference_cases() -> None:
     assert "VALID.RC1.BIAX_CDIAG_PN" in rc1
     assert "VALID.RC1.BIAX_CDIAG_MNX" in rc1
     assert "VALID.RC1.BIAX_CDIAG_MNY" in rc1
+    assert "SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE" in dc1
+    assert "SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE" in runner
 
 
 def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
@@ -47,6 +50,7 @@ def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
     assert "VALID.RC1" in doc and "VALID.RC1.PHI_PN_MAX" in rc1
     assert "VALID.RC2" in doc and "VALID.RC2.SOLVER_PHI_MATCH" in rc2
     assert "VALID.PMM.DC1" in doc and "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY" in dc1
+    assert "SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE" in dc1
     assert "PMM.FINAL.RC1 ACI RC final-readiness gate" in validation_doc
     assert "It must not be described as final code-certified ACI/AASHTO PMM design" in validation_doc
     assert "`PMM.FINAL.RC1.BIAXIAL.REF` is no longer a hard-coded missing-reference" in validation_doc

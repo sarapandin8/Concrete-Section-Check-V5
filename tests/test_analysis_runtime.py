@@ -26,6 +26,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _diagnostics_to_dataframe,
     _method_validation_status_cards,
     _method_validation_status_rows,
+    _readiness_actions_to_dataframe,
+    _readiness_blocking_action,
     _validation_status_compact_dataframe,
     _validation_status_detail_dataframe,
     _pmm_3d_display_enabled_from_state,
@@ -408,6 +410,27 @@ def test_analysis_overview_cards_expose_governing_case_and_fallback_counts() -> 
     assert card_map["Max D/C"]["value"] == "1.500"
     assert card_map["Active ULS Used"]["value"] == "1"
     assert card_map["Fallback Cases"]["value"] == "1"
+
+
+def test_readiness_blocking_action_explains_no_active_uls_fix() -> None:
+    action = _readiness_blocking_action("No active ULS load cases are available.")
+
+    assert action["Where to Fix"] == "Loads"
+    assert "Add or activate" in action["Recommended Action"]
+    assert "strength load case" in action["Recommended Action"]
+
+
+def test_readiness_actions_dataframe_is_actionable_for_multiple_errors() -> None:
+    df = _readiness_actions_to_dataframe(
+        [
+            "Section geometry is missing.",
+            "No active longitudinal reinforcement or bonded prestress elements are available for PMM analysis.",
+        ]
+    )
+
+    assert list(df.columns) == ["Blocking Item", "Where to Fix", "Recommended Action"]
+    assert list(df["Where to Fix"]) == ["Sections", "Sections / Prestress"]
+    assert all(df["Recommended Action"].str.len() > 20)
 
 
 def test_diagnostic_messages_are_cleaned_and_deduplicated() -> None:

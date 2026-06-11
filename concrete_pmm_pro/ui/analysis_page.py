@@ -672,13 +672,14 @@ def _render_readiness_panel() -> None:
     _render_analysis_summary_strip(cards, columns=4)
 
     if result.errors:
-        st.error("Readiness errors are present. Open the diagnostics below and correct them before relying on results.")
+        st.error("Analysis cannot run. Fix the blocking readiness items below, then run the analysis again.")
+        _render_readiness_action_list(result.errors)
     elif result.warnings:
         st.warning("Readiness warnings are present. Analysis can run, but the warnings should be reviewed.")
     else:
         st.success("No readiness errors. Detailed readiness information is available below if needed.")
 
-    with st.expander("Readiness diagnostics", expanded=False):
+    with st.expander("Readiness diagnostics", expanded=bool(result.errors)):
         if result.errors:
             for error in result.errors:
                 st.error(f"ERROR: {error}")
@@ -696,6 +697,68 @@ def _render_readiness_panel() -> None:
                 st.info(f"INFO: {item}")
         else:
             st.info("No readiness info items were reported.")
+
+
+def _readiness_blocking_action(error_message: str) -> dict[str, str]:
+    """Translate a readiness error into a user-facing fix action."""
+
+    text = str(error_message or "").strip()
+    lowered = text.lower()
+    if "section geometry is missing" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Sections",
+            "Recommended Action": "Create, import, or select a valid concrete section geometry before running PMM analysis.",
+        }
+    if "concrete material is missing" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Materials",
+            "Recommended Action": "Select or define the concrete material assigned to the active section.",
+        }
+    if "no active" in lowered and "load cases" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Loads",
+            "Recommended Action": "Add or activate at least one strength load case matching the selected analysis load type.",
+        }
+    if "no active longitudinal reinforcement" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Sections / Prestress",
+            "Recommended Action": "Add or enable ordinary longitudinal rebars or bonded prestress elements included in PMM analysis.",
+        }
+    if "rebars are not valid" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Sections > Rebar",
+            "Recommended Action": "Correct rebar rows, material assignment, bar size, and bar locations so all included bars are valid for analysis.",
+        }
+    if "prestress elements are not valid" in lowered:
+        return {
+            "Blocking Item": text,
+            "Where to Fix": "Prestress / Sections",
+            "Recommended Action": "Correct prestress geometry, material, bonding, force, and location inputs before including prestress in PMM analysis.",
+        }
+    return {
+        "Blocking Item": text,
+        "Where to Fix": "Project inputs",
+        "Recommended Action": "Open the related input page, correct this readiness error, and confirm the Errors count returns to zero.",
+    }
+
+
+def _readiness_actions_to_dataframe(errors: list[str]) -> pd.DataFrame:
+    rows = [_readiness_blocking_action(error) for error in errors if str(error or "").strip()]
+    return pd.DataFrame(rows, columns=["Blocking Item", "Where to Fix", "Recommended Action"])
+
+
+def _render_readiness_action_list(errors: list[str]) -> None:
+    action_df = _readiness_actions_to_dataframe(errors)
+    if action_df.empty:
+        st.info("Open Readiness diagnostics for blocking input details.")
+        return
+    st.caption("Blocking actions required before Run / Recalculate Analysis is enabled.")
+    st.dataframe(action_df, use_container_width=True, hide_index=True)
 
 
 def _render_analysis_mode_section() -> AnalysisModeSettings:
@@ -1827,6 +1890,13 @@ def _render_pmm_runtime_control_panel(
             help=f"Runs or reuses the cached {prototype_label} result depending on the engineering input hash.",
             use_container_width=True,
         )
+        if analysis_input is None:
+            readiness = check_analysis_readiness(st.session_state)
+            if readiness.errors:
+                st.caption("Run is disabled until Analysis Readiness errors are corrected.")
+                st.dataframe(_readiness_actions_to_dataframe(readiness.errors), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Run is disabled until analysis input can be built from the current project data.")
 
         if run_clicked and analysis_input is not None and current_hash is not None:
             _run_pmm_analysis_with_runtime_control(

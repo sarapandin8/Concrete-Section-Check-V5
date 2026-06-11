@@ -2,9 +2,9 @@
 
 This runner aggregates the existing RC-only validation evidence into a single
 commercial-readiness gate. It deliberately does not change PMM equations. A
-WARNING status means the current solver evidence is useful for engineering
-review, but a final-status wording upgrade is still blocked by missing or
-incomplete reference coverage.
+WARNING status means at least one final-readiness evidence item still needs
+review. A PASS status means the ACI RC production-preview evidence gate is
+ready for a separate UI/report wording milestone; it is not final certification.
 """
 
 from __future__ import annotations
@@ -125,6 +125,7 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
         "SOLVER.PMM.DC1.RC_RECT_PRIMARY_NO_OVERESTIMATE",
     ]
     dc_status = _status_from_child_statuses([dc1_statuses.get(check_id, FAIL) for check_id in dc_ids])
+    evidence_status = _status_from_child_statuses([uniaxial_status, biaxial_status, phi_status, dc_status])
 
     checks = [
         PMMFinalRC1Check(
@@ -184,6 +185,23 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
             status=PASS,
             message="Prototype/review wording remains guarded until UI/report wording is changed by a separate named milestone.",
             details={"target_status": "validated production preview after benchmark closure, not final code certification"},
+        ),
+        PMMFinalRC1Check(
+            check_id="PMM.FINAL.RC1.STATUS.READINESS1",
+            title="Production-preview status readiness decision",
+            status=evidence_status,
+            message=(
+                "ACI RC Flexural PMM has production-preview readiness evidence; UI/report wording remains a separate milestone and must not claim final certification."
+                if evidence_status == PASS
+                else "ACI RC Flexural PMM still has final-readiness evidence items requiring review before production-preview wording."
+            ),
+            details={
+                "allowed_status": "ACI RC Flexural PMM validated production preview",
+                "forbidden_status": "Final code-certified ACI/AASHTO PMM design",
+                "ui_report_milestone_required": "PMM.UI.STATUS1",
+                "scope": "ACI 318-style ordinary RC Column/Pier/Wall/Pylon PMM only",
+                "excluded": "AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, second-order effects",
+            },
         ),
     ]
     return _summary(checks)

@@ -63,8 +63,9 @@ For ACI 318 Column/Pier PMM, the next target may be:
 
 > Validated production preview
 
-This status is allowed only after `PMM.FINAL.RC1` and `PMM.FINAL.DC1` pass with
-documented benchmark evidence.
+This status is allowed only after `PMM.FINAL.RC1.STATUS.READINESS1` passes with
+documented benchmark evidence and a separate `PMM.UI.STATUS1` wording milestone
+is implemented.
 
 For AASHTO LRFD Column/Pier PMM, the current status remains:
 
@@ -86,12 +87,11 @@ implemented and validated.
 
 ## Recommended next milestones
 
-1. `PMM.FINAL.RC1` - ACI 318 RC Column/Pier PMM final benchmark pack:
-   published/reference uniaxial and biaxial cases, phi transition, axial cap,
-   sign convention, and irregular-section numeric hygiene.
-2. `PMM.FINAL.DC1` - Final demand/capacity extraction:
-   ray-envelope D/C benchmark cases, no-overestimate checks, fallback policy,
-   and report traceability.
+1. `PMM.FINAL.RC1.STATUS.READINESS1` - ACI 318 RC Column/Pier PMM
+   production-preview readiness audit:
+   scope, uniaxial, biaxial, phi, D/C no-overestimate, and wording guards.
+2. Published/reference RC PMM examples:
+   uniaxial, biaxial, and D/C examples before final certification wording.
 3. `PMM.FINAL.PS1` - Bonded prestress final-readiness:
    active bonded prestress reference cases, compression-reversal policy, and
    prestress stress-state governance.
@@ -100,4 +100,3 @@ implemented and validated.
 5. `PMM.UI.STATUS1` - Commercial status wording:
    update UI/report labels only after the relevant route has passed benchmark
    milestones.
-

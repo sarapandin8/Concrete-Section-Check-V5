@@ -31,6 +31,7 @@ def test_pmm_final_rc1_validation_matrix_tracks_reference_cases() -> None:
     assert 'case_id="PMM.FINAL.RC1.UNIAXIAL.REF"' in source
     assert 'case_id="PMM.FINAL.RC1.BIAXIAL.REF"' in source
     assert 'case_id="PMM.FINAL.RC1.DC.NO_OVERESTIMATE"' in source
+    assert 'case_id="PMM.FINAL.RC1.STATUS.READINESS1"' in source
     assert "run_pmm_final_rc1_readiness_gate" in source
     assert "run_pmm_final_rc1_readiness_gate" in runner
     assert "VALID.RC1.BIAX_CDIAG_PN" in rc1
@@ -54,13 +55,18 @@ def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
     assert "PMM.FINAL.RC1 ACI RC final-readiness gate" in validation_doc
     assert "It must not be described as final code-certified ACI/AASHTO PMM design" in validation_doc
     assert "`PMM.FINAL.RC1.BIAXIAL.REF` is no longer a hard-coded missing-reference" in validation_doc
+    assert "`PMM.FINAL.RC1.STATUS.READINESS1` records the status decision" in validation_doc
 
 
 def test_pmm_final_rc1_blocks_cosmetic_final_status_upgrade() -> None:
     doc = _read("docs/design/pmm_final_rc1.md")
     audit = _read("docs/design/pmm_final_audit1.md")
+    status_audit = _read("docs/design/pmm_final_rc1_status_readiness1.md")
 
     assert "not final code-certified" in doc
     assert "Final code-certified ACI/AASHTO PMM design" in doc
     assert "Do not modify solver equations merely to satisfy this readiness gate" in doc
     assert "not yet a final code-certified solver" in audit
+    assert "Final code-certified ACI/AASHTO PMM design" in status_audit
+    assert "PMM.UI.STATUS1" in status_audit
+    assert "does not change PMM equations" in status_audit

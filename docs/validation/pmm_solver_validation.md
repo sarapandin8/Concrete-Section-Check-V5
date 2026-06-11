@@ -239,6 +239,11 @@ actual RC rectangular PMM route against a direct slice ray-boundary estimate.
 Published uniaxial/biaxial PMM and D/C references remain recommended before
 final certification wording.
 
+`PMM.FINAL.RC1.STATUS.READINESS1` records the status decision: when the gate
+passes, it supports a future production-preview wording milestone only.  It
+does not authorize final code-certified language and it does not change the UI
+or report wording by itself.
+
 Until UI/report wording is changed by a separate named milestone, the correct
 status is:
 

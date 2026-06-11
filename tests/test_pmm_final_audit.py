@@ -17,7 +17,8 @@ def test_pmm_final_audit_documents_safe_finalization_gate() -> None:
     assert "does not change solver equations" in audit
     assert "not yet a final code-certified solver" in audit
     assert "PMM.FINAL.RC1" in audit
-    assert "PMM.FINAL.DC1" in audit
+    assert "PMM.FINAL.RC1.STATUS.READINESS1" in audit
+    assert "PMM.UI.STATUS1" in audit
     assert "PMM.AASHTO.PMM1" in audit
 
 
@@ -58,4 +59,3 @@ def test_pmm_final_audit_blocks_cosmetic_final_labeling() -> None:
     assert "Do not remove prototype or engineering-review wording solely to make the UI" in audit
     assert "Do not modify solver equations merely to make validation checks pass" in audit
     assert "Do not treat ACI-oriented PMM as final AASHTO LRFD PMM" in audit
-

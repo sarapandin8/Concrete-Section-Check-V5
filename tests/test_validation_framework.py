@@ -34,6 +34,7 @@ def test_validation_matrix_contains_core_solver_risk_areas() -> None:
     assert "PMM.FINAL.RC1.UNIAXIAL.REF" in case_ids
     assert "PMM.FINAL.RC1.BIAXIAL.REF" in case_ids
     assert "PMM.FINAL.RC1.DC.NO_OVERESTIMATE" in case_ids
+    assert "PMM.FINAL.RC1.STATUS.READINESS1" in case_ids
     assert "VALID.NUM1" in case_ids
     assert "VALID.WARN1" in case_ids
 
@@ -48,6 +49,7 @@ def test_validation_matrix_marks_solver_root_causes_instead_of_hiding_warnings()
     assert "ACI axial cap" in warnings
     assert "NaN eps_t" in warnings
     assert "prototype wording" in warnings
+    assert "production-preview readiness" in warnings
 
 
 def test_validation_matrix_has_actionable_next_steps_for_partial_cases() -> None:

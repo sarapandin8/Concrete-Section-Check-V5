@@ -243,6 +243,18 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             warnings_addressed=("directional D/C", "fallback", "convex hull", "prototype wording"),
         ),
         ValidationCaseSpec(
+            case_id="PMM.FINAL.RC1.STATUS.READINESS1",
+            title="ACI RC PMM production-preview readiness status audit",
+            category="RC-only PMM",
+            status="implemented",
+            purpose="Decide whether the implemented ACI RC Flexural PMM evidence can support a production-preview wording milestone without implying final code certification.",
+            acceptance="The readiness gate may report production-preview wording readiness only when scope, uniaxial, biaxial, phi, and D/C no-overestimate evidence do not fail; UI/report wording remains guarded by a separate milestone.",
+            source="PMM.FINAL.RC1 readiness runner and status-readiness design audit.",
+            current_location="concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py; docs/design/pmm_final_rc1_status_readiness1.md; tests/test_pmm_final_rc1_benchmarks.py",
+            next_action="Implement PMM.UI.STATUS1 only after reviewing the readiness gate output in the target runtime with project dependencies installed.",
+            warnings_addressed=("prototype wording", "production-preview readiness", "final certification guard"),
+        ),
+        ValidationCaseSpec(
             case_id="VALID.PS.EPST1",
             title="Prestress strain convention and eps_t tracking",
             category="Prestress PMM",

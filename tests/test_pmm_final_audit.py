@@ -18,7 +18,7 @@ def test_pmm_final_audit_documents_safe_finalization_gate() -> None:
     assert "not yet a final code-certified solver" in audit
     assert "PMM.FINAL.RC1" in audit
     assert "PMM.FINAL.RC1.STATUS.READINESS1" in audit
-    assert "PMM.UI.STATUS1" in audit
+    assert "PMM.FINAL.RC1.CLOSEOUT" in audit
     assert "PMM.AASHTO.PMM1" in audit
 
 

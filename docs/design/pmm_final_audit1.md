@@ -59,13 +59,13 @@ The safest commercial wording after `PMM.FINAL.AUDIT1` is:
 > Flexural PMM is an implemented engineering-review strength workflow with
 > substantial validation evidence. It is not yet a final code-certified solver.
 
-For ACI 318 Column/Pier PMM, the next target may be:
+For ACI 318 Column/Pier PMM, the accepted closeout status is:
 
-> Validated production preview
+> Finalized production preview
 
 This status is allowed only after `PMM.FINAL.RC1.STATUS.READINESS1` passes with
-documented benchmark evidence and a separate `PMM.UI.STATUS1` wording milestone
-is implemented.
+documented benchmark evidence and `PMM.FINAL.RC1.CLOSEOUT` keeps the UI/report
+wording guarded against final certification claims.
 
 For AASHTO LRFD Column/Pier PMM, the current status remains:
 
@@ -87,16 +87,17 @@ implemented and validated.
 
 ## Recommended next milestones
 
-1. `PMM.FINAL.RC1.STATUS.READINESS1` - ACI 318 RC Column/Pier PMM
-   production-preview readiness audit:
-   scope, uniaxial, biaxial, phi, D/C no-overestimate, and wording guards.
-2. Published/reference RC PMM examples:
+1. `PMM.FINAL.RC1.CLOSEOUT` - ACI 318 RC Column/Pier PMM finalized
+   production-preview closeout:
+   scope, uniaxial, biaxial, phi, D/C no-overestimate, UI/report wording, and
+   certification guards.
+2. Published/reference RC PMM examples for future code-certified ambitions:
    uniaxial, biaxial, and D/C examples before final certification wording.
 3. `PMM.FINAL.PS1` - Bonded prestress final-readiness:
    active bonded prestress reference cases, compression-reversal policy, and
    prestress stress-state governance.
 4. `PMM.AASHTO.PMM1` - AASHTO LRFD Column/Pier PMM route:
    code-specific resistance factors, axial/flexural assumptions, and validation.
-5. `PMM.UI.STATUS1` - Commercial status wording:
-   update UI/report labels only after the relevant route has passed benchmark
-   milestones.
+5. Future UI/report wording changes:
+   keep `PMM.FINAL.RC1.CLOSEOUT` as the RC-only boundary and create a new named
+   milestone before expanding PMM claims.

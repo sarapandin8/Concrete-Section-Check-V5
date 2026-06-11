@@ -482,8 +482,10 @@ def test_pmm_closeout_solver_mode_label_separates_rc_only_from_prestress() -> No
         bonded_prestress_elements=[object()],
     )
 
-    assert rc_only_label == "ACI RC Flexural PMM: Production Preview Ready"
+    assert rc_only_label == "ACI RC Flexural PMM: Finalized Production Preview"
     assert "Prototype" not in rc_only_label
+    assert "AASHTO" not in rc_only_label
+    assert "code-certified" not in rc_only_label.lower()
     assert prestress_label == "RC + Bonded Prestress PMM - Engineering Review"
 
 
@@ -743,7 +745,7 @@ def test_method_validation_status_rows_include_core_commercial_status_items() ->
 def test_aci_rc_pmm_ui_status_uses_guarded_production_preview_wording() -> None:
     status = _aci_rc_pmm_ui_status()
 
-    assert status["label"] == "ACI RC Flexural PMM: Production Preview Ready"
+    assert status["label"] == "ACI RC Flexural PMM: Finalized Production Preview"
     assert "ACI 318 RC Column/Pier/Wall/Pylon PMM only" in status["detail"]
     assert "not AASHTO LRFD" in status["detail"]
     assert "not final code-certified" in status["detail"]
@@ -754,7 +756,7 @@ def test_method_validation_status_rows_surface_pmm_ui_status_scope_guard() -> No
     rows = _method_validation_status_rows(result_has_active_prestress=False, result_has_passive_prestress=False)
     status_row = next(row for row in rows if row["Case ID"] == "PMM.FINAL.RC1.STATUS.READINESS1")
 
-    assert "Production Preview Ready" in status_row["Design Use Guidance"]
+    assert "Finalized Production Preview" in status_row["Design Use Guidance"]
     assert "AASHTO LRFD PMM" in status_row["Remaining Engineering Limitation"]
     assert "shear" in status_row["Remaining Engineering Limitation"]
     assert "torsion" in status_row["Remaining Engineering Limitation"]
@@ -782,7 +784,7 @@ def test_method_validation_status_cards_count_status_groups() -> None:
     assert int(card_map["Validated / Implemented"]["value"]) >= 4
     assert int(card_map["Planned Checks"]["value"]) >= 1
     assert card_map["Method Basis"]["value"] == "ACI RC PMM"
-    assert card_map["Method Basis"]["detail"] == "ACI RC Flexural PMM: Production Preview Ready"
+    assert card_map["Method Basis"]["detail"] == "ACI RC Flexural PMM: Finalized Production Preview"
 
 
 

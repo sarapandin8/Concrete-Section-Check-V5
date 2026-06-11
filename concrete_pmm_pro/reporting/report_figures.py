@@ -188,7 +188,7 @@ def _limitations_for_key(key: str, session_state: Any) -> list[str]:
     limitations: list[str] = []
     if key.startswith("pmm"):
         limitations.append(
-            "ACI RC PMM figures may be used for production-preview review only within the validated RC scope; "
+            "ACI RC PMM figures may be used for finalized production-preview review only within the validated RC scope; "
             "unsupported PMM routes and fallback capacity methods remain engineering-review items."
         )
     if key == "pmm_slice_envelope":

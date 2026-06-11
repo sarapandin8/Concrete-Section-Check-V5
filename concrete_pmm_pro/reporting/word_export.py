@@ -79,7 +79,7 @@ def add_report_footer_note(document: DocumentObject) -> None:
         footer = section.footer.paragraphs[0]
         footer.text = (
             "Concrete PMM Pro draft report - engineering review; "
-            "production-preview only where explicitly validated"
+            "finalized production-preview only where explicitly validated"
         )
         footer.style = document.styles["Footer"]
 
@@ -220,7 +220,7 @@ def _add_executive_summary(document: DocumentObject, manifest: ReportManifest) -
     snapshot = manifest.traceability_snapshot
     document.add_paragraph(
         "This is a draft engineering report generated from current stored analysis results. "
-        "ACI RC Flexural PMM may be treated as production-preview only within the validated RC scope; "
+        "ACI RC Flexural PMM may be treated as finalized production-preview only within the validated RC scope; "
         "unsupported routes remain engineering-review items."
     )
     summary = {

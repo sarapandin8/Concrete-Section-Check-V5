@@ -240,15 +240,13 @@ Published uniaxial/biaxial PMM and D/C references remain recommended before
 final certification wording.
 
 `PMM.FINAL.RC1.STATUS.READINESS1` records the status decision: when the gate
-passes, it supports a future production-preview wording milestone only.  It
-does not authorize final code-certified language and it does not change the UI
-or report wording by itself.
+passes, it supports finalized production-preview wording only after the
+separate `PMM.FINAL.RC1.CLOSEOUT` guard is in place.  It does not authorize
+final code-certified language and it does not change solver equations.
 
-Until UI/report wording is changed by a separate named milestone, the correct
-status is:
+After `PMM.FINAL.RC1.CLOSEOUT`, the correct RC-only status is:
 
-> ACI RC Flexural PMM is implemented for engineering review with substantial
-> validation evidence and a defined final-readiness gate.
+> ACI RC Flexural PMM: Finalized Production Preview
 
 It must not be described as final code-certified ACI/AASHTO PMM design.
 
@@ -363,7 +361,7 @@ The plank-girder geometry generator now follows the user-confirmed stepped profi
 
 The Analysis validation-status panel may now display:
 
-> ACI RC Flexural PMM: Production Preview Ready
+> ACI RC Flexural PMM: Finalized Production Preview
 
 This wording is allowed only through `PMM.FINAL.RC1.STATUS.READINESS1`. It is scoped to ACI 318-style ordinary RC Column/Pier/Wall/Pylon flexural PMM review and keeps QA diagnostics visible. It does not authorize final code-certified language, AASHTO LRFD PMM design, prestress finalization, shear, torsion, SLS, detailing, slenderness, or second-order effects.
 
@@ -371,7 +369,7 @@ This milestone changes UI routing and wording only. It does not change PMM equat
 
 ### PMM.REPORT.STATUS1 - Report Wording Alignment for ACI RC PMM
 
-Draft Word report and PMM figure-export wording now align with `PMM.UI.STATUS1`. Report text may refer to ACI RC Flexural PMM as production-preview only within the validated RC scope, while unsupported PMM routes, fallback capacity methods, AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, and second-order effects remain engineering-review or future-work items.
+Draft Word report and PMM figure-export wording now align with `PMM.UI.STATUS1` and `PMM.FINAL.RC1.CLOSEOUT`. Report text may refer to ACI RC Flexural PMM as finalized production-preview only within the validated RC scope, while unsupported PMM routes, fallback capacity methods, AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, and second-order effects remain engineering-review or future-work items.
 
 This milestone changes report/export wording only. It does not change report data collection, PMM equations, demand/capacity extraction, validation benchmark tolerances, or solver execution.
 
@@ -382,3 +380,13 @@ The Analysis UI now treats the ordinary RC-only Flexural PMM route as the closed
 This closeout is intentionally narrow. D/C fallback warnings, serviceability exclusions, prestressed PMM, AASHTO LRFD PMM, shear, torsion, detailing, slenderness, second-order effects, and final code certification remain outside the closeout scope. Raw solver/report QA traces may still retain conservative warnings where they protect unsupported routes or non-RC-only behavior.
 
 This milestone changes UI/status wording and diagnostic presentation only. It does not change PMM equations, phi logic, axial-cap logic, prestress behavior, demand/capacity extraction, validation benchmark tolerances, or solver execution.
+
+### PMM.FINAL.RC1.CLOSEOUT - Final ACI RC PMM Production-Preview Closeout
+
+The ACI 318 ordinary RC Flexural PMM workflow is finalized as a production-preview feature inside Concrete PMM Pro. The accepted status wording is:
+
+> ACI RC Flexural PMM: Finalized Production Preview
+
+This is the final closeout for RC-only Flexural PMM UI/report status, validation traceability, and diagnostic presentation. It is not final code-certified structural design software. It does not include AASHTO LRFD PMM, bonded or unbonded prestressed PMM finalization, shear, torsion, SLS, detailing, slenderness, second-order effects, development length, or project authority review.
+
+Any future change to PMM equations, phi logic, axial-cap logic, D/C extraction, or prestress behavior must be a new named solver/validation milestone with benchmark evidence. This closeout only finalizes the status communication for the already validated ACI RC production-preview route.

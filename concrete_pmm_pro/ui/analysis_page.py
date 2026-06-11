@@ -1377,7 +1377,7 @@ def _validation_case_status_map() -> dict[str, object]:
 
 
 def _aci_rc_pmm_ui_status(cases: Mapping[str, Any] | None = None) -> dict[str, str]:
-    """Return guarded ACI RC PMM production-preview wording for the UI.
+    """Return guarded ACI RC PMM finalized production-preview wording for the UI.
 
     This is a wording/status helper only. It reads the validation matrix and
     never changes PMM equations, demand/capacity extraction, or code routing.
@@ -1388,22 +1388,22 @@ def _aci_rc_pmm_ui_status(cases: Mapping[str, Any] | None = None) -> dict[str, s
     readiness_status = getattr(readiness_case, "status", "planned")
     if readiness_status == "implemented":
         return {
-            "label": "ACI RC Flexural PMM: Production Preview Ready",
+            "label": "ACI RC Flexural PMM: Finalized Production Preview",
             "detail": "ACI 318 RC Column/Pier/Wall/Pylon PMM only; not AASHTO LRFD and not final code-certified.",
             "table_guidance": (
-                "Use for ACI RC flexural PMM production-preview review with QA diagnostics retained."
+                "Use for ACI RC flexural PMM finalized production-preview review with QA diagnostics retained."
             ),
             "remaining": (
                 "AASHTO LRFD PMM, prestress finalization, shear, torsion, SLS, detailing, slenderness, "
-                "and second-order effects remain outside this readiness gate."
+                "and second-order effects remain outside this final closeout."
             ),
             "status": "ready",
         }
     return {
         "label": "ACI RC Flexural PMM: Engineering Review",
-        "detail": "Production-preview wording is held until PMM.FINAL.RC1.STATUS.READINESS1 is implemented.",
+        "detail": "Finalized production-preview wording is held until PMM.FINAL.RC1.STATUS.READINESS1 is implemented.",
         "table_guidance": "Use as engineering-review output until the status-readiness gate is implemented.",
-        "remaining": "Complete PMM.FINAL.RC1.STATUS.READINESS1 before production-preview wording is shown.",
+        "remaining": "Complete PMM.FINAL.RC1.STATUS.READINESS1 before finalized production-preview wording is shown.",
         "status": "warning",
     }
 
@@ -2116,7 +2116,7 @@ def _render_input_summary() -> None:
         cols3[1].metric("Total Aps", f"{total_aps:,.1f} mm^2")
         cols3[2].metric("Total Pe_eff", f"{N_to_kN(total_pe):,.1f} kN")
 
-        st.info("PMM closeout status: ACI RC-only can use production-preview wording; bonded prestress remains engineering review.")
+        st.info("PMM final closeout status: ACI RC-only is finalized production-preview; bonded prestress remains engineering review.")
         st.info(f"Current solver mode: {solver_mode_label}.")
         if is_beam_girder_future_workflow(mode_settings):
             st.warning("PMM interaction is not the primary design method for typical bridge girder flexural design. Bridge girder ULS design checks are future work.")
@@ -2164,7 +2164,7 @@ def _render_input_summary() -> None:
             )
         else:
             st.caption(
-                "Method: ACI strain compatibility. ACI RC Flexural PMM is production-preview ready within the validated RC scope; "
+                "Method: ACI strain compatibility. ACI RC Flexural PMM is finalized production-preview within the validated RC scope; "
                 "QA diagnostics remain available."
             )
         _render_method_validation_status_panel(
@@ -8034,7 +8034,7 @@ def _render_pmm_3d_surface_diagnostics(diagnostics: dict[str, object], show_surf
 def _render_demand_capacity_summary(summary: DemandCapacitySummary) -> None:
     st.subheader("ULS Demand/Capacity Review")
     st.warning(
-        "ACI RC PMM demand/capacity review is production-preview only within the validated RC scope. "
+        "ACI RC PMM demand/capacity review is finalized production-preview only within the validated RC scope. "
         "Bonded prestress contribution, unsupported PMM routes, fallback capacity methods, unbonded prestress, "
         "refined long-term effects, and final code certification remain engineering-review or future-work items."
     )

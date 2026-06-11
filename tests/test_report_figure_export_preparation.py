@@ -153,7 +153,7 @@ def test_pmm_figure_limitations_use_guarded_production_preview_wording() -> None
     pmm_item = next(item for item in items if item.figure_key == "pmm_interaction_surface")
     text = " ".join(pmm_item.limitations)
 
-    assert "production-preview review only within the validated RC scope" in text
+    assert "finalized production-preview review only within the validated RC scope" in text
     assert "fallback capacity methods remain engineering-review items" in text
     assert "prototype engineering review tools" not in text
 

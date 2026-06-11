@@ -28,8 +28,8 @@ not change PMM equations.
 | ACI axial cap helper | `VALID.RC.PO1` and `QA.PO1` | Accepted as axial-cap method evidence |
 | Sign convention | `pmm_solver.py`, `strain_compatibility.py`, README method notes | Accepted as documented and test-guarded convention |
 | Numeric hygiene | `VALID.RC1.NUMERIC_SCHEMA` and PMM result schema checks | Accepted as baseline numeric evidence |
-| RC final-readiness aggregation | `concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py` | Executable gate using RC1/RC2/DC1 evidence; may pass only as production-preview readiness evidence, not final certification |
-| Status readiness audit | `PMM.FINAL.RC1.STATUS.READINESS1` | Records that production-preview wording readiness is separate from final certification and must still route through a named UI/report milestone |
+| RC final-readiness aggregation | `concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py` | Executable gate using RC1/RC2/DC1 evidence; may pass only as finalized production-preview evidence, not final certification |
+| Status readiness audit | `PMM.FINAL.RC1.STATUS.READINESS1` | Records that finalized production-preview wording is separate from final certification and remains guarded by `PMM.FINAL.RC1.CLOSEOUT` |
 
 ## Required final-readiness checks
 
@@ -46,7 +46,7 @@ engineering-review status:
 | `PMM.FINAL.RC1.SIGN` | Preserve compression-positive internal convention and demand/resistance naming separation. | Source and report wording keep the sign-convention guard. |
 | `PMM.FINAL.RC1.DC` | Preserve ray-envelope D/C as the preferred capacity extraction path. | Fallbacks remain visible; no silent overestimate is allowed. |
 | `PMM.FINAL.RC1.WARNING` | Prevent cosmetic removal of prototype/review wording. | UI/report wording may be downgraded only after benchmark evidence passes. |
-| `PMM.FINAL.RC1.STATUS.READINESS1` | Decide whether benchmark evidence can support production-preview wording. | PASS means ready for a separate UI/report wording milestone, not final certification. |
+| `PMM.FINAL.RC1.STATUS.READINESS1` | Decide whether benchmark evidence can support finalized production-preview wording. | PASS supports `PMM.FINAL.RC1.CLOSEOUT`; it is not final certification. |
 
 ## Current status after this milestone
 
@@ -54,15 +54,9 @@ The ACI RC Flexural PMM workflow is not final code-certified. `PMM.FINAL.RC1`
 now has an executable readiness runner that aggregates `VALID.RC1`,
 `VALID.RC2`, and `VALID.PMM.DC1`; `VALID.RC1` includes an independent diagonal
 biaxial rectangular clipping reference for nonzero `Mnx` and `Mny`. The correct
-current wording remains:
+finalized closeout wording is:
 
-> ACI RC Flexural PMM is implemented for engineering review with substantial
-> validation evidence and a defined final-readiness gate.
-
-If `PMM.FINAL.RC1.STATUS.READINESS1` passes, the target wording after a
-separate UI/report wording milestone may be:
-
-> ACI RC Flexural PMM validated production preview.
+> ACI RC Flexural PMM: Finalized Production Preview.
 
 The following wording is still not allowed:
 
@@ -100,6 +94,7 @@ The next safe implementation steps are:
 3. Published/reference or non-rectangular reinforcement of
    `PMM.FINAL.RC1.DC.NO_OVERESTIMATE`
 
-Only after reviewing `PMM.FINAL.RC1.STATUS.READINESS1` in the target runtime
-should UI/report status wording be updated by a separate `PMM.UI.STATUS1`
-milestone.
+`PMM.FINAL.RC1.CLOSEOUT` completes the RC-only production-preview status
+communication. Any future change to PMM equations, D/C extraction, AASHTO,
+prestress, shear, torsion, or final-certification wording requires a new named
+solver/validation milestone.

@@ -104,9 +104,9 @@ def test_word_report_uses_guarded_production_preview_scope_wording() -> None:
     document = Document(BytesIO(report_bytes))
     footer_text = "\n".join(paragraph.text for section in document.sections for paragraph in section.footer.paragraphs)
 
-    assert "ACI RC Flexural PMM may be treated as production-preview only within the validated RC scope" in text
+    assert "ACI RC Flexural PMM may be treated as finalized production-preview only within the validated RC scope" in text
     assert "unsupported routes remain engineering-review items" in text
-    assert "production-preview only where explicitly validated" in footer_text
+    assert "finalized production-preview only where explicitly validated" in footer_text
     assert "prototype engineering review only" not in footer_text
 
 

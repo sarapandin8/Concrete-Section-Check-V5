@@ -68,5 +68,5 @@ def test_pmm_final_rc1_blocks_cosmetic_final_status_upgrade() -> None:
     assert "Do not modify solver equations merely to satisfy this readiness gate" in doc
     assert "not yet a final code-certified solver" in audit
     assert "Final code-certified ACI/AASHTO PMM design" in status_audit
-    assert "PMM.UI.STATUS1" in status_audit
+    assert "PMM.FINAL.RC1.CLOSEOUT" in status_audit
     assert "does not change PMM equations" in status_audit

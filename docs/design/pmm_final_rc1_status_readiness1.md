@@ -6,18 +6,21 @@ This audit records the status decision after the ACI RC Flexural PMM evidence
 gate gained executable checks for uniaxial reference behavior, biaxial reference
 behavior, phi classification, and D/C no-overestimate behavior. It does not
 change PMM equations, D/C extraction, prestress behavior, or UI/report wording.
+`PMM.FINAL.RC1.CLOSEOUT` later finalizes the guarded UI/report wording for the
+RC-only production-preview route.
 
 ## Decision
 
 If `run_pmm_final_rc1_readiness_gate()` returns `PASS`, the ACI RC
-Column/Pier/Wall/Pylon Flexural PMM workflow is ready for a separate
-production-preview wording milestone.
+Column/Pier/Wall/Pylon Flexural PMM workflow supports the guarded final
+closeout wording milestone.
 
-Allowed future wording after a named UI/report milestone:
+Allowed wording after `PMM.FINAL.RC1.CLOSEOUT`:
 
-> ACI RC Flexural PMM validated production preview.
+> ACI RC Flexural PMM: Finalized Production Preview.
 
-Current wording remains acceptable until that separate milestone:
+Fallback wording remains acceptable if a future regression invalidates the
+closeout:
 
 > ACI RC Flexural PMM is implemented for engineering review with substantial
 > validation evidence and a defined final-readiness gate.

@@ -58,10 +58,11 @@ The pack checks a simple rectangular RC section using independent rectangular st
 | `VALID.RC1.PHI_PN_MAX` | Compare solver capped axial compression strength against independent ACI-style tied-column `phiPn,max`. | Within documented prototype tolerance. |
 | `VALID.RC1.MX_C300_PN` | Compare solver `Pn` near a uniaxial neutral-axis depth `c ≈ 300 mm` against hand calculation. | Within documented prototype tolerance. |
 | `VALID.RC1.MX_C300_MNX` | Compare solver `Mnx` near the same neutral-axis state against hand calculation. | Within documented prototype tolerance. |
+| `VALID.RC1.BIAX_CDIAG_PN` / `MNX` / `MNY` | Compare solver nominal `Pn`, `Mnx`, and `Mny` near a diagonal biaxial neutral-axis state against an independent rectangular clipping reference. | Within documented prototype tolerance. |
 | `VALID.RC1.MX_SYMMETRY` | Check positive/negative `Mx` envelope balance for a symmetric section. | Within discretization tolerance. |
 | `VALID.RC1.NUMERIC_SCHEMA` | Confirm capacity-critical PMM result fields contain no NaN/Inf values. | No invalid values in critical columns. |
 
-This benchmark pack is still not a full commercial certification.  It gives the project traceable RC-only evidence before reducing prototype wording.  Published reference examples and biaxial reference checks are still required before fully retiring general PMM prototype notes.
+This benchmark pack is still not a full commercial certification.  It gives the project traceable RC-only evidence before reducing prototype wording.  Published reference examples for uniaxial and biaxial cases are still recommended before fully retiring general PMM prototype notes.
 
 ## VALID.RC2 — RC phi transition / tension-control benchmark pack
 
@@ -227,15 +228,17 @@ second-order effects remain outside this gate.
 Existing evidence credited by the gate includes `VALID.RC1`, `VALID.RC2`,
 `VALID.PMM.DC1`, `VALID.RC.PO1`, and `QA.PO1`.  The executable
 `run_pmm_final_rc1_readiness_gate()` aggregator summarizes this evidence for
-reporting.  The gate is expected to remain `WARNING` until a true biaxial
-`P-Mx-My` reference benchmark and RC-specific D/C no-overestimate cases are
-added.  `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` now guards synthetic noisy
+reporting.  `VALID.RC1` now includes diagonal biaxial `P-Mx-My` reference
+checks using an independent rectangular clipping calculation, so
+`PMM.FINAL.RC1.BIAXIAL.REF` is no longer a hard-coded missing-reference
+warning.  `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` guards synthetic noisy
 envelopes by using the nearest positive ray boundary instead of the farthest
-intersection, but this is still algorithm evidence rather than a true RC
-benchmark.  Published/reference uniaxial examples are still recommended before
-any final certification wording is considered.
+intersection, but RC-specific D/C no-overestimate cases and published
+uniaxial/biaxial references remain recommended before final certification
+wording.
 
-Until those items pass, the correct status is:
+Until UI/report wording is changed by a separate named milestone, the correct
+status is:
 
 > ACI RC Flexural PMM is implemented for engineering review with substantial
 > validation evidence and a defined final-readiness gate.

@@ -3,8 +3,8 @@
 This runner aggregates the existing RC-only validation evidence into a single
 commercial-readiness gate. It deliberately does not change PMM equations. A
 WARNING status means the current solver evidence is useful for engineering
-review, but a final-status wording upgrade is still blocked by missing reference
-coverage.
+review, but a final-status wording upgrade is still blocked by missing or
+incomplete reference coverage.
 """
 
 from __future__ import annotations
@@ -107,6 +107,8 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
 
     uniaxial_ids = ["VALID.RC1.PHI_PN_MAX", "VALID.RC1.MX_C300_PN", "VALID.RC1.MX_C300_MNX"]
     uniaxial_status = _status_from_child_statuses([rc1_statuses.get(check_id, FAIL) for check_id in uniaxial_ids])
+    biaxial_ids = ["VALID.RC1.BIAX_CDIAG_PN", "VALID.RC1.BIAX_CDIAG_MNX", "VALID.RC1.BIAX_CDIAG_MNY"]
+    biaxial_status = _status_from_child_statuses([rc1_statuses.get(check_id, FAIL) for check_id in biaxial_ids])
     phi_ids = [
         "VALID.RC2.PHI_COMPRESSION_EDGE",
         "VALID.RC2.PHI_TRANSITION_MID",
@@ -167,16 +169,20 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
         PMMFinalRC1Check(
             check_id="PMM.FINAL.RC1.BIAXIAL.REF",
             title="True biaxial RC P-Mx-My reference benchmark",
-            status=WARNING,
-            message="A true biaxial ACI RC reference case is still required before production-preview wording can be considered.",
-            details={"required": "nonzero Mux and Muy reference with traceable capacity/D-C acceptance"},
+            status=biaxial_status,
+            message=(
+                "VALID.RC1 diagonal biaxial reference checks are available for nonzero Mnx and Mny."
+                if biaxial_status != FAIL
+                else "VALID.RC1 diagonal biaxial reference checks failed or are missing."
+            ),
+            details={check_id: rc1_statuses.get(check_id, "MISSING") for check_id in biaxial_ids},
         ),
         PMMFinalRC1Check(
             check_id="PMM.FINAL.RC1.WARNING",
             title="Commercial wording remains guarded",
             status=PASS,
-            message="Prototype/review wording must remain until missing reference evidence is closed by named milestones.",
-            details={"target_status": "validated production preview after benchmark closure"},
+            message="Prototype/review wording remains guarded until UI/report wording is changed by a separate named milestone.",
+            details={"target_status": "validated production preview after benchmark closure, not final code certification"},
         ),
     ]
     return _summary(checks)

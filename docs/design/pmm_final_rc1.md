@@ -21,14 +21,14 @@ not change PMM equations.
 
 | Evidence item | Existing source | Current gate credit |
 |---|---|---|
-| RC rectangular axial cap and uniaxial spot check | `VALID.RC1` | Accepted as internal benchmark evidence |
+| RC rectangular axial cap, uniaxial spot check, and diagonal biaxial spot check | `VALID.RC1` | Accepted as internal benchmark evidence |
 | ACI-style phi transition | `VALID.RC2` | Accepted as implemented phi classification evidence |
 | Directional D/C ray-envelope method | `VALID.PMM.DC1` | Accepted as internal D/C method evidence |
 | D/C no-overestimate guard | `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` | Guards noisy/non-star envelope rays by using the nearest positive boundary |
 | ACI axial cap helper | `VALID.RC.PO1` and `QA.PO1` | Accepted as axial-cap method evidence |
 | Sign convention | `pmm_solver.py`, `strain_compatibility.py`, README method notes | Accepted as documented and test-guarded convention |
 | Numeric hygiene | `VALID.RC1.NUMERIC_SCHEMA` and PMM result schema checks | Accepted as baseline numeric evidence |
-| RC final-readiness aggregation | `concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py` | Executable gate, currently expected to return `WARNING` until true biaxial reference evidence is added |
+| RC final-readiness aggregation | `concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py` | Executable gate using RC1/RC2/DC1 evidence; may pass only as production-preview readiness evidence, not final certification |
 
 ## Required final-readiness checks
 
@@ -39,7 +39,7 @@ engineering-review status:
 |---|---|---|
 | `PMM.FINAL.RC1.SCOPE` | Confirm the final-readiness scope is RC-only ACI PMM and excludes prestress/AASHTO/shear/torsion. | Scope is documented and regression guarded. |
 | `PMM.FINAL.RC1.UNIAXIAL.REF` | Add at least one traceable external or independently derived ACI RC uniaxial column benchmark. | Solver axial and moment capacity match within documented tolerance. |
-| `PMM.FINAL.RC1.BIAXIAL.REF` | Add at least one true biaxial `P-Mx-My` reference benchmark. | Directional capacity is not overestimated and D/C path is traceable. |
+| `PMM.FINAL.RC1.BIAXIAL.REF` | Add at least one true biaxial `P-Mx-My` reference benchmark. | Solver nominal `Pn`, `Mnx`, and `Mny` match the independent rectangular clipping reference within documented tolerance. |
 | `PMM.FINAL.RC1.PHI` | Preserve ACI tied/spiral phi transition checks. | `VALID.RC2` passes without solver/source mismatch. |
 | `PMM.FINAL.RC1.AXIAL.CAP` | Preserve ACI maximum axial compression cap checks. | `VALID.RC.PO1`/`QA.PO1` evidence remains present. |
 | `PMM.FINAL.RC1.SIGN` | Preserve compression-positive internal convention and demand/resistance naming separation. | Source and report wording keep the sign-convention guard. |
@@ -48,15 +48,17 @@ engineering-review status:
 
 ## Current status after this milestone
 
-The ACI RC Flexural PMM workflow is not final yet. `PMM.FINAL.RC1` now has an
-executable readiness runner that aggregates `VALID.RC1`, `VALID.RC2`, and
-`VALID.PMM.DC1`, but the gate remains blocked by the missing true biaxial
-reference case. The correct current wording is:
+The ACI RC Flexural PMM workflow is not final code-certified. `PMM.FINAL.RC1`
+now has an executable readiness runner that aggregates `VALID.RC1`,
+`VALID.RC2`, and `VALID.PMM.DC1`; `VALID.RC1` includes an independent diagonal
+biaxial rectangular clipping reference for nonzero `Mnx` and `Mny`. The correct
+current wording remains:
 
 > ACI RC Flexural PMM is implemented for engineering review with substantial
 > validation evidence and a defined final-readiness gate.
 
-The target wording after the missing reference checks pass may be:
+The target wording after benchmark closure and a separate UI/report wording
+milestone may be:
 
 > ACI RC Flexural PMM validated production preview.
 
@@ -66,7 +68,8 @@ The following wording is still not allowed:
 
 ## Engineering blockers before status upgrade
 
-1. Add true biaxial ACI RC benchmark evidence for nonzero `Mux` and `Muy`.
+1. Add published/reference biaxial ACI RC PMM examples before any final
+   certification wording is considered.
 2. Confirm D/C extraction does not overestimate capacity for RC benchmark
    shapes beyond the current synthetic rectangular and non-star/noisy envelope
    checks.
@@ -88,12 +91,12 @@ The following wording is still not allowed:
 
 ## Next engineering work
 
-The next safe implementation step is to add executable reference cases for:
+The next safe implementation steps are:
 
-1. `PMM.FINAL.RC1.BIAXIAL.REF`
-2. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE` using RC-specific shapes beyond the
+1. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE` using RC-specific shapes beyond the
    synthetic `SOLVER.PMM.DC1.NONSTAR_NEAREST_RAY` guard
-3. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
+2. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
+3. Published/reference reinforcement of `PMM.FINAL.RC1.BIAXIAL.REF`
 
 Only after those pass should UI/report status wording be updated by a separate
 `PMM.UI.STATUS1` milestone.

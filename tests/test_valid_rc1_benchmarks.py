@@ -6,6 +6,7 @@ from concrete_pmm_pro.verification.rc_rectangular_benchmarks import (
     FAIL,
     PASS,
     build_valid_rc1_rectangular_input,
+    reference_biaxial_pmm_point,
     reference_rc_po_N,
     reference_tied_phiPn_max_N,
     reference_uniaxial_mx_point,
@@ -41,6 +42,19 @@ def test_reference_uniaxial_mx_point_has_expected_components() -> None:
     assert len(point["rebar_details"]) == 4
 
 
+def test_reference_biaxial_pmm_point_has_nonzero_biaxial_components() -> None:
+    point = reference_biaxial_pmm_point(theta_rad=math.pi / 4.0, c_mm=300.0)
+
+    assert point["Pn_N"] > 0.0
+    assert math.isfinite(point["Mnx_Nmm"])
+    assert math.isfinite(point["Mny_Nmm"])
+    assert abs(point["Mnx_Nmm"]) > 0.0
+    assert abs(point["Mny_Nmm"]) > 0.0
+    assert point["concrete_area_mm2"] > 0.0
+    assert point["compression_vertex_count"] >= 3
+    assert len(point["rebar_details"]) == 4
+
+
 def test_valid_rc1_benchmark_pack_runs_without_failures() -> None:
     summary = run_valid_rc1_benchmark_pack()
 
@@ -48,6 +62,9 @@ def test_valid_rc1_benchmark_pack_runs_without_failures() -> None:
     assert summary.overall_status != FAIL
     assert any(check.check_id == "VALID.RC1.PHI_PN_MAX" for check in summary.checks)
     assert any(check.check_id == "VALID.RC1.MX_C300_MNX" for check in summary.checks)
+    assert any(check.check_id == "VALID.RC1.BIAX_CDIAG_PN" for check in summary.checks)
+    assert any(check.check_id == "VALID.RC1.BIAX_CDIAG_MNX" for check in summary.checks)
+    assert any(check.check_id == "VALID.RC1.BIAX_CDIAG_MNY" for check in summary.checks)
     assert any(check.check_id == "VALID.RC1.NUMERIC_SCHEMA" and check.status == PASS for check in summary.checks)
 
 

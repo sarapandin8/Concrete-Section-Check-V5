@@ -21,9 +21,10 @@ def test_pmm_final_rc1_document_defines_rc_only_gate() -> None:
     assert "shear, torsion, SLS" in doc
 
 
-def test_pmm_final_rc1_validation_matrix_tracks_missing_reference_cases() -> None:
+def test_pmm_final_rc1_validation_matrix_tracks_reference_cases() -> None:
     source = _read("concrete_pmm_pro/verification/validation_framework.py")
     runner = _read("concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py")
+    rc1 = _read("concrete_pmm_pro/verification/rc_rectangular_benchmarks.py")
 
     assert 'case_id="PMM.FINAL.RC1.SCOPE"' in source
     assert 'case_id="PMM.FINAL.RC1.UNIAXIAL.REF"' in source
@@ -31,7 +32,9 @@ def test_pmm_final_rc1_validation_matrix_tracks_missing_reference_cases() -> Non
     assert 'case_id="PMM.FINAL.RC1.DC.NO_OVERESTIMATE"' in source
     assert "run_pmm_final_rc1_readiness_gate" in source
     assert "run_pmm_final_rc1_readiness_gate" in runner
-    assert 'status="planned"' in source
+    assert "VALID.RC1.BIAX_CDIAG_PN" in rc1
+    assert "VALID.RC1.BIAX_CDIAG_MNX" in rc1
+    assert "VALID.RC1.BIAX_CDIAG_MNY" in rc1
 
 
 def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
@@ -46,14 +49,14 @@ def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
     assert "VALID.PMM.DC1" in doc and "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY" in dc1
     assert "PMM.FINAL.RC1 ACI RC final-readiness gate" in validation_doc
     assert "It must not be described as final code-certified ACI/AASHTO PMM design" in validation_doc
-    assert "expected to remain `WARNING` until a true biaxial" in validation_doc
+    assert "`PMM.FINAL.RC1.BIAXIAL.REF` is no longer a hard-coded missing-reference" in validation_doc
 
 
 def test_pmm_final_rc1_blocks_cosmetic_final_status_upgrade() -> None:
     doc = _read("docs/design/pmm_final_rc1.md")
     audit = _read("docs/design/pmm_final_audit1.md")
 
-    assert "not final yet" in doc
+    assert "not final code-certified" in doc
     assert "Final code-certified ACI/AASHTO PMM design" in doc
     assert "Do not modify solver equations merely to satisfy this readiness gate" in doc
     assert "not yet a final code-certified solver" in audit

@@ -3,13 +3,13 @@ from __future__ import annotations
 from concrete_pmm_pro.verification.pmm_final_rc1_benchmarks import run_pmm_final_rc1_readiness_gate
 
 
-def test_pmm_final_rc1_readiness_gate_runs_with_expected_warning_status() -> None:
+def test_pmm_final_rc1_readiness_gate_runs_without_failures() -> None:
     summary = run_pmm_final_rc1_readiness_gate()
 
     assert summary.checks
     assert summary.fail_count == 0
-    assert summary.overall_status == "WARNING"
-    assert "final-readiness blockers" in summary.design_use_status
+    assert summary.overall_status in {"PASS", "WARNING"}
+    assert "final certification" in summary.design_use_status or "final-readiness blockers" in summary.design_use_status
 
 
 def test_pmm_final_rc1_readiness_gate_tracks_core_gate_ids() -> None:
@@ -24,12 +24,15 @@ def test_pmm_final_rc1_readiness_gate_tracks_core_gate_ids() -> None:
     assert "PMM.FINAL.RC1.WARNING" in check_ids
 
 
-def test_pmm_final_rc1_biaxial_reference_remains_blocking_warning() -> None:
+def test_pmm_final_rc1_biaxial_reference_is_executable() -> None:
     summary = run_pmm_final_rc1_readiness_gate()
     biaxial = next(check for check in summary.checks if check.check_id == "PMM.FINAL.RC1.BIAXIAL.REF")
 
-    assert biaxial.status == "WARNING"
-    assert "true biaxial ACI RC reference case is still required" in biaxial.message
+    assert biaxial.status == "PASS"
+    assert "diagonal biaxial reference checks are available" in biaxial.message
+    assert biaxial.details["VALID.RC1.BIAX_CDIAG_PN"] == "PASS"
+    assert biaxial.details["VALID.RC1.BIAX_CDIAG_MNX"] == "PASS"
+    assert biaxial.details["VALID.RC1.BIAX_CDIAG_MNY"] == "PASS"
 
 
 def test_pmm_final_rc1_dataframe_is_report_ready() -> None:
@@ -38,4 +41,3 @@ def test_pmm_final_rc1_dataframe_is_report_ready() -> None:
 
     assert not df.empty
     assert {"Check ID", "Title", "Status", "Message", "Details"}.issubset(set(df.columns))
-

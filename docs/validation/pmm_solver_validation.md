@@ -216,6 +216,28 @@ Until validation benchmarks are expanded, PMM output should be described as:
 > ULS PMM results are engineering-review results based on the current strain compatibility solver and documented assumptions.  Governing D/C may be used for internal review, but final design should be independently checked until the relevant validation cases are completed.
 
 
+### PMM.FINAL.RC1 ACI RC final-readiness gate
+
+`PMM.FINAL.RC1` defines the gate for moving the ACI-oriented RC
+Column/Pier/Wall/Pylon Flexural PMM workflow toward validated production-preview
+wording.  It is intentionally RC-only: bonded prestress finalization, unbonded
+prestress, AASHTO LRFD PMM, shear, torsion, SLS, detailing, slenderness, and
+second-order effects remain outside this gate.
+
+Existing evidence credited by the gate includes `VALID.RC1`, `VALID.RC2`,
+`VALID.PMM.DC1`, `VALID.RC.PO1`, and `QA.PO1`.  The missing final-readiness
+items are traceable uniaxial ACI RC reference benchmarks, true biaxial `P-Mx-My`
+reference benchmarks, and D/C no-overestimate checks tied to those reference
+cases.
+
+Until those items pass, the correct status is:
+
+> ACI RC Flexural PMM is implemented for engineering review with substantial
+> validation evidence and a defined final-readiness gate.
+
+It must not be described as final code-certified ACI/AASHTO PMM design.
+
+
 ### SOLVER.PS.COMP1 compression-reversal warning policy
 
 Active prestress compression reversal is still modeled conservatively by clamping negative total tensile strain to zero.  The event is no longer emitted as a standalone global engineering warning for every PMM surface point.  Instead, `prestress_compression_reversal_count` is retained per PMM point and the Analysis diagnostics escalate it only when the event is detected near the governing Pu region.  This keeps the ULS summary focused on governing-impact items while preserving the QA trail for future prestress stress-model validation.
@@ -321,4 +343,3 @@ No PMM solver, D/C extraction, prestress model, or service-stress equation is ch
 ### SECTION.PRESET1B.2 — Plank Girder Stepped-Profile Geometry Hotfix
 
 The plank-girder geometry generator now follows the user-confirmed stepped profile.  Interior plank checks enforce the physical widths B at y = 0 and h1, b3 at h2, and B - 2*b1 at H.  Exterior plank checks enforce a full-depth right exterior edge and left-side offsets of 0 at y = 0/h1, b2 at h2, and b1 at H.  This milestone updates geometry generation and regression tests only; it does not alter solver equations or demand/capacity checks.
-

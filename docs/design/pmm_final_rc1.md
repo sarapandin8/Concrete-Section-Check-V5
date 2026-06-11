@@ -27,6 +27,7 @@ not change PMM equations.
 | ACI axial cap helper | `VALID.RC.PO1` and `QA.PO1` | Accepted as axial-cap method evidence |
 | Sign convention | `pmm_solver.py`, `strain_compatibility.py`, README method notes | Accepted as documented and test-guarded convention |
 | Numeric hygiene | `VALID.RC1.NUMERIC_SCHEMA` and PMM result schema checks | Accepted as baseline numeric evidence |
+| RC final-readiness aggregation | `concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py` | Executable gate, currently expected to return `WARNING` until true biaxial reference evidence is added |
 
 ## Required final-readiness checks
 
@@ -46,8 +47,10 @@ engineering-review status:
 
 ## Current status after this milestone
 
-The ACI RC Flexural PMM workflow is not final yet. The correct current wording
-is:
+The ACI RC Flexural PMM workflow is not final yet. `PMM.FINAL.RC1` now has an
+executable readiness runner that aggregates `VALID.RC1`, `VALID.RC2`, and
+`VALID.PMM.DC1`, but the gate remains blocked by the missing true biaxial
+reference case. The correct current wording is:
 
 > ACI RC Flexural PMM is implemented for engineering review with substantial
 > validation evidence and a defined final-readiness gate.
@@ -62,10 +65,12 @@ The following wording is still not allowed:
 
 ## Engineering blockers before status upgrade
 
-1. Add traceable uniaxial ACI RC benchmark evidence that is independent of the
-   current solver implementation.
-2. Add true biaxial ACI RC benchmark evidence for nonzero `Mux` and `Muy`.
-3. Confirm D/C extraction does not overestimate capacity for benchmark shapes.
+1. Add true biaxial ACI RC benchmark evidence for nonzero `Mux` and `Muy`.
+2. Confirm D/C extraction does not overestimate capacity for RC benchmark
+   shapes beyond the current synthetic rectangular slice checks.
+3. Add published/reference uniaxial examples before any final certification
+   wording is considered, even though an internal independent uniaxial gate is
+   now executable.
 4. Keep convex-hull and fallback warnings visible when fallback methods are
    used.
 5. Keep AASHTO LRFD PMM guarded until a separate AASHTO route exists.
@@ -83,10 +88,9 @@ The following wording is still not allowed:
 
 The next safe implementation step is to add executable reference cases for:
 
-1. `PMM.FINAL.RC1.UNIAXIAL.REF`
-2. `PMM.FINAL.RC1.BIAXIAL.REF`
-3. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE`
+1. `PMM.FINAL.RC1.BIAXIAL.REF`
+2. `PMM.FINAL.RC1.DC.NO_OVERESTIMATE`
+3. Published/reference reinforcement of `PMM.FINAL.RC1.UNIAXIAL.REF`
 
 Only after those pass should UI/report status wording be updated by a separate
 `PMM.UI.STATUS1` milestone.
-

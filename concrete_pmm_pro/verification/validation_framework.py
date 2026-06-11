@@ -37,6 +37,10 @@ from concrete_pmm_pro.verification.po_axial_cap_benchmarks import (
     POAxialCapSummary,
     run_valid_po1_axial_cap_benchmark_pack,
 )
+from concrete_pmm_pro.verification.pmm_final_rc1_benchmarks import (
+    PMMFinalRC1Summary,
+    run_pmm_final_rc1_readiness_gate,
+)
 
 ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
@@ -83,6 +87,7 @@ class PMMSolverValidationReport:
     ps_passive: PSPassiveBenchmarkSummary
     dc_directional: DCDirectionalBenchmarkSummary
     po_axial_cap: POAxialCapSummary
+    pmm_final_rc1: PMMFinalRC1Summary
 
     @property
     def implemented_case_count(self) -> int:
@@ -110,6 +115,7 @@ class PMMSolverValidationReport:
             self.ps_passive.overall_status,
             self.dc_directional.overall_status,
             self.po_axial_cap.overall_status,
+            self.pmm_final_rc1.overall_status,
         }
         if "FAIL" in statuses:
             return "FAIL"
@@ -204,12 +210,12 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             case_id="PMM.FINAL.RC1.UNIAXIAL.REF",
             title="Traceable ACI RC uniaxial PMM reference benchmark",
             category="RC-only PMM",
-            status="partial",
+            status="implemented",
             purpose="Promote the current internal rectangular RC spot checks into final-readiness evidence using at least one traceable external or independently derived uniaxial benchmark.",
             acceptance="Solver axial and uniaxial moment capacities match the reference case within documented tolerance without weakening solver equations or validation tolerances.",
-            source="VALID.RC1 internal rectangular benchmark plus future published/reference benchmark case.",
-            current_location="concrete_pmm_pro/verification/rc_rectangular_benchmarks.py; docs/design/pmm_final_rc1.md",
-            next_action="Add a named executable benchmark case with reference values, tolerance basis, and source notes.",
+            source="VALID.RC1 internal rectangular benchmark and PMM.FINAL.RC1 readiness gate.",
+            current_location="concrete_pmm_pro/verification/rc_rectangular_benchmarks.py; concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py; docs/design/pmm_final_rc1.md",
+            next_action="Add a published/reference uniaxial example before any final certification wording is considered.",
             warnings_addressed=("PMM prototype", "RC strain compatibility", "uniaxial benchmark"),
         ),
         ValidationCaseSpec(
@@ -407,4 +413,5 @@ def run_pmm_solver_validation_report() -> PMMSolverValidationReport:
         ps_passive=run_valid_ps_passive_benchmark_pack(),
         dc_directional=run_valid_dc1_directional_benchmark_pack(),
         po_axial_cap=run_valid_po1_axial_cap_benchmark_pack(),
+        pmm_final_rc1=run_pmm_final_rc1_readiness_gate(),
     )

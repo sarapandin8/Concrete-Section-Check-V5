@@ -225,10 +225,12 @@ prestress, AASHTO LRFD PMM, shear, torsion, SLS, detailing, slenderness, and
 second-order effects remain outside this gate.
 
 Existing evidence credited by the gate includes `VALID.RC1`, `VALID.RC2`,
-`VALID.PMM.DC1`, `VALID.RC.PO1`, and `QA.PO1`.  The missing final-readiness
-items are traceable uniaxial ACI RC reference benchmarks, true biaxial `P-Mx-My`
-reference benchmarks, and D/C no-overestimate checks tied to those reference
-cases.
+`VALID.PMM.DC1`, `VALID.RC.PO1`, and `QA.PO1`.  The executable
+`run_pmm_final_rc1_readiness_gate()` aggregator summarizes this evidence for
+reporting.  The gate is expected to remain `WARNING` until a true biaxial
+`P-Mx-My` reference benchmark and RC-specific D/C no-overestimate cases are
+added.  Published/reference uniaxial examples are still recommended before any
+final certification wording is considered.
 
 Until those items pass, the correct status is:
 

@@ -30,6 +30,10 @@ def test_validation_matrix_contains_core_solver_risk_areas() -> None:
     assert "QA.PO1" in case_ids
     assert "SOLVER.PS.COMP1" in case_ids
     assert "VALID.PMM.DC1" in case_ids
+    assert "PMM.FINAL.RC1.SCOPE" in case_ids
+    assert "PMM.FINAL.RC1.UNIAXIAL.REF" in case_ids
+    assert "PMM.FINAL.RC1.BIAXIAL.REF" in case_ids
+    assert "PMM.FINAL.RC1.DC.NO_OVERESTIMATE" in case_ids
     assert "VALID.NUM1" in case_ids
     assert "VALID.WARN1" in case_ids
 
@@ -80,6 +84,8 @@ def test_pmm_solver_validation_report_runs_current_suites() -> None:
     assert report.hand_checks.checks
     assert report.pmm_checks.checks
     assert report.po_axial_cap.checks
+    assert report.pmm_final_rc1.checks
+    assert report.pmm_final_rc1.overall_status in {"PASS", "WARNING"}
     assert report.overall_execution_status in {"PASS", "WARNING"}
 
 

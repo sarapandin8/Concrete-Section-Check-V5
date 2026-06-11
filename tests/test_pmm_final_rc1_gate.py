@@ -23,12 +23,14 @@ def test_pmm_final_rc1_document_defines_rc_only_gate() -> None:
 
 def test_pmm_final_rc1_validation_matrix_tracks_missing_reference_cases() -> None:
     source = _read("concrete_pmm_pro/verification/validation_framework.py")
+    runner = _read("concrete_pmm_pro/verification/pmm_final_rc1_benchmarks.py")
 
     assert 'case_id="PMM.FINAL.RC1.SCOPE"' in source
     assert 'case_id="PMM.FINAL.RC1.UNIAXIAL.REF"' in source
     assert 'case_id="PMM.FINAL.RC1.BIAXIAL.REF"' in source
     assert 'case_id="PMM.FINAL.RC1.DC.NO_OVERESTIMATE"' in source
-    assert 'status="partial"' in source
+    assert "run_pmm_final_rc1_readiness_gate" in source
+    assert "run_pmm_final_rc1_readiness_gate" in runner
     assert 'status="planned"' in source
 
 
@@ -44,6 +46,7 @@ def test_pmm_final_rc1_keeps_current_rc_evidence_connected() -> None:
     assert "VALID.PMM.DC1" in doc and "SOLVER.PMM.DC1.DC_SUMMARY_PRIMARY" in dc1
     assert "PMM.FINAL.RC1 ACI RC final-readiness gate" in validation_doc
     assert "It must not be described as final code-certified ACI/AASHTO PMM design" in validation_doc
+    assert "expected to remain `WARNING` until a true biaxial" in validation_doc
 
 
 def test_pmm_final_rc1_blocks_cosmetic_final_status_upgrade() -> None:

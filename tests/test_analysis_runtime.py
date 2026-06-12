@@ -38,6 +38,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
     _column_pier_shear_check_dataframe,
+    _column_pier_torsion_check_dataframe,
 )
 
 
@@ -60,7 +61,14 @@ def _analysis_input(**kwargs) -> AnalysisInput:
     return AnalysisInput(**data)
 
 
-def _column_pier_shear_state(*, code: str = "ACI 318", vux: float = 80.0, vuy: float = 120.0) -> dict[str, object]:
+def _column_pier_shear_state(
+    *,
+    code: str = "ACI 318",
+    vux: float = 80.0,
+    vuy: float = 120.0,
+    tu: float = 0.0,
+    closed_layout: str = "Closed ties / hoops",
+) -> dict[str, object]:
     return {
         "design_code": code,
         "code_edition": "ACI 318-19" if code == "ACI 318" else "AASHTO LRFD 9th Edition",
@@ -74,7 +82,7 @@ def _column_pier_shear_state(*, code: str = "ACI 318", vux: float = 80.0, vuy: f
                     "Muy": 50.0,
                     "Vux": vux,
                     "Vuy": vuy,
-                    "Tu": 0.0,
+                    "Tu": tu,
                     "Note": "test",
                 }
             ]
@@ -96,7 +104,7 @@ def _column_pier_shear_state(*, code: str = "ACI 318", vux: float = 80.0, vuy: f
             ]
         ),
         "column_pier_transverse_reinforcement_settings": {
-            "closed_tie_layout": "Closed ties / hoops",
+            "closed_tie_layout": closed_layout,
             "torsion_core_basis": "Auto from section and tie offset",
             "tie_center_offset_mm": 50.0,
         },
@@ -139,6 +147,44 @@ def test_column_pier_aashto_shear_remains_review_without_capacity_claim() -> Non
     assert set(df["Status"]) == {"REVIEW"}
     assert df["Capacity"].eq("-").all()
     assert df["Notes"].str.contains("AASHTO LRFD Column/Pier shear is not implemented").all()
+
+
+def test_column_pier_aci_torsion_preview_reads_tu_closed_ties_and_ordinary_al() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(vux=0.0, vuy=0.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_torsion_check_dataframe(state, analysis_input)
+
+    assert list(df["Status"]) == ["Preview PASS"]
+    assert list(df["Transverse status"]) == ["PASS"]
+    assert list(df["Longitudinal status"]) == ["PASS"]
+    assert float(df.iloc[0]["phiTn kN-m"]) > float(df.iloc[0]["Demand kN-m"])
+    assert float(df.iloc[0]["Al provided mm2"]) > float(df.iloc[0]["Al req mm2"])
+
+
+def test_column_pier_aci_torsion_open_ties_remain_review_without_capacity_claim() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(vux=0.0, vuy=0.0, tu=20.0, closed_layout="Open ties - shear only review")
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_torsion_check_dataframe(state, analysis_input)
+
+    assert list(df["Status"]) == ["REVIEW"]
+    assert df["Capacity"].eq("-").all()
+    assert "requires closed ties/hoops or spiral" in str(df.iloc[0]["Notes"])
+
+
+def test_column_pier_aashto_torsion_remains_review_without_capacity_claim() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(code="AASHTO LRFD", vux=0.0, vuy=0.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_torsion_check_dataframe(state, analysis_input)
+
+    assert set(df["Status"]) == {"REVIEW"}
+    assert df["Capacity"].eq("-").all()
+    assert df["Notes"].str.contains("AASHTO LRFD Column/Pier torsion is not implemented").all()
 
 
 def test_analysis_input_hash_is_stable_for_identical_engineering_inputs() -> None:

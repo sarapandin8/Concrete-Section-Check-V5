@@ -3196,6 +3196,406 @@ def _column_pier_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str,
     return df.sort_values("__dc", ascending=False, kind="stable").iloc[0].to_dict()
 
 
+def _column_pier_active_transverse_zone_for_torsion(state: Mapping[str, object]) -> dict[str, object] | None:
+    settings = _column_pier_transverse_settings_from_state(state)
+    if str(settings.get("closed_tie_layout") or "") not in {"Closed ties / hoops", "Spiral reinforcement"}:
+        return None
+    zone = _column_pier_active_transverse_zone_for_shear(state)
+    if zone is None:
+        return None
+    area = _beam_uls_stirrup_area_mm2(zone)
+    spacing = _beam_uls_float(zone.get("Spacing_mm"))
+    fy = _beam_uls_float(zone.get("fy_MPa"))
+    if not all(math.isfinite(value) and value > 0.0 for value in [area, spacing, fy]):
+        return None
+    result = dict(zone)
+    result["At mm2"] = float(area)
+    result["At/s mm2/mm"] = float(area) / float(spacing)
+    return result
+
+
+def _column_pier_torsion_geometry(
+    section_geometry: SectionGeometry,
+    settings: Mapping[str, object],
+    *,
+    transverse_diameter_mm: float,
+) -> dict[str, object]:
+    metrics = _beam_uls_outer_polygon_metrics(section_geometry)
+    notes = [str(metrics.get("Note") or "")]
+    acp = _beam_uls_float(metrics.get("Acp mm2"))
+    pcp = _beam_uls_float(metrics.get("Pcp mm"))
+    basis = str(settings.get("torsion_core_basis") or "Auto from section and tie offset")
+    if basis == "Manual core dimensions":
+        bo = _beam_uls_float(settings.get("manual_core_width_mm"))
+        ho = _beam_uls_float(settings.get("manual_core_depth_mm"))
+        if not all(math.isfinite(value) and value > 0.0 for value in [bo, ho]):
+            return {
+                "Acp mm2": acp,
+                "Pcp mm": pcp,
+                "Aoh mm2": float("nan"),
+                "Ao mm2": float("nan"),
+                "ph mm": float("nan"),
+                "offset mm": float("nan"),
+                "basis": basis,
+                "Note": "Manual torsion core basis selected, but bo/ho are not both positive.",
+            }
+        aoh = float(bo) * float(ho)
+        ph = 2.0 * (float(bo) + float(ho))
+        return {
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": aoh,
+            "Ao mm2": 0.85 * aoh,
+            "ph mm": ph,
+            "offset mm": float("nan"),
+            "basis": basis,
+            "Note": "Manual bo/ho torsion core dimensions from Column/Pier transverse settings; Ao = 0.85Aoh.",
+        }
+    if basis == "Not defined yet":
+        return {
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": float("nan"),
+            "Ao mm2": float("nan"),
+            "ph mm": float("nan"),
+            "offset mm": float("nan"),
+            "basis": basis,
+            "Note": "Torsion core basis is not defined.",
+        }
+    try:
+        outer_polygon = to_shapely_polygon(SectionGeometry(name=section_geometry.name, outer_polygon=section_geometry.outer_polygon, holes=[]))
+    except Exception:
+        outer_polygon = None
+    if outer_polygon is None or outer_polygon.is_empty or outer_polygon.area <= 0.0 or not outer_polygon.is_valid:
+        return {
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": float("nan"),
+            "Ao mm2": float("nan"),
+            "ph mm": float("nan"),
+            "offset mm": float("nan"),
+            "basis": basis,
+            "Note": "Auto torsion core could not be derived from the outside polygon.",
+        }
+    minx, miny, maxx, maxy = outer_polygon.bounds
+    min_dim = min(float(maxx) - float(minx), float(maxy) - float(miny))
+    offset = _beam_uls_float(settings.get("tie_center_offset_mm"))
+    if not math.isfinite(offset) or offset <= 0.0:
+        dia = float(transverse_diameter_mm) if math.isfinite(transverse_diameter_mm) and transverse_diameter_mm > 0.0 else 12.0
+        offset = max(45.0 + 0.5 * dia, 0.04 * min_dim)
+        notes.append(f"Tie/hoop offset was not defined; fallback offset {offset:.1f} mm was used for preview only.")
+    try:
+        inset = outer_polygon.buffer(-float(offset), join_style=2)
+        if inset.is_empty or inset.area <= 0.0:
+            raise ValueError("empty inset")
+        if getattr(inset, "geoms", None):
+            inset = max(inset.geoms, key=lambda geom: float(geom.area))
+            notes.append("Inset torsion core split into multiple regions; largest region used for preview.")
+        aoh = float(inset.area)
+        ph = float(inset.exterior.length)
+        ao = 0.85 * aoh
+        notes.append(f"Aoh from outside polygon offset {float(offset):.1f} mm to tie/hoop centerline; Ao = 0.85Aoh.")
+    except Exception:
+        aoh = float("nan")
+        ph = float("nan")
+        ao = float("nan")
+        notes.append("Auto torsion core offset failed; define manual bo/ho before relying on torsion results.")
+    if len(getattr(section_geometry, "holes", []) or []) > 0:
+        notes.append("Section has holes/voids. This preview uses the outside closed transverse path; multi-cell hollow torsion remains a future milestone.")
+    return {
+        "Acp mm2": acp,
+        "Pcp mm": pcp,
+        "Aoh mm2": aoh,
+        "Ao mm2": ao,
+        "ph mm": ph,
+        "offset mm": float(offset),
+        "basis": basis,
+        "Note": " ".join(note for note in notes if note),
+    }
+
+
+def _column_pier_torsion_result_for_case(
+    state: Mapping[str, object],
+    demand_row: Mapping[str, object],
+    *,
+    analysis_input: AnalysisInput | None,
+) -> dict[str, object]:
+    case = str(demand_row.get("Case Name") or "-")
+    tu_kNm = _beam_uls_float(demand_row.get("Tu"))
+    code = project_design_code_from_session(state)
+    if code != PROJECT_CODE_ACI318:
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": tu_kNm if math.isfinite(tu_kNm) else float("nan"),
+            "phiTn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "AASHTO LRFD Column/Pier torsion is not implemented in ULS.COL.TORSION.ACI1.",
+        }
+    if not math.isfinite(tu_kNm) or abs(float(tu_kNm)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL:
+        return {
+            "Check": "Torsion",
+            "Status": "NO DEMAND",
+            "Case": case,
+            "Demand": "-",
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": 0.0,
+            "phiTn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "No finite Tu demand.",
+        }
+    if analysis_input is None:
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "phiTn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "Section geometry and concrete material are required for Column/Pier torsion.",
+        }
+    settings = _column_pier_transverse_settings_from_state(state)
+    closed_layout = str(settings.get("closed_tie_layout") or "")
+    zone = _column_pier_active_transverse_zone_for_torsion(state)
+    if closed_layout not in {"Closed ties / hoops", "Spiral reinforcement"}:
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "phiTn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "Torsion capacity requires closed ties/hoops or spiral reinforcement. Open ties are shear-only review input.",
+        }
+    if zone is None:
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "phiTn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "No active valid closed transverse region is available for Column/Pier torsion.",
+        }
+    fc = float(analysis_input.concrete_material.fc_MPa)
+    diameter = _beam_uls_float(zone.get("Diameter_mm"))
+    geometry = _column_pier_torsion_geometry(analysis_input.section_geometry, settings, transverse_diameter_mm=diameter)
+    acp = _beam_uls_float(geometry.get("Acp mm2"))
+    pcp = _beam_uls_float(geometry.get("Pcp mm"))
+    ao = _beam_uls_float(geometry.get("Ao mm2"))
+    aoh = _beam_uls_float(geometry.get("Aoh mm2"))
+    ph = _beam_uls_float(geometry.get("ph mm"))
+    at_mm2 = _beam_uls_float(zone.get("At mm2"))
+    at_per_s = _beam_uls_float(zone.get("At/s mm2/mm"))
+    spacing = _beam_uls_float(zone.get("Spacing_mm"))
+    fy = _beam_uls_float(zone.get("fy_MPa"))
+    phi = 0.75
+    cot_theta = 1.0
+    threshold_kNm = float("nan")
+    if all(math.isfinite(value) and value > 0.0 for value in [fc, acp, pcp]):
+        threshold_kNm = phi * (0.083 * math.sqrt(fc) * acp * acp / pcp) / 1.0e6
+    threshold_status = "BELOW THRESHOLD" if math.isfinite(threshold_kNm) and abs(float(tu_kNm)) <= threshold_kNm + 1.0e-9 else "DESIGN REQUIRED"
+    notes = [
+        "ULS.COL.TORSION.ACI1 uses an ACI 318 RC closed-transverse torsion preview: Tn = 2 Ao At fy cot(theta) / s, phi = 0.75, theta = 45 degrees.",
+        "Torsion At is one closed tie/hoop bar area per spacing; shear leg count is not multiplied into At.",
+        str(geometry.get("Note") or ""),
+    ]
+    if threshold_status == "BELOW THRESHOLD":
+        if _column_pier_has_active_prestress(analysis_input):
+            notes.append("Active prestress is present; PSC torsion effects are not implemented, so the threshold result remains REVIEW.")
+            status = "REVIEW"
+        else:
+            status = "BELOW THRESHOLD"
+        return {
+            "Check": "Torsion",
+            "Status": status,
+            "Transverse status": "THRESHOLD OK",
+            "Longitudinal status": "NOT REQUIRED",
+            "Detailing status": "THRESHOLD OK",
+            "Threshold status": threshold_status,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": f"phiTcr = {threshold_kNm:,.2f} kN-m",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "Abs demand kN-m": abs(float(tu_kNm)),
+            "phiTn kN-m": float("nan"),
+            "phiTcr kN-m": threshold_kNm,
+            "Tn kN-m": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": aoh,
+            "Ao mm2": ao,
+            "ph mm": ph,
+            "Hoop offset mm": _beam_uls_float(geometry.get("offset mm")),
+            "At mm2": at_mm2,
+            "At/s mm2/mm": at_per_s,
+            "Al req mm2": float("nan"),
+            "Al provided mm2": float("nan"),
+            "Al D/C value": float("nan"),
+            "s max mm": float("nan"),
+            "Spacing D/C": float("nan"),
+            "At/s req mm2/mm": float("nan"),
+            "Zone": str(zone.get("Zone") or "Column/Pier transverse region"),
+            "Tie/hoop": f"{zone.get('Bar Size') or '-'} @ {float(spacing):.0f} mm",
+            "phi": phi,
+            "Code basis": "ACI 318 Column/Pier RC torsion preview gate",
+            "Method": "ACI 318 closed-transverse torsion threshold preview",
+            "Notes": "; ".join(part for part in notes if part),
+        }
+    if not all(math.isfinite(value) and value > 0.0 for value in [ao, ph, at_mm2, at_per_s, fy, spacing]):
+        return {
+            "Check": "Torsion",
+            "Status": "REVIEW",
+            "Case": case,
+            "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN-m": float(tu_kNm),
+            "phiTn kN-m": float("nan"),
+            "phiTcr kN-m": threshold_kNm,
+            "Governing D/C value": float("nan"),
+            "Acp mm2": acp,
+            "Pcp mm": pcp,
+            "Aoh mm2": aoh,
+            "Ao mm2": ao,
+            "ph mm": ph,
+            "Notes": "; ".join(part for part in [*notes, "Torsion core geometry or active closed transverse reinforcement is incomplete."] if part),
+        }
+    tn_nmm = 2.0 * float(ao) * float(at_per_s) * float(fy) * float(cot_theta)
+    phi_tn_kNm = phi * tn_nmm / 1.0e6
+    strength_dc = abs(float(tu_kNm)) / phi_tn_kNm if phi_tn_kNm > 0.0 else float("nan")
+    transverse_status = "PASS" if math.isfinite(strength_dc) and strength_dc <= 1.0 + 1.0e-9 else "FAIL"
+    at_req = abs(float(tu_kNm)) * 1.0e6 / (float(phi) * 2.0 * float(ao) * float(fy) * float(cot_theta))
+    al_req = at_req * float(ph) * float(cot_theta) * float(cot_theta)
+    longitudinal_review = _beam_uls_torsion_longitudinal_review(state, al_req)
+    longitudinal_status = str(longitudinal_review.get("status") or "LAYOUT REQUIRED")
+    s_max = min(float(ph) / 8.0, 300.0)
+    spacing_dc = float(spacing) / float(s_max) if s_max > 0.0 else float("nan")
+    at_dc = float(at_req) / float(at_per_s) if at_per_s > 0.0 else float("nan")
+    detailing_values = [value for value in [spacing_dc, at_dc] if math.isfinite(value)]
+    detailing_dc = max(detailing_values) if detailing_values else float("nan")
+    if math.isfinite(detailing_dc) and detailing_dc <= 1.0 + 1.0e-9:
+        detailing_status = "PASS"
+    else:
+        detailing_status = "FAIL"
+    governing_values = [
+        value
+        for value in [
+            strength_dc,
+            detailing_dc,
+            _beam_uls_float(longitudinal_review.get("utilization")),
+        ]
+        if math.isfinite(value)
+    ]
+    governing_dc = max(governing_values) if governing_values else float("nan")
+    if _column_pier_has_active_prestress(analysis_input):
+        status = "REVIEW"
+        notes.append("Active prestress is present. PSC torsion effects and prestress-specific compatibility are not implemented, so the torsion result remains REVIEW.")
+    elif "FAIL" in {transverse_status, longitudinal_status, detailing_status}:
+        status = "Preview FAIL"
+    elif longitudinal_status in {"LAYOUT REQUIRED", "NOT CHECKED", "NOT READY"}:
+        status = "REVIEW"
+    elif transverse_status == "PASS" and longitudinal_status == "PASS" and detailing_status == "PASS":
+        status = "Preview PASS"
+    else:
+        status = "REVIEW"
+    if math.isfinite(spacing_dc) and spacing_dc > 1.0 + 1.0e-9:
+        notes.append("Closed tie/hoop spacing exceeds the torsion spacing preview gate s <= min(ph/8, 300 mm).")
+    if math.isfinite(at_dc) and at_dc > 1.0 + 1.0e-9:
+        notes.append("Provided At/s is less than the required torsion transverse reinforcement.")
+    notes.append(str(longitudinal_review.get("description") or ""))
+    return {
+        "Check": "Torsion",
+        "Status": status,
+        "Transverse status": transverse_status,
+        "Longitudinal status": longitudinal_status,
+        "Detailing status": detailing_status,
+        "Threshold status": threshold_status,
+        "Case": case,
+        "Demand": _format_beam_uls_demand(tu_kNm, "kN-m"),
+        "Capacity": f"phiTn = {phi_tn_kNm:,.2f} kN-m",
+        "Utilization": _format_beam_uls_ratio(strength_dc),
+        "Demand kN-m": float(tu_kNm),
+        "Abs demand kN-m": abs(float(tu_kNm)),
+        "phiTn kN-m": phi_tn_kNm,
+        "phiTcr kN-m": threshold_kNm,
+        "Tn kN-m": tn_nmm / 1.0e6,
+        "Strength D/C value": strength_dc,
+        "Detailing D/C value": detailing_dc,
+        "Governing D/C value": governing_dc,
+        "Acp mm2": acp,
+        "Pcp mm": pcp,
+        "Aoh mm2": aoh,
+        "Ao mm2": ao,
+        "ph mm": ph,
+        "Hoop offset mm": _beam_uls_float(geometry.get("offset mm")),
+        "At mm2": at_mm2,
+        "At/s mm2/mm": at_per_s,
+        "At/s req mm2/mm": at_req,
+        "Al req mm2": al_req,
+        "Al provided mm2": longitudinal_review.get("provided_mm2", float("nan")),
+        "Al D/C value": longitudinal_review.get("utilization", float("nan")),
+        "s max mm": s_max,
+        "Spacing D/C": spacing_dc,
+        "Zone": str(zone.get("Zone") or "Column/Pier transverse region"),
+        "Tie/hoop": f"{zone.get('Bar Size') or '-'} @ {float(spacing):.0f} mm",
+        "phi": phi,
+        "Code basis": "ACI 318 Column/Pier RC torsion preview gate",
+        "Method": "ACI 318 closed-transverse torsion truss preview",
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _column_pier_torsion_check_dataframe(state: Mapping[str, object], analysis_input: AnalysisInput | None) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Transverse status", "Longitudinal status", "Detailing status", "Threshold status",
+        "Case", "Demand", "Capacity", "Utilization", "Demand kN-m", "Abs demand kN-m",
+        "phiTn kN-m", "phiTcr kN-m", "Tn kN-m", "Strength D/C value", "Detailing D/C value",
+        "Governing D/C value", "Acp mm2", "Pcp mm", "Aoh mm2", "Ao mm2", "ph mm", "Hoop offset mm",
+        "At mm2", "At/s mm2/mm", "At/s req mm2/mm", "Al req mm2", "Al provided mm2", "Al D/C value",
+        "s max mm", "Spacing D/C", "Zone", "Tie/hoop", "phi", "Code basis", "Method", "Notes",
+    ]
+    active_df = _active_column_pier_uls_demand_dataframe_from_state(state)
+    if active_df.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for _, demand_row in active_df.iterrows():
+        result = _column_pier_torsion_result_for_case(state, demand_row, analysis_input=analysis_input)
+        if result.get("Status") == "NO DEMAND":
+            continue
+        for column in columns:
+            result.setdefault(column, float("nan"))
+        rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _column_pier_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if torsion_df is None or torsion_df.empty or "Governing D/C value" not in torsion_df.columns:
+        return None
+    df = torsion_df.copy()
+    df["__dc"] = pd.to_numeric(df["Governing D/C value"], errors="coerce")
+    df = df[df["__dc"].notna()]
+    if df.empty:
+        return None
+    return df.sort_values("__dc", ascending=False, kind="stable").iloc[0].to_dict()
+
+
 def _beam_uls_governing_action(active_df: pd.DataFrame, column: str) -> dict[str, object] | None:
     if active_df.empty or column not in active_df.columns:
         return None
@@ -8172,6 +8572,12 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
         if code == PROJECT_CODE_ACI318
         else "AASHTO LRFD Column/Pier shear is not implemented; no Vn or PASS/FAIL is issued"
     )
+    torsion_status = "ACI RC preview" if code == PROJECT_CODE_ACI318 else "REVIEW / planned"
+    torsion_detail = (
+        "ACI 318 RC torsion preview reads Tu, closed transverse reinforcement, and ordinary rebar Al; PSC, AASHTO, and combined V+T remain guarded"
+        if code == PROJECT_CODE_ACI318
+        else "AASHTO LRFD Column/Pier torsion is not implemented; no Tn or PASS/FAIL is issued"
+    )
     return [
         {
             "title": "Primary check",
@@ -8196,10 +8602,10 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
         },
         {
             "title": "Torsion",
-            "value": "Not implemented",
-            "detail": "Guarded future code check; no torsion capacity or interaction result is issued",
-            "status": "warning",
-            "strong": True,
+            "value": torsion_status,
+            "detail": torsion_detail,
+            "status": "info" if code == PROJECT_CODE_ACI318 else "warning",
+            "strong": code != PROJECT_CODE_ACI318,
         },
         {
             "title": "Serviceability",
@@ -8429,19 +8835,128 @@ def _render_column_pier_shear_guarded_workspace() -> None:
         )
 
 
+def _column_pier_torsion_summary_cards(
+    *,
+    torsion_df: pd.DataFrame,
+    active_demands: pd.DataFrame,
+    analysis_input: AnalysisInput | None,
+) -> list[dict[str, object]]:
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    governing = _column_pier_governing_torsion_row(torsion_df)
+    zone = _column_pier_active_transverse_zone_for_torsion(st.session_state)
+    settings = _column_pier_transverse_settings_from_state(st.session_state)
+    active_tu_count = 0
+    if not active_demands.empty and "Tu" in active_demands.columns:
+        active_tu_count = int(pd.to_numeric(active_demands["Tu"], errors="coerce").abs().gt(_COLUMN_PIER_SHEAR_DEMAND_TOL).sum())
+    if code != PROJECT_CODE_ACI318:
+        status_value = "REVIEW"
+        status_detail = "AASHTO LRFD Column/Pier torsion is not implemented in this milestone"
+        status_color = "warning"
+    elif torsion_df.empty:
+        status_value = "NOT READY"
+        status_detail = "Needs nonzero Tu, closed transverse reinforcement, torsion core basis, and ordinary longitudinal bars"
+        status_color = "warning"
+    elif any(str(value) == "Preview FAIL" for value in torsion_df["Status"].tolist()):
+        status_value = "Preview FAIL"
+        status_detail = "At least one torsion strength, detailing, or longitudinal Al gate exceeds 1.0"
+        status_color = "danger"
+    elif any(str(value) == "REVIEW" for value in torsion_df["Status"].tolist()):
+        status_value = "REVIEW"
+        status_detail = "Calculation has guarded inputs such as active prestress, AASHTO route, or incomplete layout"
+        status_color = "warning"
+    elif all(str(value) == "BELOW THRESHOLD" for value in torsion_df["Status"].tolist()):
+        status_value = "BELOW THRESHOLD"
+        status_detail = "All active Tu rows are below the implemented ACI torsion threshold screen"
+        status_color = "ready"
+    else:
+        status_value = "Preview PASS"
+        status_detail = "ACI RC torsion preview gates are below 1.0; not final code certification"
+        status_color = "ready"
+    capacity_detail = "-"
+    demand_detail = "-"
+    if governing is not None:
+        demand_detail = str(governing.get("Case", "-"))
+        capacity_detail = f"{governing.get('Capacity', '-')} / D/C {_format_beam_uls_ratio(governing.get('Governing D/C value'))}"
+    zone_detail = "No active valid closed transverse region"
+    zone_value = "Not ready"
+    if zone is not None:
+        zone_value = str(zone.get("Zone") or "Active closed transverse region")
+        zone_detail = f"{zone.get('Bar Size') or '-'} @ {_beam_uls_float(zone.get('Spacing_mm')):.0f} mm; lowest active At/s source"
+    core_value = str(settings.get("torsion_core_basis") or "Not defined")
+    core_detail = "Closed transverse reinforcement required"
+    if str(settings.get("closed_tie_layout") or "") == "Open ties - shear only review":
+        core_detail = "Open ties cannot be used for torsion capacity"
+    prestress_value = "No"
+    prestress_detail = "ACI RC torsion route"
+    if _column_pier_has_active_prestress(analysis_input):
+        prestress_value = "Present"
+        prestress_detail = "PSC torsion contribution is not implemented; result remains REVIEW"
+    return [
+        {"title": "Torsion status", "value": status_value, "detail": status_detail, "status": status_color, "strong": True},
+        {"title": "Code route", "value": "ACI 318 RC" if code == PROJECT_CODE_ACI318 else "Not implemented", "detail": f"{edition}; AASHTO/PSC routes remain future milestones", "status": "info" if code == PROJECT_CODE_ACI318 else "warning"},
+        {"title": "Active Tu demands", "value": f"{active_tu_count:,}", "detail": demand_detail if active_tu_count else "No nonzero Tu in active ULS rows", "status": "info" if active_tu_count else "warning"},
+        {"title": "Governing capacity", "value": capacity_detail, "detail": "Highest governing D/C among active Tu rows" if governing is not None else "No calculated row", "status": "info"},
+        {"title": "Transverse source", "value": zone_value, "detail": zone_detail, "status": "ready" if zone is not None else "warning"},
+        {"title": "Torsion core", "value": core_value, "detail": core_detail, "status": "info" if zone is not None else "warning"},
+        {"title": "Prestress effects", "value": prestress_value, "detail": prestress_detail, "status": "warning" if prestress_value == "Present" else "neutral"},
+    ]
+
+
 def _render_column_pier_torsion_guarded_workspace() -> None:
     st.markdown("#### Torsion")
-    st.caption("Guarded future strength module for torsion and combined shear-torsion checks.")
-    _render_analysis_summary_strip(_column_pier_guarded_strength_check_cards("Torsion"), columns=4)
-    st.warning(
-        "Torsion code check is not implemented. Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL from this view."
+    st.caption("ACI 318 RC torsion preview for column, pier, wall, and pylon case-based ULS rows.")
+    active_demands = _active_column_pier_uls_demand_dataframe_from_state(st.session_state)
+    analysis_input = _serviceability_analysis_input_from_session()
+    torsion_df = _column_pier_torsion_check_dataframe(st.session_state, analysis_input)
+    _render_analysis_summary_strip(
+        _column_pier_torsion_summary_cards(
+            torsion_df=torsion_df,
+            active_demands=active_demands,
+            analysis_input=analysis_input,
+        ),
+        columns=4,
     )
+    code = project_design_code_from_session(st.session_state)
+    if code != PROJECT_CODE_ACI318:
+        st.warning("Column/Pier AASHTO LRFD torsion is not implemented. This tab does not issue Tn or PASS/FAIL for AASHTO projects.")
+    elif torsion_df.empty:
+        st.warning("No Column/Pier ACI torsion rows are ready. Enter nonzero Tu, activate closed transverse reinforcement, define torsion core basis, and provide ordinary longitudinal rebar.")
+    elif any(str(value) == "Preview FAIL" for value in torsion_df["Status"].tolist()):
+        st.error("One or more ACI RC torsion preview gates exceed 1.0. Review Tu, closed tie/hoop layout, torsion core geometry, and longitudinal rebar Al.")
+    elif any(str(value) == "REVIEW" for value in torsion_df["Status"].tolist()):
+        st.warning("ACI torsion values are calculated or partially screened, but the result remains REVIEW because one or more guarded assumptions apply.")
+    elif all(str(value) == "BELOW THRESHOLD" for value in torsion_df["Status"].tolist()):
+        st.success("All active torsion demands are below the implemented ACI threshold screen. This is not final code-certified torsion design.")
+    else:
+        st.success("ACI RC torsion preview gates pass for the current visible rows. This is not final code-certified torsion design.")
+    if not torsion_df.empty:
+        display_columns = [
+            "Status", "Case", "Demand", "Capacity", "Utilization", "Threshold status",
+            "Transverse status", "Longitudinal status", "Detailing status",
+            "Zone", "Tie/hoop", "Ao mm2", "At/s mm2/mm", "Al req mm2", "Al provided mm2",
+            "Governing D/C value",
+        ]
+        st.dataframe(torsion_df[display_columns], use_container_width=True, hide_index=True)
+    with st.expander("ACI torsion audit / method details", expanded=False):
+        if torsion_df.empty:
+            st.info("Audit rows are not available until section, material, active Tu demand, closed transverse reinforcement, and torsion core geometry are ready.")
+        else:
+            st.dataframe(torsion_df, use_container_width=True, hide_index=True)
+        st.markdown(
+            "- Scope: ACI 318 RC Column/Pier torsion preview only.\n"
+            "- Demand source: Loads -> Column/Pier ULS table, active `Tu` rows.\n"
+            "- Transverse source: Sections -> Rebar -> Transverse Rebar, active Column/Pier closed ties/hoops or spiral. With no station owner, the lowest active `At/s` region is used conservatively.\n"
+            "- Longitudinal source: ordinary active rebar only. Prestress strands, tendons, and PT bars are not counted as torsion `Al` in this milestone.\n"
+            "- Formula basis: threshold screen uses `0.083 sqrt(fc) Acp^2/Pcp`; strength preview uses `Tn = 2 Ao At fy cot(theta) / s`, `theta = 45 deg`, `phi = 0.75`, plus `Al` and `s <= min(ph/8, 300 mm)` gates.\n"
+            "- Exclusions: AASHTO LRFD, prestressed torsion, multi-cell hollow torsion, seismic special detailing, anchorage/hooks, combined V+T, and final code certification."
+        )
     with st.expander("Future torsion code-check scope", expanded=False):
         st.markdown(
-            "- Required demands: Tu with load-combination traceability and concurrent Vu/Nu/Mu where interaction applies.\n"
-            "- Required section inputs: closed transverse reinforcement, longitudinal torsion reinforcement, and torsion-effective section properties.\n"
-            "- Required engineering logic: torsion threshold, compatibility torsion assumptions, combined shear-torsion interaction, and code-specific detailing limits.\n"
-            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any PASS/FAIL result is allowed."
+            "- Add station/height assignment for torsion transverse regions so confinement and shaft/core regions can be checked at actual demand locations.\n"
+            "- Add explicit engineer-controlled Ao/Aoh visualization and validation for custom/hollow sections.\n"
+            "- Add combined shear-torsion interaction only after shear and torsion source gates are both validated.\n"
+            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any final PASS/FAIL result is allowed."
         )
 
 

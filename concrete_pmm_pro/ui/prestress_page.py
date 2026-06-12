@@ -87,16 +87,23 @@ JACKING_LOSS_INPUT_MODE = "Jacking + Total Loss %"
 LEGACY_JACKING_LOSS_INPUT_MODE = "Jacking Stress + Losses"
 INPUT_MODE_OPTIONS = ["Passive", "Pe_eff", "fpe", JACKING_LOSS_INPUT_MODE]
 INPUT_MODE_DISPLAY_LABELS = {
-    "Passive": "Passive - no prestress force",
-    "Pe_eff": "Pe_eff - enter effective force after losses (kN)",
-    "fpe": "fpe - enter effective stress after losses (MPa)",
-    JACKING_LOSS_INPUT_MODE: "Jacking + Total Loss % - compute Pe_eff from fpj and total loss",
+    "Passive": "Passive",
+    "Pe_eff": "Pe_eff",
+    "fpe": "fpe",
+    JACKING_LOSS_INPUT_MODE: JACKING_LOSS_INPUT_MODE,
+}
+LEGACY_VERBOSE_INPUT_MODE_ALIASES = {
+    "Passive - no prestress force": "Passive",
+    "Pe_eff - enter effective force after losses (kN)": "Pe_eff",
+    "fpe - enter effective stress after losses (MPa)": "fpe",
+    "Jacking + Total Loss % - compute Pe_eff from fpj and total loss": JACKING_LOSS_INPUT_MODE,
 }
 INPUT_MODE_EDITOR_OPTIONS = list(INPUT_MODE_DISPLAY_LABELS.values())
 LEGACY_INPUT_MODE_ALIASES = {
     "Effective Force Pe": "Pe_eff",
     "Effective Stress fpe": "fpe",
     LEGACY_JACKING_LOSS_INPUT_MODE: JACKING_LOSS_INPUT_MODE,
+    **LEGACY_VERBOSE_INPUT_MODE_ALIASES,
     **{display_label: value for value, display_label in INPUT_MODE_DISPLAY_LABELS.items()},
 }
 LEGACY_INPUT_MODE_OPTIONS = [LEGACY_JACKING_LOSS_INPUT_MODE]
@@ -902,11 +909,12 @@ def _apply_force_input_method_to_active_rows(table: pd.DataFrame, input_mode: An
 
 
 def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
-    """Create a display-only editor copy with clear input-mode labels.
+    """Create a display-only editor copy with compact input-mode labels.
 
     The backing table intentionally stores compact canonical values
     (Passive/Pe_eff/fpe) so analysis, project I/O, and tests remain stable.
-    Only the Streamlit editor copy uses the longer explanatory dropdown labels.
+    Detailed explanations stay in guide cards and tooltips so table cells stay
+    readable.
     """
 
     editor_table = pd.DataFrame(table).copy()

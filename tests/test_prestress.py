@@ -370,7 +370,7 @@ def test_prestress_table_defaults_count_and_note_for_new_rows() -> None:
 def test_input_mode_editor_labels_are_user_facing_but_normalize_to_canonical_values() -> None:
     editor_table = _prestress_table_for_editor(pd.DataFrame([_row(**{"Input Mode": "Pe_eff"})]))
 
-    assert editor_table.loc[0, "Input Mode"] == INPUT_MODE_DISPLAY_LABELS["Pe_eff"]
+    assert editor_table.loc[0, "Input Mode"] == "Pe_eff"
 
     normalized = normalize_prestress_table_for_effective_input_sync(
         pd.DataFrame([_row(**{"Input Mode": INPUT_MODE_DISPLAY_LABELS["fpe"], "Area_mm2": 1680.0, "fpe_MPa": 1000.0})]),
@@ -384,7 +384,7 @@ def test_input_mode_editor_labels_are_user_facing_but_normalize_to_canonical_val
 def test_jacking_total_loss_editor_label_normalizes_to_canonical_mode() -> None:
     editor_table = _prestress_table_for_editor(pd.DataFrame([_row(**{"Input Mode": JACKING_LOSS_INPUT_MODE})]))
 
-    assert editor_table.loc[0, "Input Mode"] == INPUT_MODE_DISPLAY_LABELS[JACKING_LOSS_INPUT_MODE]
+    assert editor_table.loc[0, "Input Mode"] == "Jacking + Total Loss %"
 
     normalized = normalize_prestress_table_for_effective_input_sync(
         pd.DataFrame(
@@ -392,6 +392,28 @@ def test_jacking_total_loss_editor_label_normalizes_to_canonical_mode() -> None:
                 _row(
                     **{
                         "Input Mode": INPUT_MODE_DISPLAY_LABELS[JACKING_LOSS_INPUT_MODE],
+                        "Area_mm2": 1680.0,
+                        "fpu_MPa": 1860.0,
+                    }
+                )
+            ]
+        ),
+        load_prestress_steel_database(),
+    )
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    assert normalized.loc[0, "Input Mode"] == JACKING_LOSS_INPUT_MODE
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(expected_fpe)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0 * expected_fpe / 1000.0)
+
+
+def test_legacy_verbose_input_mode_labels_still_normalize() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame(
+            [
+                _row(
+                    **{
+                        "Input Mode": "Jacking + Total Loss % - compute Pe_eff from fpj and total loss",
                         "Area_mm2": 1680.0,
                         "fpu_MPa": 1860.0,
                     }

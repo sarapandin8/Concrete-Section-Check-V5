@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -805,26 +806,20 @@ def _default_shear_reinforcement_table(span_length_m: float | None = None) -> pd
 
 
 def _default_column_pier_transverse_reinforcement_table() -> pd.DataFrame:
-    rows = [
-        ("End confinement A", 0.0, 1.0, 100.0, "Template region - closed ties/hoops near member end; verify confinement and shear/torsion demand before activating."),
-        ("Typical shaft/core", 1.0, 5.0, 150.0, "Template region - adjust spacing after shear/torsion design; active rows are provided reinforcement only."),
-        ("End confinement B", 5.0, 6.0, 100.0, "Template region - closed ties/hoops near member end; verify confinement and shear/torsion demand before activating."),
-    ]
     return pd.DataFrame(
         [
             {
                 "Active": False,
-                "Zone": region,
-                "x_start_m": float(start),
-                "x_end_m": float(end),
+                "Zone": "Control section",
+                "x_start_m": 0.0,
+                "x_end_m": 0.0,
                 "Bar Size": DEFAULT_SHEAR_STIRRUP_BAR,
                 "Diameter_mm": 12.0,
                 "Legs": DEFAULT_SHEAR_STIRRUP_LEGS,
-                "Spacing_mm": float(spacing),
+                "Spacing_mm": DEFAULT_SHEAR_STIRRUP_SPACING_MM,
                 "fy_MPa": DEFAULT_SHEAR_STIRRUP_FY_MPA,
-                "Note": note,
+                "Note": "Control section transverse reinforcement used by current Column/Pier shear and torsion preview checks.",
             }
-            for region, start, end, spacing, note in rows
         ],
         columns=SHEAR_REINFORCEMENT_COLUMNS,
     )
@@ -836,6 +831,48 @@ def _ensure_shear_reinforcement_columns(df: pd.DataFrame) -> pd.DataFrame:
         if column not in table.columns:
             table[column] = None
     return table[SHEAR_REINFORCEMENT_COLUMNS]
+
+
+def _collapse_legacy_column_pier_transverse_template(table: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the old three-region Column/Pier template into one control row.
+
+    Current Column/Pier shear/torsion preview checks consume one governing
+    transverse input.  Only the exact legacy template zone names are migrated so
+    user-authored multi-row tables are preserved.
+    """
+
+    normalized = _ensure_shear_reinforcement_columns(table)
+    legacy_zones = {"End confinement A", "Typical shaft/core", "End confinement B"}
+    zones = {str(value or "").strip() for value in normalized["Zone"].tolist()}
+    if len(normalized.index) != 3 or zones != legacy_zones:
+        return normalized
+    candidates = normalized.copy()
+    active_candidates = candidates[candidates["Active"].map(_to_bool)].copy()
+    if not active_candidates.empty:
+        candidates = active_candidates
+
+    def _avs_sort_key(row: pd.Series) -> tuple[float, float]:
+        diameter = _to_float(row.get("Diameter_mm"))
+        legs = _to_float(row.get("Legs"))
+        spacing = _to_float(row.get("Spacing_mm"))
+        if diameter is None or legs is None or spacing is None or spacing <= 0.0:
+            return (float("inf"), float("inf"))
+        area = math.pi * float(diameter) ** 2 / 4.0
+        return (float(area) * float(legs) / float(spacing), -float(spacing))
+
+    control = candidates.iloc[0].copy()
+    control_key = _avs_sort_key(control)
+    for _, row in candidates.iterrows():
+        key = _avs_sort_key(row)
+        if key < control_key:
+            control = row.copy()
+            control_key = key
+    control["Active"] = bool(active_candidates.shape[0] > 0)
+    control["Zone"] = "Control section"
+    control["x_start_m"] = 0.0
+    control["x_end_m"] = 0.0
+    control["Note"] = "Migrated from legacy three-region template; current Column/Pier shear/torsion previews use this single control section input."
+    return pd.DataFrame([control.to_dict()], columns=SHEAR_REINFORCEMENT_COLUMNS)
 
 
 def _shear_stirrup_bar_area_mm2(bar_size: str, rebar_db: pd.DataFrame) -> float | None:
@@ -948,16 +985,16 @@ def _shear_reinforcement_column_config() -> dict[str, Any]:
 
 def _column_pier_transverse_column_config() -> dict[str, Any]:
     return {
-        "Active": st.column_config.CheckboxColumn("Active", width="small", help="Activate only after the transverse reinforcement region is confirmed as provided reinforcement."),
-        "Zone": st.column_config.TextColumn("Region", width="medium"),
-        "x_start_m": st.column_config.NumberColumn("Region start (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
-        "x_end_m": st.column_config.NumberColumn("Region end (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
+        "Active": st.column_config.CheckboxColumn("Active", width="small", help="Activate only after the control-section transverse reinforcement is confirmed as provided reinforcement."),
+        "Zone": st.column_config.TextColumn("Control section", width="medium"),
+        "x_start_m": st.column_config.NumberColumn("Reference start (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
+        "x_end_m": st.column_config.NumberColumn("Reference end (m)", min_value=0.0, step=0.1, format="%.3f", width="small"),
         "Bar Size": st.column_config.SelectboxColumn("Tie / hoop size", options=SHEAR_STIRRUP_BAR_OPTIONS, width="small"),
         "Diameter_mm": st.column_config.NumberColumn("Diameter (mm)", min_value=1.0, step=1.0, format="%.1f", width="small", help="Auto-filled from selected tie/hoop size."),
         "Legs": st.column_config.NumberColumn("Effective legs", min_value=1, step=1, width="small", help="Effective transverse legs for shear. Torsion At uses the closed hoop/tie bar area, not prestress."),
         "Spacing_mm": st.column_config.NumberColumn("Spacing (mm)", min_value=1.0, step=25.0, format="%.1f", width="small"),
         "fy_MPa": st.column_config.NumberColumn("fy (MPa)", min_value=1.0, step=10.0, format="%.1f", width="small"),
-        "Note": st.column_config.TextColumn("Confinement / torsion note", width="large"),
+        "Note": st.column_config.TextColumn("Control-section note", width="large"),
     }
 
 
@@ -1039,7 +1076,7 @@ def _column_pier_transverse_readiness_cards(
     shear_ready = active_regions > 0 and not preview_errors
     longitudinal_status = "Available" if rebar_count > 0 else "Missing"
     return [
-        RebarMetric("Shear input", "Ready" if shear_ready else "REVIEW", f"{active_regions} active transverse region(s)", "ready" if shear_ready else "warning", strong=not shear_ready),
+        RebarMetric("Shear input", "Ready" if shear_ready else "REVIEW", f"{active_regions} active control section row(s)", "ready" if shear_ready else "warning", strong=not shear_ready),
         RebarMetric("Torsion input", "Ready" if torsion_ready else "REVIEW", "Needs closed ties/hoops or spiral plus torsion core basis", "ready" if torsion_ready else "warning", strong=not torsion_ready),
         RebarMetric("Closed transverse reinforcement", closed_layout or "Not defined", "Do not use open ties for torsion capacity", "ready" if closed_ready else "warning"),
         RebarMetric("Longitudinal torsion bars", longitudinal_status, "Ordinary active rebar only; prestress is not counted as Al", "ready" if rebar_count > 0 else "warning"),
@@ -1051,8 +1088,8 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
     current = _column_pier_transverse_settings_from_state()
     st.markdown("#### Column/Pier Shear and Torsion Reinforcement")
     st.caption(
-        "Define transverse reinforcement regions for column-type members. These inputs are the future source for shear reinforcement, "
-        "closed tie/hoop torsion reinforcement, and confinement review; no shear or torsion capacity is certified from this page yet."
+        "Define the control-section transverse reinforcement used by the current Column/Pier shear and torsion preview checks. "
+        "Future station/height-specific region checks will be a separate milestone; no shear or torsion capacity is final-certified from this page."
     )
     col_a, col_b, col_c = st.columns([1.0, 1.0, 1.0], gap="small")
     with col_a:
@@ -1121,7 +1158,7 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
     if closed_tie_layout == "Open ties - shear only review":
         st.warning("Open ties are guarded for torsion. Future torsion capacity must remain REVIEW/NOT READY unless closed hoops/ties or spiral reinforcement are provided.")
     else:
-        st.info("Closed transverse reinforcement is recorded as the future torsion transverse source. Verify hooks, anchorage, spacing, and confinement requirements before final design.")
+        st.info("Closed transverse reinforcement is recorded as the torsion transverse source for the current control-section preview. Verify hooks, anchorage, spacing, and confinement requirements before final design.")
     return settings
 
 
@@ -1343,6 +1380,10 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
     elif COLUMN_PIER_TRANSVERSE_TABLE_KEY not in st.session_state:
         st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = _default_column_pier_transverse_reinforcement_table()
     st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY]))
+    collapsed = _collapse_legacy_column_pier_transverse_template(st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY])
+    if len(collapsed.index) != len(st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY].index):
+        st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = collapsed
+        _store_column_pier_transverse_metadata(collapsed)
     if "column_pier_transverse_reinforcement_editor_revision" not in st.session_state:
         st.session_state["column_pier_transverse_reinforcement_editor_revision"] = 0
 
@@ -1356,14 +1397,14 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
 
     action_cols = st.columns([1.0, 1.0, 3.0], gap="small")
     with action_cols[0]:
-        if st.button("Reset column/pier template", use_container_width=True, key="column_pier_transverse_reset_template"):
+        if st.button("Reset control section", use_container_width=True, key="column_pier_transverse_reset_template"):
             table = _default_column_pier_transverse_reinforcement_table()
             st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = table
             st.session_state["column_pier_transverse_reinforcement_editor_revision"] += 1
             _store_column_pier_transverse_metadata(table)
             st.rerun()
     with action_cols[1]:
-        if st.button("Activate all regions", use_container_width=True, key="column_pier_transverse_activate_all"):
+        if st.button("Use control section", use_container_width=True, key="column_pier_transverse_activate_all"):
             table = _ensure_shear_reinforcement_columns(pd.DataFrame(st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY]))
             table["Active"] = True
             st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = table
@@ -1372,7 +1413,7 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
             st.rerun()
     with action_cols[2]:
         st.info(
-            "Use Active only for transverse reinforcement that is actually provided/accepted. Future column/pier shear and torsion checks must not assume minimum ties silently."
+            "Use the control section only for transverse reinforcement that is actually provided/accepted. Current column/pier shear and torsion previews use this single row; no minimum ties are silently assumed."
         )
 
     editor_key = f"column_pier_transverse_reinforcement_editor_{st.session_state['column_pier_transverse_reinforcement_editor_revision']}"
@@ -1395,11 +1436,11 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
         warnings.append("Manual torsion core basis is selected, but bo/ho are not both defined.")
     st.session_state[COLUMN_PIER_TRANSVERSE_VALID_KEY] = not errors
 
-    with st.expander("Column/Pier transverse reinforcement status", expanded=bool(errors or warnings)):
+    with st.expander("Column/Pier control-section transverse reinforcement status", expanded=bool(errors or warnings)):
         active_rows = int(sum(_to_bool(value) for value in normalized.get("Active", []))) if not normalized.empty else 0
         cols = st.columns(5)
-        cols[0].metric("Regions", f"{len(normalized):,}")
-        cols[1].metric("Active regions", f"{active_rows:,}")
+        cols[0].metric("Control rows", f"{len(normalized):,}")
+        cols[1].metric("Active control rows", f"{active_rows:,}")
         cols[2].metric("Errors", f"{len(errors):,}")
         cols[3].metric("Warnings", f"{len(warnings):,}")
         cols[4].metric("Default tie", DEFAULT_SHEAR_STIRRUP_BAR)
@@ -1408,17 +1449,18 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
         for warning in warnings:
             st.warning(warning)
         if not errors and not warnings:
-            st.success("Column/Pier transverse reinforcement input is ready for future shear/torsion solver milestones.")
+            st.success("Column/Pier control-section transverse reinforcement input is ready for the current shear/torsion preview milestones.")
 
-    st.markdown("##### Transverse reinforcement provided preview")
-    st.caption("This preview computes provided Av/s from active/inactive regions only. It does not issue shear or torsion PASS/FAIL.")
+    st.markdown("##### Control-section transverse reinforcement preview")
+    st.caption("This preview computes provided Av/s from the control-section row. It does not final-certify shear or torsion capacity.")
     if preview_df.empty:
-        st.info("No transverse reinforcement regions are defined yet.")
+        st.info("No transverse reinforcement control section is defined yet.")
     else:
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
     with st.expander("Column/Pier shear and torsion workflow notes", expanded=False):
-        st.write("- Shear will use active transverse regions as provided Av/s; no minimum tie layout is silently assumed.")
+        st.write("- Current Column/Pier shear and torsion previews use the active control-section row as the provided transverse reinforcement source.")
+        st.write("- Future station/height-specific confinement or end-region checks should be added as a named milestone, not inferred from this single row.")
         st.write("- Torsion requires closed ties/hoops or spiral reinforcement plus a defined torsion core basis before any future capacity result can be accepted.")
         st.write("- Longitudinal torsion Al comes from active ordinary rebar rows. Prestress strands, tendons, and PT bars are not counted as Al in this milestone.")
         st.write("- This UI milestone records and validates input ownership only; it does not certify ACI 318 or AASHTO LRFD shear/torsion capacity.")
@@ -1603,7 +1645,7 @@ def _render_transverse_rebar_tab(rebar_db: pd.DataFrame) -> None:
     if _is_column_pier_workflow():
         st.caption(
             "Transverse reinforcement for Column/Pier/Wall/Pylon shear, torsion, and confinement workflow. "
-            "Active regions are provided reinforcement only; future checks must not count prestress as longitudinal torsion Al."
+            "The current shear/torsion previews use one active control-section row; future checks must not count prestress as longitudinal torsion Al."
         )
         _render_column_pier_transverse_reinforcement_layout(rebar_db)
     else:
@@ -1624,7 +1666,7 @@ def render_rebar_page() -> None:
 
     st.caption(
         "Define reinforcement used by the active section analysis. "
-        "Longitudinal bars and transverse reinforcement regions are separated so PMM, shear, torsion, and confinement inputs stay readable and are not duplicated."
+        "Longitudinal bars and transverse reinforcement inputs are separated so PMM, shear, torsion, and confinement inputs stay readable and are not duplicated."
     )
 
     longitudinal_tab, transverse_tab = st.tabs(["Longitudinal Rebar", "Transverse Rebar"])

@@ -18,6 +18,7 @@ from concrete_pmm_pro.ui.rebar_page import (
     rebars_valid_for_analysis,
     validate_rebars_against_geometry,
     _column_pier_transverse_readiness_cards,
+    _collapse_legacy_column_pier_transverse_template,
     _default_column_pier_transverse_reinforcement_table,
     _default_shear_reinforcement_table,
     _normalize_shear_reinforcement_table,
@@ -333,10 +334,29 @@ def test_column_pier_transverse_default_template_is_separate_from_beam_girder_ke
     table = _default_column_pier_transverse_reinforcement_table()
 
     assert COLUMN_PIER_TRANSVERSE_TABLE_KEY == "column_pier_transverse_reinforcement_table"
-    assert len(table) == 3
+    assert len(table) == 1
+    assert table.iloc[0]["Zone"] == "Control section"
     assert table["Active"].eq(False).all()
     assert set(table["Bar Size"]) == {"DB12"}
-    assert any("confinement" in str(note).lower() for note in table["Note"])
+    assert "control section" in str(table.iloc[0]["Note"]).lower()
+
+
+def test_column_pier_legacy_three_region_template_collapses_to_control_section() -> None:
+    legacy = pd.DataFrame(
+        [
+            {"Active": True, "Zone": "End confinement A", "x_start_m": 0.0, "x_end_m": 1.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 100.0, "fy_MPa": 390.0, "Note": "legacy"},
+            {"Active": True, "Zone": "Typical shaft/core", "x_start_m": 1.0, "x_end_m": 5.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 150.0, "fy_MPa": 390.0, "Note": "legacy"},
+            {"Active": True, "Zone": "End confinement B", "x_start_m": 5.0, "x_end_m": 6.0, "Bar Size": "DB12", "Diameter_mm": 12.0, "Legs": 2, "Spacing_mm": 100.0, "fy_MPa": 390.0, "Note": "legacy"},
+        ]
+    )
+
+    collapsed = _collapse_legacy_column_pier_transverse_template(legacy)
+
+    assert len(collapsed) == 1
+    assert collapsed.iloc[0]["Zone"] == "Control section"
+    assert bool(collapsed.iloc[0]["Active"]) is True
+    assert collapsed.iloc[0]["Spacing_mm"] == pytest.approx(150.0)
+    assert "legacy three-region template" in str(collapsed.iloc[0]["Note"])
 
 
 def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_al() -> None:

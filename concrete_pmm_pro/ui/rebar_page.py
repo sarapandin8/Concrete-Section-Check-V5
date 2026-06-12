@@ -68,6 +68,15 @@ DEFAULT_SHEAR_STIRRUP_FY_MPA = 390.0
 COLUMN_PIER_WORKFLOW_MEMBER_TYPE = "column_pier_pmm"
 COLUMN_PIER_CLOSED_TIE_OPTIONS = ["Closed ties / hoops", "Spiral reinforcement", "Open ties - shear only review"]
 COLUMN_PIER_TORSION_CORE_OPTIONS = ["Auto from section and tie offset", "Manual core dimensions", "Not defined yet"]
+COLUMN_PIER_SEISMIC_DETAILING_OPTIONS = [
+    "Not selected / ordinary detailing",
+    "ACI 318 special seismic confinement advisor",
+    "AASHTO LRFD seismic bridge column - manual review",
+    "Project-specific manual review",
+]
+COLUMN_PIER_SEISMIC_DETAILING_DEFAULT = COLUMN_PIER_SEISMIC_DETAILING_OPTIONS[0]
+COLUMN_PIER_SEISMIC_HX_DEFAULT_MM = 300.0
+COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM = 25.0
 
 REBAR_TABLE_COLUMNS = [
     "Active",
@@ -97,6 +106,18 @@ class RebarMetric:
     detail: str = ""
     status: str = "neutral"
     strong: bool = False
+
+
+@dataclass(frozen=True)
+class SeismicSpacingAdvisorResult:
+    status: str
+    code_basis: str
+    s_max_mm: float | None
+    suggested_spacing_mm: float | None
+    governing_limit: str
+    criteria: tuple[dict[str, object], ...]
+    warnings: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
 
 
 _REBAR_PAGE_CSS = """
@@ -975,6 +996,149 @@ def _shear_reinforcement_preview_dataframe(
     return pd.DataFrame(rows), errors, warnings
 
 
+def _section_outer_min_dimension_mm(geometry: SectionGeometry | None) -> float | None:
+    if geometry is None:
+        return None
+    try:
+        outer = Polygon([point.as_tuple() for point in geometry.outer_polygon])
+        minx, miny, maxx, maxy = outer.bounds
+    except Exception:
+        return None
+    width = float(maxx) - float(minx)
+    depth = float(maxy) - float(miny)
+    if width <= 0.0 or depth <= 0.0:
+        return None
+    return min(width, depth)
+
+
+def _min_rebar_diameter_mm(rebars: list[Rebar] | tuple[Rebar, ...] | None) -> float | None:
+    values = [
+        float(getattr(rebar, "diameter_mm", 0.0))
+        for rebar in (rebars or [])
+        if getattr(rebar, "diameter_mm", None) is not None and float(getattr(rebar, "diameter_mm", 0.0)) > 0.0
+    ]
+    return min(values) if values else None
+
+
+def _round_down_to_increment(value: float, increment: float = COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM) -> float:
+    if not math.isfinite(value) or value <= 0.0:
+        return value
+    if increment <= 0.0:
+        return value
+    return max(increment, math.floor(value / increment) * increment)
+
+
+def _aci_special_seismic_spacing_advisor(
+    *,
+    section_min_dimension_mm: float | None,
+    min_longitudinal_bar_diameter_mm: float | None,
+    hx_mm: float | None,
+    spacing_increment_mm: float = COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM,
+) -> SeismicSpacingAdvisorResult:
+    """Return a guarded ACI 318 special-column confinement spacing advisor.
+
+    This is an input advisor, not a final code certification gate.  It covers
+    the common special seismic column spacing screen only; hoop configuration,
+    hook anchorage, confinement length, shear demand, and project seismic
+    system classification remain engineering review items.
+    """
+
+    criteria: list[dict[str, object]] = []
+    warnings: list[str] = []
+    notes: list[str] = [
+        "Advisor only: verify seismic design category, frame/bridge system, confinement length, hook anchorage, and local code amendments before final design.",
+    ]
+
+    def _add(label: str, value: float | None, basis: str) -> None:
+        criteria.append(
+            {
+                "Criterion": label,
+                "Limit (mm)": round(float(value), 3) if value is not None and math.isfinite(float(value)) else "-",
+                "Basis": basis,
+            }
+        )
+
+    min_dim_limit = None
+    if section_min_dimension_mm is not None and section_min_dimension_mm > 0.0:
+        min_dim_limit = float(section_min_dimension_mm) / 4.0
+    else:
+        warnings.append("Section outside dimension is unavailable; cannot evaluate the one-quarter member-dimension limit.")
+    _add("0.25 x minimum outside section dimension", min_dim_limit, "ACI 318 special seismic column spacing screen")
+
+    db_limit = None
+    if min_longitudinal_bar_diameter_mm is not None and min_longitudinal_bar_diameter_mm > 0.0:
+        db_limit = 6.0 * float(min_longitudinal_bar_diameter_mm)
+    else:
+        warnings.append("Active ordinary longitudinal bar diameter is unavailable; cannot evaluate the 6db limit.")
+    _add("6 x smallest active longitudinal bar diameter", db_limit, "ACI 318 special seismic column spacing screen")
+
+    so_limit = None
+    if hx_mm is not None and hx_mm > 0.0:
+        so_raw = 100.0 + (350.0 - float(hx_mm)) / 3.0
+        so_limit = min(150.0, max(100.0, so_raw))
+        if float(hx_mm) > 350.0:
+            warnings.append("hx exceeds 350 mm; lateral support spacing of longitudinal bars needs engineering review.")
+    else:
+        warnings.append("hx is unavailable; cannot evaluate the s0 confinement spacing limit.")
+    _add("s0 from hx, bounded to 100-150 mm", so_limit, "ACI 318 special seismic column spacing screen")
+
+    finite_limits = [
+        (label, value)
+        for label, value in [
+            ("0.25 x minimum outside section dimension", min_dim_limit),
+            ("6 x smallest active longitudinal bar diameter", db_limit),
+            ("s0 from hx", so_limit),
+        ]
+        if value is not None and math.isfinite(float(value)) and float(value) > 0.0
+    ]
+    if not finite_limits:
+        return SeismicSpacingAdvisorResult(
+            status="REVIEW",
+            code_basis="ACI 318 special seismic confinement advisor",
+            s_max_mm=None,
+            suggested_spacing_mm=None,
+            governing_limit="Unavailable",
+            criteria=tuple(criteria),
+            warnings=tuple(warnings),
+            notes=tuple(notes),
+        )
+
+    governing_limit, s_max = min(finite_limits, key=lambda item: float(item[1]))
+    suggested = _round_down_to_increment(float(s_max), spacing_increment_mm)
+    return SeismicSpacingAdvisorResult(
+        status="Advisor ready" if not warnings else "REVIEW",
+        code_basis="ACI 318 special seismic confinement advisor",
+        s_max_mm=float(s_max),
+        suggested_spacing_mm=float(suggested),
+        governing_limit=governing_limit,
+        criteria=tuple(criteria),
+        warnings=tuple(warnings),
+        notes=tuple(notes),
+    )
+
+
+def _minimum_active_rebar_diameter_from_state(rebar_db: pd.DataFrame) -> float | None:
+    parsed = st.session_state.get("rebars")
+    parsed_min = _min_rebar_diameter_mm(parsed if isinstance(parsed, list) else [])
+    if parsed_min is not None:
+        return parsed_min
+    table = st.session_state.get("rebar_table")
+    if table is None:
+        return None
+    diameters: list[float] = []
+    for _, row in pd.DataFrame(table).iterrows():
+        if not _to_bool(row.get("Active")):
+            continue
+        diameter = _to_float(row.get("Diameter_mm"))
+        if diameter is None or diameter <= 0.0:
+            bar_size = _normalized_bar_size(row.get("Bar Size"))
+            diameter = _diameter_from_database(bar_size, rebar_db)
+        count = _to_count(row.get("Count")) or 1
+        if diameter is not None and diameter > 0.0 and count > 0:
+            diameters.append(float(diameter))
+    return min(diameters) if diameters else None
+
+
 def _shear_reinforcement_column_config() -> dict[str, Any]:
     return {
         "Active": st.column_config.CheckboxColumn("Active", width="small", help="Activate only after the zone is verified as provided reinforcement."),
@@ -1030,6 +1194,9 @@ def _column_pier_transverse_settings_from_state() -> dict[str, Any]:
     torsion_core_basis = str(raw.get("torsion_core_basis") or COLUMN_PIER_TORSION_CORE_OPTIONS[0])
     if torsion_core_basis not in COLUMN_PIER_TORSION_CORE_OPTIONS:
         torsion_core_basis = COLUMN_PIER_TORSION_CORE_OPTIONS[0]
+    seismic_detailing = str(raw.get("seismic_detailing") or COLUMN_PIER_SEISMIC_DETAILING_DEFAULT)
+    if seismic_detailing not in COLUMN_PIER_SEISMIC_DETAILING_OPTIONS:
+        seismic_detailing = COLUMN_PIER_SEISMIC_DETAILING_DEFAULT
 
     def _num(value: Any) -> float | None:
         try:
@@ -1044,6 +1211,8 @@ def _column_pier_transverse_settings_from_state() -> dict[str, Any]:
         "tie_center_offset_mm": _num(raw.get("tie_center_offset_mm")) or 50.0,
         "manual_core_width_mm": _num(raw.get("manual_core_width_mm")),
         "manual_core_depth_mm": _num(raw.get("manual_core_depth_mm")),
+        "seismic_detailing": seismic_detailing,
+        "seismic_hx_mm": _num(raw.get("seismic_hx_mm")) or COLUMN_PIER_SEISMIC_HX_DEFAULT_MM,
         "note": str(raw.get("note") or "").strip(),
     }
 
@@ -1055,6 +1224,8 @@ def _store_column_pier_transverse_settings_metadata(settings: dict[str, Any]) ->
         "tie_center_offset_mm": settings.get("tie_center_offset_mm"),
         "manual_core_width_mm": settings.get("manual_core_width_mm"),
         "manual_core_depth_mm": settings.get("manual_core_depth_mm"),
+        "seismic_detailing": str(settings.get("seismic_detailing") or COLUMN_PIER_SEISMIC_DETAILING_DEFAULT),
+        "seismic_hx_mm": settings.get("seismic_hx_mm"),
         "note": str(settings.get("note") or "").strip(),
     }
     st.session_state[COLUMN_PIER_TRANSVERSE_SETTINGS_KEY] = clean
@@ -1153,12 +1324,43 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
             key="column_pier_transverse_note",
             placeholder="e.g. closed hoops with seismic confinement zone at member ends",
         )
+    seismic_cols = st.columns([1.4, 0.8, 1.8], gap="small")
+    with seismic_cols[0]:
+        seismic_detailing = st.selectbox(
+            "Seismic spacing advisor",
+            COLUMN_PIER_SEISMIC_DETAILING_OPTIONS,
+            index=COLUMN_PIER_SEISMIC_DETAILING_OPTIONS.index(current["seismic_detailing"]),
+            key="column_pier_transverse_seismic_detailing",
+            help="Input advisor only. It recommends a control-section tie/hoop spacing for seismic confinement review; it is not a final code certification.",
+        )
+    with seismic_cols[1]:
+        seismic_hx_mm = st.number_input(
+            "hx for confinement (mm)",
+            min_value=1.0,
+            value=float(current.get("seismic_hx_mm") or COLUMN_PIER_SEISMIC_HX_DEFAULT_MM),
+            step=25.0,
+            format="%.1f",
+            disabled=seismic_detailing != "ACI 318 special seismic confinement advisor",
+            key="column_pier_transverse_seismic_hx_mm",
+            help="Maximum horizontal spacing of supported longitudinal bars around the hoop/tie perimeter used by the ACI spacing advisor.",
+        )
+    with seismic_cols[2]:
+        if seismic_detailing == "ACI 318 special seismic confinement advisor":
+            st.caption("Advisor will compare 0.25 section dimension, 6db, and s0 from hx; verify confinement length, hook anchorage, and seismic system separately.")
+        elif seismic_detailing == "AASHTO LRFD seismic bridge column - manual review":
+            st.caption("AASHTO LRFD seismic column detailing remains a manual REVIEW route until a named validation milestone is implemented.")
+        elif seismic_detailing == "Project-specific manual review":
+            st.caption("Use project-specific seismic detailing rules manually; the app will not override the provided control-section spacing.")
+        else:
+            st.caption("No seismic confinement spacing advisor is applied.")
     settings = {
         "closed_tie_layout": closed_tie_layout,
         "torsion_core_basis": torsion_core_basis,
         "tie_center_offset_mm": float(tie_center_offset_mm) if float(tie_center_offset_mm) > 0.0 else None,
         "manual_core_width_mm": float(manual_core_width_mm) if not manual_disabled and float(manual_core_width_mm) > 0.0 else None,
         "manual_core_depth_mm": float(manual_core_depth_mm) if not manual_disabled and float(manual_core_depth_mm) > 0.0 else None,
+        "seismic_detailing": seismic_detailing,
+        "seismic_hx_mm": float(seismic_hx_mm) if float(seismic_hx_mm) > 0.0 else COLUMN_PIER_SEISMIC_HX_DEFAULT_MM,
         "note": note,
     }
     _store_column_pier_transverse_settings_metadata(settings)
@@ -1167,6 +1369,77 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
     else:
         st.info("Closed transverse reinforcement is recorded as the torsion transverse source for the current control-section preview. Verify hooks, anchorage, spacing, and confinement requirements before final design.")
     return settings
+
+
+def _render_column_pier_seismic_spacing_advisor(
+    settings: dict[str, Any],
+    table: pd.DataFrame,
+    rebar_db: pd.DataFrame,
+) -> None:
+    seismic_detailing = str(settings.get("seismic_detailing") or COLUMN_PIER_SEISMIC_DETAILING_DEFAULT)
+    if seismic_detailing == "Not selected / ordinary detailing":
+        st.info("Seismic spacing advisor is not selected. Current control-section spacing remains user-provided.")
+        return
+    if seismic_detailing == "AASHTO LRFD seismic bridge column - manual review":
+        st.warning("AASHTO LRFD seismic bridge-column transverse detailing is not implemented yet. Keep spacing as manual REVIEW until a named AASHTO seismic validation milestone is completed.")
+        return
+    if seismic_detailing == "Project-specific manual review":
+        st.warning("Project-specific seismic detailing is selected. The app will not auto-recommend spacing; document the governing project clause in the transverse reinforcement note.")
+        return
+
+    geometry = st.session_state.get("section_geometry")
+    section_min_dimension_mm = _section_outer_min_dimension_mm(geometry if isinstance(geometry, SectionGeometry) else None)
+    min_bar_diameter_mm = _minimum_active_rebar_diameter_from_state(rebar_db)
+    hx_mm = _to_float(settings.get("seismic_hx_mm")) or COLUMN_PIER_SEISMIC_HX_DEFAULT_MM
+    result = _aci_special_seismic_spacing_advisor(
+        section_min_dimension_mm=section_min_dimension_mm,
+        min_longitudinal_bar_diameter_mm=min_bar_diameter_mm,
+        hx_mm=hx_mm,
+    )
+
+    with st.expander("Seismic transverse spacing advisor", expanded=True):
+        st.caption(
+            "ACI 318 special seismic confinement spacing advisor for the control section. "
+            "This is guidance for input selection, not final code certification."
+        )
+        metric_cols = st.columns(5)
+        metric_cols[0].metric("Advisor status", result.status)
+        metric_cols[1].metric("Max spacing", "-" if result.s_max_mm is None else f"{result.s_max_mm:.1f} mm")
+        metric_cols[2].metric("Suggested spacing", "-" if result.suggested_spacing_mm is None else f"{result.suggested_spacing_mm:.0f} mm")
+        metric_cols[3].metric("Governing", result.governing_limit)
+        metric_cols[4].metric("hx", f"{hx_mm:.0f} mm")
+        if result.criteria:
+            st.dataframe(pd.DataFrame(result.criteria), use_container_width=True, hide_index=True)
+        for warning in result.warnings:
+            st.warning(warning)
+        for note in result.notes:
+            st.info(note)
+        current_spacing = None
+        normalized = _ensure_shear_reinforcement_columns(pd.DataFrame(table))
+        if not normalized.empty:
+            current_spacing = _to_float(normalized.iloc[0].get("Spacing_mm"))
+        if result.suggested_spacing_mm is not None and current_spacing is not None:
+            if current_spacing <= result.suggested_spacing_mm + 1.0e-9:
+                st.success("Current control-section spacing is not greater than the advisor spacing.")
+            else:
+                st.warning("Current control-section spacing is greater than the advisor spacing; review seismic confinement before relying on this input.")
+        apply_disabled = result.suggested_spacing_mm is None or normalized.empty
+        if st.button(
+            "Apply suggested spacing to control section",
+            use_container_width=True,
+            disabled=apply_disabled,
+            key="column_pier_apply_seismic_spacing_advisor",
+        ):
+            updated = normalized.copy()
+            updated.at[0, "Active"] = True
+            updated.at[0, "Spacing_mm"] = float(result.suggested_spacing_mm or 0.0)
+            existing_note = str(updated.at[0, "Note"] or "").strip()
+            advisor_note = f"ACI seismic spacing advisor applied: s <= {float(result.suggested_spacing_mm or 0.0):.0f} mm; verify final detailing."
+            updated.at[0, "Note"] = advisor_note if not existing_note else f"{existing_note} {advisor_note}"
+            st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = updated
+            st.session_state["column_pier_transverse_reinforcement_editor_revision"] = int(st.session_state.get("column_pier_transverse_reinforcement_editor_revision", 0)) + 1
+            _store_column_pier_transverse_metadata(updated)
+            st.rerun()
 
 
 def _shear_depth_settings_from_state() -> dict[str, Any]:
@@ -1405,6 +1678,7 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
     st.info(
         "Longitudinal torsion reinforcement will be read from active ordinary rebar only. Prestress strands, tendons, and PT bars are not counted as Al in this guarded column/pier workflow."
     )
+    _render_column_pier_seismic_spacing_advisor(settings, pd.DataFrame(previous), rebar_db)
 
     action_cols = st.columns([1.0, 1.0, 3.0], gap="small")
     with action_cols[0]:

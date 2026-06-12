@@ -8,6 +8,7 @@ from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.rebar_page import (
     COLUMN_PIER_TRANSVERSE_TABLE_KEY,
     DEFAULT_SHEAR_STIRRUP_FY_MPA,
+    COLUMN_PIER_SEISMIC_DETAILING_OPTIONS,
     bar_size_defaults,
     default_material_for_bar_size,
     load_rebar_database,
@@ -17,6 +18,7 @@ from concrete_pmm_pro.ui.rebar_page import (
     rebar_summary_dataframe,
     rebars_valid_for_analysis,
     validate_rebars_against_geometry,
+    _aci_special_seismic_spacing_advisor,
     _column_pier_transverse_readiness_cards,
     _collapse_legacy_column_pier_transverse_template,
     _default_column_pier_transverse_reinforcement_table,
@@ -377,6 +379,38 @@ def test_column_pier_control_section_allows_zero_length_reference() -> None:
     assert preview.iloc[0]["x end (m)"] == pytest.approx(0.0)
     avs_column = next(column for column in preview.columns if str(column).startswith("Av/s") and "/mm)" in str(column))
     assert preview.iloc[0][avs_column] != "-"
+
+
+def test_aci_special_seismic_spacing_advisor_recommends_governing_control_spacing() -> None:
+    result = _aci_special_seismic_spacing_advisor(
+        section_min_dimension_mm=400.0,
+        min_longitudinal_bar_diameter_mm=20.0,
+        hx_mm=300.0,
+    )
+
+    assert result.status == "Advisor ready"
+    assert result.s_max_mm == pytest.approx(100.0)
+    assert result.suggested_spacing_mm == pytest.approx(100.0)
+    assert result.governing_limit == "0.25 x minimum outside section dimension"
+    assert len(result.criteria) == 3
+
+
+def test_aci_special_seismic_spacing_advisor_remains_review_when_inputs_are_missing() -> None:
+    result = _aci_special_seismic_spacing_advisor(
+        section_min_dimension_mm=None,
+        min_longitudinal_bar_diameter_mm=None,
+        hx_mm=None,
+    )
+
+    assert result.status == "REVIEW"
+    assert result.s_max_mm is None
+    assert result.suggested_spacing_mm is None
+    assert result.warnings
+
+
+def test_column_pier_seismic_options_keep_aashto_as_manual_review_route() -> None:
+    assert "ACI 318 special seismic confinement advisor" in COLUMN_PIER_SEISMIC_DETAILING_OPTIONS
+    assert "AASHTO LRFD seismic bridge column - manual review" in COLUMN_PIER_SEISMIC_DETAILING_OPTIONS
 
 
 def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_al() -> None:

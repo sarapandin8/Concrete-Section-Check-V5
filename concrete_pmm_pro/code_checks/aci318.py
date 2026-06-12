@@ -108,7 +108,7 @@ def nominal_po_rc_prestressed(
     if Ag_mm2 <= 0:
         raise ValueError("Ag_mm2 must be positive.")
 
-    default_material = rebar_material_default or RebarMaterial(name="Default", fy_MPa=400.0, Es_MPa=200000.0)
+    default_material = rebar_material_default or RebarMaterial(name="Default", fy_MPa=390.0, Es_MPa=200000.0)
     prestress_items = prestress_elements or []
 
     Ast_mm2 = sum(rebar.area_mm2 for rebar in rebars)

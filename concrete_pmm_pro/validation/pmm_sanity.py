@@ -24,7 +24,7 @@ def _symmetric_rectangular_rc_input(load_cases: list[LoadCase] | None = None) ->
     return AnalysisInput(
         section_geometry=rectangle(width_mm=400.0, height_mm=600.0),
         concrete_material=ConcreteMaterial(name="C35", fc_MPa=35.0, ecu=0.003, beta1=0.80),
-        rebar_materials=[RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        rebar_materials=[RebarMaterial(name="SD40", fy_MPa=390.0, Es_MPa=200000.0)],
         rebars=[
             Rebar(x_mm=-150.0, y_mm=-250.0, diameter_mm=25.0, material_name="SD40", label="B1"),
             Rebar(x_mm=150.0, y_mm=-250.0, diameter_mm=25.0, material_name="SD40", label="B2"),

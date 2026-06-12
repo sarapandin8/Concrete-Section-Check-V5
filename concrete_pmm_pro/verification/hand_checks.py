@@ -103,7 +103,7 @@ def hand_po_rc(
         raise ValueError("fc_MPa must be positive.")
     if Ag_mm2 <= 0.0:
         raise ValueError("Ag_mm2 must be positive.")
-    default_material = rebar_material_default or RebarMaterial(name="Default", fy_MPa=400.0)
+    default_material = rebar_material_default or RebarMaterial(name="Default", fy_MPa=390.0)
     Ast = sum(rebar.area_mm2 for rebar in rebars)
     concrete_area = Ag_mm2 - Ast if subtract_rebar_area else Ag_mm2
     if concrete_area < 0.0:

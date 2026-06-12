@@ -90,7 +90,7 @@ class ConcreteMaterial(AppBaseModel):
 
 class RebarMaterial(AppBaseModel):
     name: str = "SD40"
-    fy_MPa: float = Field(default=400.0, gt=0)
+    fy_MPa: float = Field(default=390.0, gt=0)
     Es_MPa: float = Field(default=200000.0, gt=0)
     note: str | None = None
 

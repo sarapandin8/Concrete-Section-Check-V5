@@ -7,6 +7,7 @@ from concrete_pmm_pro.core.models import Rebar
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.rebar_page import (
     COLUMN_PIER_TRANSVERSE_TABLE_KEY,
+    DEFAULT_SHEAR_STIRRUP_FY_MPA,
     bar_size_defaults,
     default_material_for_bar_size,
     load_rebar_database,
@@ -30,6 +31,9 @@ def test_rebar_database_loads() -> None:
 
     assert {"name", "type", "diameter_mm", "area_mm2", "fy_MPa", "Es_MPa"}.issubset(rebar_db.columns)
     assert "DB25" in set(rebar_db["name"])
+    fy_by_size = {str(row["name"]): float(row["fy_MPa"]) for _, row in rebar_db.iterrows()}
+    assert fy_by_size["DB20"] == pytest.approx(390.0)
+    assert fy_by_size["DB32"] == pytest.approx(490.0)
 
 
 def test_rebar_area_property_for_db25() -> None:
@@ -319,6 +323,8 @@ def test_shear_reinforcement_default_template_uses_db12_and_allowed_dropdown_siz
 
     assert not table.empty
     assert set(table["Bar Size"]) == {"DB12"}
+    assert set(table["fy_MPa"]) == {DEFAULT_SHEAR_STIRRUP_FY_MPA}
+    assert DEFAULT_SHEAR_STIRRUP_FY_MPA == pytest.approx(390.0)
     assert table["Active"].eq(False).all()
     assert SHEAR_STIRRUP_BAR_OPTIONS == ["DB10", "DB12", "DB16", "DB20", "DB25"]
 

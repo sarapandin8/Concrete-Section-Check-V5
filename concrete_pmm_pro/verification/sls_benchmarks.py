@@ -89,7 +89,7 @@ def _base_input(load_cases: list[LoadCase], rebars: list[Rebar] | None = None, p
     return AnalysisInput(
         section_geometry=rectangle(width_mm=400.0, height_mm=600.0),
         concrete_material=ConcreteMaterial(name="SLS Benchmark C40", fc_MPa=40.0),
-        rebar_materials=[RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)],
+        rebar_materials=[RebarMaterial(name="SD40", fy_MPa=390.0, Es_MPa=200000.0)],
         rebars=rebars or [],
         prestress_elements=prestress_elements or [],
         load_cases=load_cases,

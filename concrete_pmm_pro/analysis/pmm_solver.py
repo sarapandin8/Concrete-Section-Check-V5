@@ -88,7 +88,7 @@ def _rebar_material_for(rebar: Rebar, materials: Iterable[RebarMaterial]) -> Reb
             return material
     if material_list:
         return material_list[0]
-    return RebarMaterial(name="Default", fy_MPa=400.0, Es_MPa=200000.0)
+    return RebarMaterial(name="Default", fy_MPa=390.0, Es_MPa=200000.0)
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -256,7 +256,7 @@ def run_rc_pmm_solver(analysis_input: AnalysisInput) -> PMMSolverResult:
     beta1 = concrete.beta1 if concrete.beta1 is not None else aci_beta1(fc_MPa)
     concrete_stress_MPa = 0.85 * fc_MPa
     transverse_reinforcement = settings.transverse_reinforcement
-    default_rebar_material = analysis_input.rebar_materials[0] if analysis_input.rebar_materials else RebarMaterial(name="Default", fy_MPa=400.0)
+    default_rebar_material = analysis_input.rebar_materials[0] if analysis_input.rebar_materials else RebarMaterial(name="Default", fy_MPa=390.0)
     phi_compression = 1.0
     if settings.use_phi_factor:
         phi_compression = 0.75 if transverse_reinforcement == "spiral" else 0.65

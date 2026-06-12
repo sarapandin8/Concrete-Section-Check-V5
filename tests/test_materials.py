@@ -13,6 +13,7 @@ from concrete_pmm_pro.core.concrete_materials import (
 from concrete_pmm_pro.core.models import ConcreteMaterial, PrestressSteelMaterial, RebarMaterial
 from concrete_pmm_pro.core.project import ProjectModel
 from concrete_pmm_pro.io.project_io import project_from_json, project_to_json
+from concrete_pmm_pro.ui.materials_page import default_rebar_materials
 
 
 def test_concrete_material_creation() -> None:
@@ -63,10 +64,26 @@ def test_default_concrete_material_library_contains_standard_grades() -> None:
 
 
 def test_rebar_material_creation() -> None:
-    material = RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0)
+    material = RebarMaterial(name="SD40", fy_MPa=390.0, Es_MPa=200000.0)
 
-    assert material.fy_MPa == pytest.approx(400.0)
+    assert material.fy_MPa == pytest.approx(390.0)
     assert material.Es_MPa == pytest.approx(200000.0)
+
+
+def test_default_rebar_materials_use_project_sd40_sd50_yield_strengths() -> None:
+    materials = {material.name: material for material in default_rebar_materials()}
+
+    assert materials["SD40"].fy_MPa == pytest.approx(390.0)
+    assert materials["SD50"].fy_MPa == pytest.approx(490.0)
+    assert materials["SD40"].Es_MPa == pytest.approx(200000.0)
+    assert materials["SD50"].Es_MPa == pytest.approx(200000.0)
+
+
+def test_rebar_material_model_default_uses_sd40_project_yield_strength() -> None:
+    material = RebarMaterial()
+
+    assert material.name == "SD40"
+    assert material.fy_MPa == pytest.approx(390.0)
 
 
 def test_prestress_steel_material_supports_prestressing_bar() -> None:

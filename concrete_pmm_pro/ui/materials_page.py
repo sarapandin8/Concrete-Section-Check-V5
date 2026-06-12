@@ -29,8 +29,8 @@ def load_prestress_steel_database(path: Path | str = DEFAULT_PRESTRESS_DB_PATH) 
 
 def default_rebar_materials() -> list[RebarMaterial]:
     return [
-        RebarMaterial(name="SD40", fy_MPa=400.0, Es_MPa=200000.0),
-        RebarMaterial(name="SD50", fy_MPa=500.0, Es_MPa=200000.0),
+        RebarMaterial(name="SD40", fy_MPa=390.0, Es_MPa=200000.0),
+        RebarMaterial(name="SD50", fy_MPa=490.0, Es_MPa=200000.0),
     ]
 
 

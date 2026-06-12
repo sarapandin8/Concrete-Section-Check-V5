@@ -16,6 +16,7 @@ from concrete_pmm_pro.ui.prestress_page import (
     PRESTRESS_LAYOUT_METHOD_OPTIONS,
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
+    _apply_force_input_method_to_active_rows,
     _build_prestress_status_rows,
     _build_prestress_summary_metrics,
     _engineering_notes_html,
@@ -295,6 +296,50 @@ def test_planned_prestress_layout_message_routes_user_back_to_manual_table() -> 
     assert "Linear layout is planned" in message
     assert "Manual table remains the active prestress input workflow" in message
     assert "not used for analysis yet" in message
+
+
+def test_apply_force_input_method_updates_active_rows_only() -> None:
+    table = pd.DataFrame(
+        [
+            _row(Label="PS1", Active=True, **{"Input Mode": "Passive"}),
+            _row(Label="PS2", Active=False, **{"Input Mode": "Passive"}),
+        ]
+    )
+
+    applied = _apply_force_input_method_to_active_rows(table, INPUT_MODE_DISPLAY_LABELS["Pe_eff"])
+
+    assert applied.loc[0, "Input Mode"] == "Pe_eff"
+    assert applied.loc[1, "Input Mode"] == "Passive"
+
+
+def test_apply_force_input_method_jacking_defaults_blank_loss_inputs_for_active_rows() -> None:
+    table = pd.DataFrame(
+        [
+            _row(Label="PS1", Active=True, fpj_ratio=None, loss_percent=None, **{"Input Mode": "Passive"}),
+            _row(Label="PS2", Active=False, fpj_ratio=None, loss_percent=None, **{"Input Mode": "Passive"}),
+        ]
+    )
+
+    applied = _apply_force_input_method_to_active_rows(table, JACKING_LOSS_INPUT_MODE)
+
+    assert applied.loc[0, "Input Mode"] == JACKING_LOSS_INPUT_MODE
+    assert applied.loc[0, "fpj_ratio"] == pytest.approx(0.75)
+    assert applied.loc[0, "loss_percent"] == pytest.approx(15.0)
+    assert applied.loc[1, "Input Mode"] == "Passive"
+    assert pd.isna(applied.loc[1, "fpj_ratio"])
+    assert pd.isna(applied.loc[1, "loss_percent"])
+
+
+def test_apply_force_input_method_jacking_syncs_effective_force_after_normalization() -> None:
+    table = pd.DataFrame([_row(Active=True, Area_mm2=1680.0, fpu_MPa=1860.0, fpj_ratio=None, loss_percent=None)])
+
+    applied = _apply_force_input_method_to_active_rows(table, JACKING_LOSS_INPUT_MODE)
+    normalized = normalize_prestress_table_for_effective_input_sync(applied, load_prestress_steel_database())
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    assert normalized.loc[0, "Input Mode"] == JACKING_LOSS_INPUT_MODE
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(expected_fpe)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0 * expected_fpe / 1000.0)
 
 
 

@@ -106,6 +106,7 @@ PLANNED_PRESTRESS_LAYOUT_METHODS = ["Linear layout", "Circular layout"]
 PRESTRESS_LAYOUT_METHOD_OPTIONS = [MANUAL_PRESTRESS_LAYOUT_METHOD, *PLANNED_PRESTRESS_LAYOUT_METHODS]
 PRESTRESS_LAYOUT_METHOD_STATE_KEY = "prestress_layout_method"
 PRESTRESS_LAYOUT_METHOD_NOTICE_KEY = "prestress_layout_method_planned_notice"
+PRESTRESS_FORCE_INPUT_METHOD_STATE_KEY = "prestress_force_input_method"
 
 PRESTRESS_COMPACT_EDITOR_COLUMNS = [
     "Active",
@@ -873,6 +874,31 @@ def _guard_prestress_layout_method_selection() -> None:
     if _is_planned_prestress_layout_method(selected):
         st.session_state[PRESTRESS_LAYOUT_METHOD_NOTICE_KEY] = selected
         st.session_state[PRESTRESS_LAYOUT_METHOD_STATE_KEY] = MANUAL_PRESTRESS_LAYOUT_METHOD
+
+
+def _apply_force_input_method_to_active_rows(table: pd.DataFrame, input_mode: Any) -> pd.DataFrame:
+    """Apply a canonical force input mode to active prestress rows only."""
+
+    applied = pd.DataFrame(table).copy()
+    if applied.empty:
+        return applied
+    mode = _normalize_input_mode_label(input_mode)
+    if mode not in INPUT_MODE_OPTIONS:
+        return applied
+    if "Input Mode" not in applied.columns:
+        applied["Input Mode"] = "Passive"
+    if "Active" not in applied.columns:
+        applied["Active"] = True
+    for column, default in (("fpj_ratio", 0.75), ("loss_percent", 15.0)):
+        if column not in applied.columns:
+            applied[column] = default
+    active_mask = applied["Active"].map(_to_bool)
+    applied.loc[active_mask, "Input Mode"] = mode
+    if mode == JACKING_LOSS_INPUT_MODE:
+        for column, default in (("fpj_ratio", 0.75), ("loss_percent", 15.0)):
+            blank_mask = active_mask & applied[column].map(_is_blank)
+            applied.loc[blank_mask, column] = default
+    return applied
 
 
 def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
@@ -5539,6 +5565,33 @@ def render_prestress_page() -> None:
                 st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
                 product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
                 st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
+                st.markdown("##### Prestress force input method")
+                method_col, apply_col = st.columns([0.74, 0.26], gap="medium")
+                with method_col:
+                    selected_force_method = st.selectbox(
+                        "Apply input method to active rows",
+                        INPUT_MODE_EDITOR_OPTIONS,
+                        key=PRESTRESS_FORCE_INPUT_METHOD_STATE_KEY,
+                        help=(
+                            "Use this control to assign the same force input method to every active prestress row. "
+                            "Individual row Input Mode values remain editable after applying."
+                        ),
+                    )
+                with apply_col:
+                    st.write("")
+                    st.write("")
+                    if st.button("Apply to active rows", use_container_width=True, key="prestress_apply_force_input_method"):
+                        applied_table = _apply_force_input_method_to_active_rows(
+                            pd.DataFrame(st.session_state["prestress_table"]),
+                            selected_force_method,
+                        )
+                        st.session_state["prestress_table"] = normalize_prestress_table_for_effective_input_sync(applied_table, prestress_db)
+                        st.session_state["prestress_editor_revision"] += 1
+                        st.rerun()
+                st.caption(
+                    "This control changes active row Input Mode only. Pe_eff/fpe are then synchronized from the selected mode; "
+                    "manual row edits remain available."
+                )
                 show_full_engineering_columns = st.checkbox(
                     "Show full engineering columns",
                     value=False,

@@ -249,3 +249,13 @@ def test_rebar_page_groups_longitudinal_and_transverse_inputs_in_subtabs() -> No
     assert "_render_transverse_rebar_tab" in source
     assert "Beam/Girder torsion reads active ordinary bars" in source
     assert "Active stirrup zones are the provided layout" in source
+
+
+def test_rebar_page_contains_column_pier_transverse_workflow_source() -> None:
+    source = (REPO_ROOT / "concrete_pmm_pro" / "ui" / "rebar_page.py").read_text(encoding="utf-8")
+
+    assert "Column/Pier Shear and Torsion Reinforcement" in source
+    assert "COLUMN_PIER_TRANSVERSE_TABLE_KEY" in source
+    assert "column_pier_transverse_reinforcement_table" in source
+    assert "future checks must not count prestress as longitudinal torsion Al" in source
+    assert "Prestress strands, tendons, and PT bars are not counted as Al" in source

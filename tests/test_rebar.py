@@ -6,6 +6,7 @@ import pytest
 from concrete_pmm_pro.core.models import Rebar
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.rebar_page import (
+    COLUMN_PIER_TRANSVERSE_TABLE_KEY,
     bar_size_defaults,
     default_material_for_bar_size,
     load_rebar_database,
@@ -15,6 +16,8 @@ from concrete_pmm_pro.ui.rebar_page import (
     rebar_summary_dataframe,
     rebars_valid_for_analysis,
     validate_rebars_against_geometry,
+    _column_pier_transverse_readiness_cards,
+    _default_column_pier_transverse_reinforcement_table,
     _default_shear_reinforcement_table,
     _normalize_shear_reinforcement_table,
     _shear_reinforcement_preview_dataframe,
@@ -318,6 +321,32 @@ def test_shear_reinforcement_default_template_uses_db12_and_allowed_dropdown_siz
     assert set(table["Bar Size"]) == {"DB12"}
     assert table["Active"].eq(False).all()
     assert SHEAR_STIRRUP_BAR_OPTIONS == ["DB10", "DB12", "DB16", "DB20", "DB25"]
+
+
+def test_column_pier_transverse_default_template_is_separate_from_beam_girder_key() -> None:
+    table = _default_column_pier_transverse_reinforcement_table()
+
+    assert COLUMN_PIER_TRANSVERSE_TABLE_KEY == "column_pier_transverse_reinforcement_table"
+    assert len(table) == 3
+    assert table["Active"].eq(False).all()
+    assert set(table["Bar Size"]) == {"DB12"}
+    assert any("confinement" in str(note).lower() for note in table["Note"])
+
+
+def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_al() -> None:
+    table = _default_column_pier_transverse_reinforcement_table()
+    table["Active"] = True
+    settings = {
+        "closed_tie_layout": "Closed ties / hoops",
+        "torsion_core_basis": "Auto from section and tie offset",
+    }
+
+    cards = _column_pier_transverse_readiness_cards(table, settings, rebar_count=4, preview_errors=[])
+    by_title = {card.title: card for card in cards}
+
+    assert by_title["Longitudinal torsion bars"].value == "Available"
+    assert "prestress is not counted as Al" in by_title["Longitudinal torsion bars"].detail
+    assert by_title["Torsion input"].value == "Ready"
 
 
 def test_shear_reinforcement_preview_calculates_avs_for_active_zone() -> None:

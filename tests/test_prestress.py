@@ -10,13 +10,18 @@ from concrete_pmm_pro.ui.prestress_page import (
     INPUT_MODE_OPTIONS,
     INPUT_MODE_DISPLAY_LABELS,
     JACKING_LOSS_INPUT_MODE,
+    MANUAL_PRESTRESS_LAYOUT_METHOD,
     PRESTRESS_COMPACT_EDITOR_COLUMNS,
+    PLANNED_PRESTRESS_LAYOUT_METHODS,
+    PRESTRESS_LAYOUT_METHOD_OPTIONS,
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
     _build_prestress_status_rows,
     _build_prestress_summary_metrics,
     _engineering_notes_html,
+    _is_planned_prestress_layout_method,
     _normalize_prestress_table_for_display,
+    _planned_prestress_layout_message,
     _prestress_table_for_editor,
     _product_options_for_table,
     load_prestress_steel_database,
@@ -274,6 +279,22 @@ def test_product_creation_modes_exclude_manual_custom_table() -> None:
 
 def test_effective_input_mode_options_are_user_facing_modes() -> None:
     assert INPUT_MODE_OPTIONS == ["Passive", "Pe_eff", "fpe", JACKING_LOSS_INPUT_MODE]
+
+
+def test_prestress_layout_methods_keep_only_manual_as_implemented_workflow() -> None:
+    assert PRESTRESS_LAYOUT_METHOD_OPTIONS == [MANUAL_PRESTRESS_LAYOUT_METHOD, "Linear layout", "Circular layout"]
+    assert PLANNED_PRESTRESS_LAYOUT_METHODS == ["Linear layout", "Circular layout"]
+    assert not _is_planned_prestress_layout_method(MANUAL_PRESTRESS_LAYOUT_METHOD)
+    assert _is_planned_prestress_layout_method("Linear layout")
+    assert _is_planned_prestress_layout_method("Circular layout")
+
+
+def test_planned_prestress_layout_message_routes_user_back_to_manual_table() -> None:
+    message = _planned_prestress_layout_message("Linear layout")
+
+    assert "Linear layout is planned" in message
+    assert "Manual table remains the active prestress input workflow" in message
+    assert "not used for analysis yet" in message
 
 
 

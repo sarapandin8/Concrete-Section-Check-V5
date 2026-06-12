@@ -101,6 +101,11 @@ LEGACY_INPUT_MODE_ALIASES = {
 }
 LEGACY_INPUT_MODE_OPTIONS = [LEGACY_JACKING_LOSS_INPUT_MODE]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
+MANUAL_PRESTRESS_LAYOUT_METHOD = "Manual table"
+PLANNED_PRESTRESS_LAYOUT_METHODS = ["Linear layout", "Circular layout"]
+PRESTRESS_LAYOUT_METHOD_OPTIONS = [MANUAL_PRESTRESS_LAYOUT_METHOD, *PLANNED_PRESTRESS_LAYOUT_METHODS]
+PRESTRESS_LAYOUT_METHOD_STATE_KEY = "prestress_layout_method"
+PRESTRESS_LAYOUT_METHOD_NOTICE_KEY = "prestress_layout_method_planned_notice"
 
 PRESTRESS_COMPACT_EDITOR_COLUMNS = [
     "Active",
@@ -849,6 +854,25 @@ def _input_mode_display_label(value: Any) -> str:
 
     mode = _normalize_input_mode_label(value)
     return INPUT_MODE_DISPLAY_LABELS.get(mode, INPUT_MODE_DISPLAY_LABELS["Passive"])
+
+
+def _is_planned_prestress_layout_method(method: Any) -> bool:
+    return str(method or "").strip() in PLANNED_PRESTRESS_LAYOUT_METHODS
+
+
+def _planned_prestress_layout_message(method: Any) -> str:
+    method_label = str(method or "").strip() or "Selected layout"
+    return (
+        f"{method_label} is planned for a later milestone and is not used for analysis yet. "
+        "The section-level Manual table remains the active prestress input workflow."
+    )
+
+
+def _guard_prestress_layout_method_selection() -> None:
+    selected = st.session_state.get(PRESTRESS_LAYOUT_METHOD_STATE_KEY, MANUAL_PRESTRESS_LAYOUT_METHOD)
+    if _is_planned_prestress_layout_method(selected):
+        st.session_state[PRESTRESS_LAYOUT_METHOD_NOTICE_KEY] = selected
+        st.session_state[PRESTRESS_LAYOUT_METHOD_STATE_KEY] = MANUAL_PRESTRESS_LAYOUT_METHOD
 
 
 def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
@@ -5471,9 +5495,28 @@ def render_prestress_page() -> None:
         else:
             with st.expander("Section-level tendon / prestress table", expanded=True):
                 st.markdown("#### Prestress Input Workflow")
-                input_mode = st.selectbox("Prestress input mode", ["Manual table", "Linear layout", "Circular layout"])
-                if input_mode != "Manual table":
-                    st.info("Linear and circular prestress layouts are planned for a later milestone. Use Manual table for now.")
+                if PRESTRESS_LAYOUT_METHOD_STATE_KEY not in st.session_state:
+                    st.session_state[PRESTRESS_LAYOUT_METHOD_STATE_KEY] = MANUAL_PRESTRESS_LAYOUT_METHOD
+                if _is_planned_prestress_layout_method(st.session_state.get(PRESTRESS_LAYOUT_METHOD_STATE_KEY)):
+                    st.session_state[PRESTRESS_LAYOUT_METHOD_NOTICE_KEY] = st.session_state[PRESTRESS_LAYOUT_METHOD_STATE_KEY]
+                    st.session_state[PRESTRESS_LAYOUT_METHOD_STATE_KEY] = MANUAL_PRESTRESS_LAYOUT_METHOD
+                layout_method = st.selectbox(
+                    "Prestress layout method",
+                    PRESTRESS_LAYOUT_METHOD_OPTIONS,
+                    key=PRESTRESS_LAYOUT_METHOD_STATE_KEY,
+                    help=(
+                        "Manual table is the implemented section-level prestress workflow. "
+                        "Linear and circular auto-layout generators are planned and currently guarded."
+                    ),
+                    on_change=_guard_prestress_layout_method_selection,
+                )
+                planned_layout_notice = st.session_state.pop(PRESTRESS_LAYOUT_METHOD_NOTICE_KEY, None)
+                if planned_layout_notice:
+                    st.warning(_planned_prestress_layout_message(planned_layout_notice))
+                st.caption(
+                    "Use the table row Input Mode to define Passive, Pe_eff, fpe, or Jacking + Total Loss %. "
+                    f"Active layout method: {layout_method}."
+                )
 
                 with st.expander("Tendon Product Creation / product database", expanded=False):
                     _render_tendon_product_tools()

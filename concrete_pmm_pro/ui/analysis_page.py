@@ -64,6 +64,7 @@ from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisModeSettings, 
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, RebarMaterial, SectionGeometry
 from concrete_pmm_pro.core.design_code import (
     PROJECT_CODE_AASHTO_LRFD,
+    PROJECT_CODE_ACI318,
     default_project_design_code_for_workflow,
     girder_sls_code_for_project_code,
     normalize_project_code_edition,
@@ -237,7 +238,23 @@ BEAM_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Station x (m)", "Case Name", "Mux",
 SHEAR_REINFORCEMENT_TABLE_KEY = "beam_girder_shear_reinforcement_table"
 SHEAR_DEPTH_SETTINGS_KEY = "beam_girder_shear_depth_settings"
 SHEAR_DEPTH_MODE_MANUAL = "Manual effective d / dv"
+COLUMN_ULS_LOAD_COLUMNS_ANALYSIS = ["Active", "Case Name", "Pu", "Mux", "Muy", "Vux", "Vuy", "Tu", "Note"]
+COLUMN_PIER_TRANSVERSE_TABLE_KEY_ANALYSIS = "column_pier_transverse_reinforcement_table"
+COLUMN_PIER_TRANSVERSE_SETTINGS_KEY_ANALYSIS = "column_pier_transverse_reinforcement_settings"
+COLUMN_PIER_TRANSVERSE_COLUMNS_ANALYSIS = [
+    "Active",
+    "Zone",
+    "x_start_m",
+    "x_end_m",
+    "Bar Size",
+    "Diameter_mm",
+    "Legs",
+    "Spacing_mm",
+    "fy_MPa",
+    "Note",
+]
 _BEAM_ULS_DEMAND_TOL = 1.0e-9
+_COLUMN_PIER_SHEAR_DEMAND_TOL = 1.0e-9
 _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS = 24
 _GIRDER_STRAND_FPU_MPA_DEFAULT = 1860.0
 _GIRDER_STRAND_FPY_MPA_DEFAULT = 1670.0
@@ -567,7 +584,7 @@ def _workflow_sls_status_text(settings: AnalysisModeSettings) -> str:
 
 def _workflow_shear_torsion_status_text(settings: AnalysisModeSettings) -> str:
     if is_pmm_primary_workflow(settings):
-        return "Planned / guarded"
+        return "Shear ACI preview / torsion guarded"
     if settings.member_type == "beam_girder":
         return "Bridge ULS guarded"
     if settings.member_type == "building_beam_girder":
@@ -787,7 +804,10 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
 
         if settings.member_type == "column_pier_pmm":
             st.success("Current workflow uses Pu, Mux, and Muy with PMM interaction and ULS D/C review.")
-            st.info("Shear and torsion are planned capability guards for this member family; no shear/torsion PASS/FAIL is issued yet.")
+            st.info(
+                "Column/Pier ACI RC shear preview is available in the ULS Shear subview; torsion remains a guarded future code check. "
+                "No final code-certified shear/torsion PASS/FAIL is issued yet."
+            )
             st.info("Beam/Girder SLS stress and deflection/camber workflows are not selected for Column/Pier/Wall/Pylon analysis.")
             st.info("Prestress is treated as internal prestress/reinforcement action, not duplicated as Pu demand.")
         elif settings.member_type == "beam_girder":
@@ -2774,6 +2794,406 @@ def _active_beam_uls_demand_dataframe_from_session(state: Mapping[str, object]) 
     active = df[df["Active"]].copy()
     active = active[active["Case Name"].astype(str).str.len() > 0]
     return active.reset_index(drop=True)
+
+
+def _column_pier_uls_demand_dataframe_from_state(state: Mapping[str, object]) -> pd.DataFrame:
+    """Return normalized Column/Pier case-based ULS rows from Loads.
+
+    Column/Pier loads are not station-based.  Shear/torsion helpers therefore
+    consume the case table directly and must not borrow Beam/Girder station
+    assumptions.
+    """
+
+    raw = _beam_uls_get_state_value(state, "column_uls_loads_table", None)
+    if raw is None:
+        raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get("column_uls_loads_table")
+    df = pd.DataFrame(raw if raw is not None else [], columns=COLUMN_ULS_LOAD_COLUMNS_ANALYSIS)
+    for column in COLUMN_ULS_LOAD_COLUMNS_ANALYSIS:
+        if column not in df.columns:
+            df[column] = ""
+    df = df[COLUMN_ULS_LOAD_COLUMNS_ANALYSIS].copy()
+    df["Active"] = df["Active"].map(_beam_uls_active_value)
+    for column in ["Pu", "Mux", "Muy", "Vux", "Vuy", "Tu"]:
+        df[column] = df[column].map(_beam_uls_float)
+    df["Case Name"] = df["Case Name"].map(lambda value: str(value or "").strip())
+    df["Note"] = df["Note"].map(lambda value: str(value or "").strip())
+    return df
+
+
+def _active_column_pier_uls_demand_dataframe_from_state(state: Mapping[str, object]) -> pd.DataFrame:
+    df = _column_pier_uls_demand_dataframe_from_state(state)
+    if df.empty:
+        return df
+    active = df[df["Active"]].copy()
+    active = active[active["Case Name"].astype(str).str.len() > 0]
+    return active.reset_index(drop=True)
+
+
+def _column_pier_transverse_reinforcement_dataframe_from_state(state: Mapping[str, object]) -> pd.DataFrame:
+    raw = _beam_uls_get_state_value(state, COLUMN_PIER_TRANSVERSE_TABLE_KEY_ANALYSIS, None)
+    if raw is None:
+        raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get(COLUMN_PIER_TRANSVERSE_TABLE_KEY_ANALYSIS)
+    df = pd.DataFrame(raw if raw is not None else [], columns=COLUMN_PIER_TRANSVERSE_COLUMNS_ANALYSIS)
+    for column in COLUMN_PIER_TRANSVERSE_COLUMNS_ANALYSIS:
+        if column not in df.columns:
+            df[column] = ""
+    df = df[COLUMN_PIER_TRANSVERSE_COLUMNS_ANALYSIS].copy()
+    df["Active"] = df["Active"].map(_beam_uls_active_value)
+    for column in ["x_start_m", "x_end_m", "Diameter_mm", "Legs", "Spacing_mm", "fy_MPa"]:
+        df[column] = df[column].map(_beam_uls_float)
+    for column in ["Zone", "Bar Size", "Note"]:
+        df[column] = df[column].map(lambda value: str(value or "").strip())
+    return df
+
+
+def _column_pier_transverse_settings_from_state(state: Mapping[str, object]) -> dict[str, object]:
+    raw = _beam_uls_get_state_value(state, COLUMN_PIER_TRANSVERSE_SETTINGS_KEY_ANALYSIS, None)
+    if raw is None:
+        raw = (_beam_uls_get_state_value(state, "project_metadata", {}) or {}).get(COLUMN_PIER_TRANSVERSE_SETTINGS_KEY_ANALYSIS)
+    return dict(raw or {}) if isinstance(raw, Mapping) else {}
+
+
+def _column_pier_active_transverse_zone_for_shear(state: Mapping[str, object]) -> dict[str, object] | None:
+    """Return the conservative active transverse source for case-based shear.
+
+    Column/Pier ULS rows currently do not carry a station/height coordinate.
+    Until that owner exists, the shear check uses the active region with the
+    lowest provided Av/s.  This avoids silently selecting a stronger confinement
+    region for a case-level demand.
+    """
+
+    df = _column_pier_transverse_reinforcement_dataframe_from_state(state)
+    if df.empty:
+        return None
+    active = df[df["Active"]].copy()
+    if active.empty:
+        return None
+    rows: list[dict[str, object]] = []
+    for _, row in active.iterrows():
+        zone = row.to_dict()
+        area = _beam_uls_stirrup_area_mm2(zone)
+        legs = _beam_uls_float(zone.get("Legs"))
+        spacing = _beam_uls_float(zone.get("Spacing_mm"))
+        fy = _beam_uls_float(zone.get("fy_MPa"))
+        if not all(math.isfinite(value) and value > 0.0 for value in [area, legs, spacing, fy]):
+            continue
+        zone["stirrup_area_mm2"] = float(area)
+        zone["Av/s mm2/mm"] = float(area) * float(legs) / float(spacing)
+        rows.append(zone)
+    if not rows:
+        return None
+    return sorted(rows, key=lambda item: (float(item["Av/s mm2/mm"]), -_beam_uls_float(item.get("Spacing_mm"))))[0]
+
+
+def _lineal_intersection_length_mm(geometry: object) -> float:
+    if geometry is None or bool(getattr(geometry, "is_empty", False)):
+        return 0.0
+    try:
+        length = float(getattr(geometry, "length"))
+    except (TypeError, ValueError, AttributeError):
+        length = float("nan")
+    if math.isfinite(length) and length > 0.0:
+        return length
+    parts = getattr(geometry, "geoms", None)
+    if parts is None:
+        return 0.0
+    return sum(_lineal_intersection_length_mm(part) for part in parts)
+
+
+def _column_pier_concrete_breadth_at_centroid_mm(geometry: SectionGeometry, *, line_axis: str) -> tuple[float | None, str]:
+    summary = summarize_geometry(geometry)
+    polygon = to_shapely_polygon(geometry)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    if polygon.is_empty or polygon.area <= 0.0:
+        return None, "Concrete breadth could not be calculated because the section polygon is invalid."
+    width_x = float(summary.x_max_mm) - float(summary.x_min_mm)
+    depth_y = float(summary.y_max_mm) - float(summary.y_min_mm)
+    margin = max(width_x, depth_y, 1.0)
+    if line_axis == "horizontal":
+        line = LineString(
+            [
+                (float(summary.x_min_mm) - margin, float(summary.centroid_y_mm)),
+                (float(summary.x_max_mm) + margin, float(summary.centroid_y_mm)),
+            ]
+        )
+        breadth = _lineal_intersection_length_mm(polygon.intersection(line))
+        basis = "bw from horizontal concrete breadth at section centroid; holes/voids are subtracted by polygon intersection."
+    else:
+        line = LineString(
+            [
+                (float(summary.centroid_x_mm), float(summary.y_min_mm) - margin),
+                (float(summary.centroid_x_mm), float(summary.y_max_mm) + margin),
+            ]
+        )
+        breadth = _lineal_intersection_length_mm(polygon.intersection(line))
+        basis = "bw from vertical concrete breadth at section centroid; holes/voids are subtracted by polygon intersection."
+    if not math.isfinite(breadth) or breadth <= 0.0:
+        return None, f"{basis} No positive concrete breadth was found."
+    return float(breadth), basis
+
+
+def _column_pier_shear_geometry_for_direction(geometry: SectionGeometry, direction: str) -> dict[str, object]:
+    summary = summarize_geometry(geometry)
+    width_x = float(summary.x_max_mm) - float(summary.x_min_mm)
+    depth_y = float(summary.y_max_mm) - float(summary.y_min_mm)
+    if direction == "Vux":
+        bw_mm, bw_note = _column_pier_concrete_breadth_at_centroid_mm(geometry, line_axis="vertical")
+        gross_dimension = width_x
+        d_eff_mm = 0.80 * width_x if width_x > 0.0 else float("nan")
+        direction_note = "Vux uses the x-direction gross dimension for auto d and the vertical centroid-line concrete breadth for bw."
+    else:
+        bw_mm, bw_note = _column_pier_concrete_breadth_at_centroid_mm(geometry, line_axis="horizontal")
+        gross_dimension = depth_y
+        d_eff_mm = 0.80 * depth_y if depth_y > 0.0 else float("nan")
+        direction_note = "Vuy uses the y-direction gross dimension for auto d and the horizontal centroid-line concrete breadth for bw."
+    return {
+        "bw_mm": bw_mm,
+        "d_mm": float(d_eff_mm),
+        "gross_dimension_mm": float(gross_dimension),
+        "basis": f"{direction_note} Auto d = 0.80 x gross direction dimension.",
+        "notes": bw_note,
+        "void_count": len(getattr(geometry, "holes", []) or []),
+    }
+
+
+def _column_pier_has_active_prestress(analysis_input: AnalysisInput | None) -> bool:
+    if analysis_input is None:
+        return False
+    for element in list(getattr(analysis_input, "prestress_elements", []) or []):
+        count = getattr(element, "count", 1)
+        pe_eff = getattr(element, "pe_eff_n", 0.0)
+        try:
+            if abs(float(pe_eff) * float(count)) > 1.0e-9:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _column_pier_shear_result_for_case_direction(
+    state: Mapping[str, object],
+    demand_row: Mapping[str, object],
+    *,
+    direction: str,
+    analysis_input: AnalysisInput | None,
+) -> dict[str, object]:
+    case = str(demand_row.get("Case Name") or "-")
+    vu_kN = _beam_uls_float(demand_row.get(direction))
+    code = project_design_code_from_session(state)
+    if code != PROJECT_CODE_ACI318:
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "AASHTO LRFD Column/Pier shear is not implemented in ULS.COL.SHEAR.ACI1.",
+        }
+    if not math.isfinite(vu_kN) or abs(float(vu_kN)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL:
+        return {
+            "Check": "Shear",
+            "Status": "NO DEMAND",
+            "Direction": direction,
+            "Case": case,
+            "Demand": "-",
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": 0.0,
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": f"No finite {direction} demand.",
+        }
+    if analysis_input is None:
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "Section geometry and concrete material are required for Column/Pier shear.",
+        }
+    zone = _column_pier_active_transverse_zone_for_shear(state)
+    if zone is None:
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "No active valid Column/Pier transverse reinforcement region is available. Activate a provided tie/hoop region before relying on shear capacity.",
+        }
+    concrete = analysis_input.concrete_material
+    fc = float(concrete.fc_MPa)
+    geometry = _column_pier_shear_geometry_for_direction(analysis_input.section_geometry, direction)
+    bw_mm = geometry.get("bw_mm")
+    d_mm = _beam_uls_float(geometry.get("d_mm"))
+    if bw_mm is None or not all(math.isfinite(value) and value > 0.0 for value in [float(fc), float(d_mm)]):
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": str(geometry.get("notes") or "Column/Pier shear geometry is not ready."),
+        }
+    stirrup_area = _beam_uls_stirrup_area_mm2(zone)
+    legs = _beam_uls_float(zone.get("Legs"))
+    spacing = _beam_uls_float(zone.get("Spacing_mm"))
+    fy = _beam_uls_float(zone.get("fy_MPa"))
+    if not all(math.isfinite(value) and value > 0.0 for value in [stirrup_area, legs, spacing, fy]):
+        return {
+            "Check": "Shear",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+            "Capacity": "-",
+            "Utilization": "-",
+            "Demand kN": float(vu_kN),
+            "phiVn kN": float("nan"),
+            "Governing D/C value": float("nan"),
+            "Notes": "Active Column/Pier transverse region has incomplete bar, legs, spacing, or fy input.",
+        }
+    phi = 0.75
+    sqrt_fc = math.sqrt(fc)
+    avs_mm2_per_mm = float(stirrup_area) * float(legs) / float(spacing)
+    vc_n = 0.17 * sqrt_fc * float(bw_mm) * float(d_mm)
+    vs_n = avs_mm2_per_mm * float(fy) * float(d_mm)
+    vs_limit_n = 0.66 * sqrt_fc * float(bw_mm) * float(d_mm)
+    vn_uncapped_n = max(0.0, vc_n + vs_n)
+    vn_limit_n = vc_n + vs_limit_n
+    vn_n = min(vn_uncapped_n, vn_limit_n)
+    phi_vn_kN = phi * vn_n / 1000.0
+    strength_dc = abs(float(vu_kN)) / phi_vn_kN if phi_vn_kN > 0.0 else float("nan")
+    avs_required = max(0.062 * sqrt_fc * float(bw_mm) / float(fy), 0.35 * float(bw_mm) / float(fy))
+    s_max = min(0.50 * float(d_mm), 600.0)
+    avs_dc = avs_required / avs_mm2_per_mm if avs_mm2_per_mm > 0.0 else float("nan")
+    spacing_dc = float(spacing) / s_max if s_max > 0.0 else float("nan")
+    detailing_values = [value for value in [avs_dc, spacing_dc] if math.isfinite(value)]
+    detailing_dc = max(detailing_values) if detailing_values else float("nan")
+    governing_values = [value for value in [strength_dc, detailing_dc] if math.isfinite(value)]
+    governing_dc = max(governing_values) if governing_values else float("nan")
+    has_prestress = _column_pier_has_active_prestress(analysis_input)
+    if has_prestress:
+        status = "REVIEW"
+    elif any(math.isfinite(value) and value > 1.0 + 1.0e-9 for value in [strength_dc, detailing_dc]):
+        status = "Preview FAIL"
+    else:
+        status = "Preview PASS"
+    notes = [
+        "ULS.COL.SHEAR.ACI1 uses ACI 318 SI simplified one-way shear: Vc = 0.17 sqrt(fc) bw d, Vs = Av fy d / s, phi = 0.75.",
+        "Case-based Column/Pier loads have no station owner yet; the active transverse region with the lowest Av/s is used conservatively.",
+        str(geometry.get("basis") or ""),
+        str(geometry.get("notes") or ""),
+        "Effective shear legs are read from the active transverse region; verify direction-specific tie legs and anchorage before final design.",
+    ]
+    if int(geometry.get("void_count") or 0) > 0:
+        notes.append("Section has holes/voids; bw is based on centroid-line concrete breadth, not the full bounding box.")
+    if has_prestress:
+        notes.append("Active prestress is present. Prestress shear contribution, Vp, Vci/Vcw, and PSC-specific ACI provisions are not implemented, so the shear result remains REVIEW.")
+    if vn_uncapped_n > vn_n + 1.0e-6:
+        notes.append("Nominal Vn was capped by the ACI Vs maximum screen.")
+    if math.isfinite(avs_dc) and avs_dc > 1.0 + 1.0e-9:
+        notes.append("Provided Av/s is less than the ACI minimum shear reinforcement gate.")
+    if math.isfinite(spacing_dc) and spacing_dc > 1.0 + 1.0e-9:
+        notes.append("Provided tie spacing exceeds the ACI maximum spacing gate.")
+    return {
+        "Check": "Shear",
+        "Status": status,
+        "Direction": direction,
+        "Case": case,
+        "Demand": _format_beam_uls_demand(vu_kN, "kN"),
+        "Capacity": f"phiVn = {phi_vn_kN:,.2f} kN",
+        "Utilization": _format_beam_uls_ratio(strength_dc),
+        "Demand kN": float(vu_kN),
+        "Abs demand kN": abs(float(vu_kN)),
+        "phiVn kN": phi_vn_kN,
+        "phiVc kN": phi * vc_n / 1000.0,
+        "phiVs kN": phi * vs_n / 1000.0,
+        "Vc kN": vc_n / 1000.0,
+        "Vs kN": vs_n / 1000.0,
+        "Vn kN": vn_n / 1000.0,
+        "Vn uncapped kN": vn_uncapped_n / 1000.0,
+        "Vn limit kN": vn_limit_n / 1000.0,
+        "Strength D/C value": strength_dc,
+        "Detailing D/C value": detailing_dc,
+        "Governing D/C value": governing_dc,
+        "Zone": str(zone.get("Zone") or "Column/Pier transverse region"),
+        "Tie/hoop": f"{zone.get('Bar Size') or '-'} x {int(float(legs))} legs @ {float(spacing):.0f} mm",
+        "Av/s mm2/mm": avs_mm2_per_mm,
+        "Av/s required mm2/mm": avs_required,
+        "Av/s min D/C": avs_dc,
+        "s max mm": s_max,
+        "Spacing D/C": spacing_dc,
+        "bw mm": float(bw_mm),
+        "d mm": float(d_mm),
+        "gross dimension mm": float(geometry.get("gross_dimension_mm") or float("nan")),
+        "phi": phi,
+        "Code basis": "ACI 318 Column/Pier RC shear preview gate",
+        "Method": "ACI 318 simplified one-way shear, case-based conservative active-region source",
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _column_pier_shear_check_dataframe(state: Mapping[str, object], analysis_input: AnalysisInput | None) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Direction", "Case", "Demand", "Capacity", "Utilization",
+        "Demand kN", "Abs demand kN", "phiVn kN", "phiVc kN", "phiVs kN", "Vc kN", "Vs kN",
+        "Vn kN", "Vn uncapped kN", "Vn limit kN", "Strength D/C value", "Detailing D/C value",
+        "Governing D/C value", "Zone", "Tie/hoop", "Av/s mm2/mm", "Av/s required mm2/mm",
+        "Av/s min D/C", "s max mm", "Spacing D/C", "bw mm", "d mm", "gross dimension mm",
+        "phi", "Code basis", "Method", "Notes",
+    ]
+    active_df = _active_column_pier_uls_demand_dataframe_from_state(state)
+    if active_df.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for _, demand_row in active_df.iterrows():
+        for direction in ["Vux", "Vuy"]:
+            result = _column_pier_shear_result_for_case_direction(
+                state,
+                demand_row,
+                direction=direction,
+                analysis_input=analysis_input,
+            )
+            if result.get("Status") == "NO DEMAND":
+                continue
+            for column in columns:
+                result.setdefault(column, float("nan"))
+            rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _column_pier_governing_shear_row(shear_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if shear_df is None or shear_df.empty or "Governing D/C value" not in shear_df.columns:
+        return None
+    df = shear_df.copy()
+    df["__dc"] = pd.to_numeric(df["Governing D/C value"], errors="coerce")
+    df = df[df["__dc"].notna()]
+    if df.empty:
+        return None
+    return df.sort_values("__dc", ascending=False, kind="stable").iloc[0].to_dict()
 
 
 def _beam_uls_governing_action(active_df: pd.DataFrame, column: str) -> dict[str, object] | None:
@@ -7746,6 +8166,12 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
         if code != PROJECT_CODE_AASHTO_LRFD
         else "AASHTO LRFD PMM is not implemented; current PMM remains ACI-oriented and must be treated as REVIEW"
     )
+    shear_status = "ACI RC preview" if code == PROJECT_CODE_ACI318 else "REVIEW / planned"
+    shear_detail = (
+        "ACI 318 RC Column/Pier shear preview reads Vux/Vuy and active transverse reinforcement; PSC and final certification remain guarded"
+        if code == PROJECT_CODE_ACI318
+        else "AASHTO LRFD Column/Pier shear is not implemented; no Vn or PASS/FAIL is issued"
+    )
     return [
         {
             "title": "Primary check",
@@ -7763,10 +8189,10 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
         },
         {
             "title": "Shear",
-            "value": "Not implemented",
-            "detail": "Guarded future code check; do not infer Vn or PASS/FAIL from PMM results",
-            "status": "warning",
-            "strong": True,
+            "value": shear_status,
+            "detail": shear_detail,
+            "status": "info" if code == PROJECT_CODE_ACI318 else "warning",
+            "strong": code != PROJECT_CODE_ACI318,
         },
         {
             "title": "Torsion",
@@ -7858,19 +8284,148 @@ def _render_column_pier_flexural_pmm_workspace() -> None:
     _render_verification_expander()
 
 
+def _column_pier_shear_summary_cards(
+    *,
+    shear_df: pd.DataFrame,
+    active_demands: pd.DataFrame,
+    analysis_input: AnalysisInput | None,
+) -> list[dict[str, object]]:
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    governing = _column_pier_governing_shear_row(shear_df)
+    zone = _column_pier_active_transverse_zone_for_shear(st.session_state)
+    active_demand_count = 0
+    if not active_demands.empty:
+        for column in ["Vux", "Vuy"]:
+            active_demand_count += int(pd.to_numeric(active_demands[column], errors="coerce").abs().gt(_COLUMN_PIER_SHEAR_DEMAND_TOL).sum())
+    if code != PROJECT_CODE_ACI318:
+        status_value = "REVIEW"
+        status_detail = "AASHTO LRFD Column/Pier shear is not implemented in this milestone"
+        status_color = "warning"
+    elif shear_df.empty:
+        status_value = "NOT READY"
+        status_detail = "Needs nonzero Vux/Vuy and an active valid transverse reinforcement region"
+        status_color = "warning"
+    elif any(str(value) == "Preview FAIL" for value in shear_df["Status"].tolist()):
+        status_value = "Preview FAIL"
+        status_detail = "At least one shear direction or detailing gate exceeds 1.0"
+        status_color = "danger"
+    elif any(str(value) == "REVIEW" for value in shear_df["Status"].tolist()):
+        status_value = "REVIEW"
+        status_detail = "Calculation has guarded inputs such as active prestress or incomplete code route"
+        status_color = "warning"
+    else:
+        status_value = "Preview PASS"
+        status_detail = "ACI RC shear preview gates are below 1.0; not final code certification"
+        status_color = "ready"
+    capacity_detail = "-"
+    demand_detail = "-"
+    if governing is not None:
+        demand_detail = f"{governing.get('Case', '-')} / {governing.get('Direction', '-')}"
+        capacity_detail = f"{governing.get('Capacity', '-')} / D/C {_format_beam_uls_ratio(governing.get('Governing D/C value'))}"
+    zone_detail = "No active valid transverse region"
+    zone_value = "Not ready"
+    if zone is not None:
+        zone_value = str(zone.get("Zone") or "Active transverse region")
+        zone_detail = f"{zone.get('Bar Size') or '-'} @ {_beam_uls_float(zone.get('Spacing_mm')):.0f} mm; lowest active Av/s source"
+    prestress_value = "No"
+    prestress_detail = "ACI RC shear route"
+    if _column_pier_has_active_prestress(analysis_input):
+        prestress_value = "Present"
+        prestress_detail = "PSC shear contribution is not implemented; result remains REVIEW"
+    return [
+        {
+            "title": "Shear status",
+            "value": status_value,
+            "detail": status_detail,
+            "status": status_color,
+            "strong": True,
+        },
+        {
+            "title": "Code route",
+            "value": "ACI 318 RC" if code == PROJECT_CODE_ACI318 else "Not implemented",
+            "detail": f"{edition}; AASHTO/PSC routes remain future milestones",
+            "status": "info" if code == PROJECT_CODE_ACI318 else "warning",
+        },
+        {
+            "title": "Active V demands",
+            "value": f"{active_demand_count:,}",
+            "detail": demand_detail if active_demand_count else "No nonzero Vux/Vuy in active ULS rows",
+            "status": "info" if active_demand_count else "warning",
+        },
+        {
+            "title": "Governing capacity",
+            "value": capacity_detail,
+            "detail": "Highest governing D/C among Vux/Vuy rows" if governing is not None else "No calculated row",
+            "status": "info",
+        },
+        {
+            "title": "Transverse source",
+            "value": zone_value,
+            "detail": zone_detail,
+            "status": "ready" if zone is not None else "warning",
+        },
+        {
+            "title": "Prestress effects",
+            "value": prestress_value,
+            "detail": prestress_detail,
+            "status": "warning" if prestress_value == "Present" else "neutral",
+        },
+    ]
+
+
 def _render_column_pier_shear_guarded_workspace() -> None:
     st.markdown("#### Shear")
-    st.caption("Guarded future strength module for column, pier, wall, and pylon shear checks.")
-    _render_analysis_summary_strip(_column_pier_guarded_strength_check_cards("Shear"), columns=4)
-    st.warning(
-        "Shear code check is not implemented. Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL from this view."
+    st.caption("ACI 318 RC shear preview for column, pier, wall, and pylon case-based ULS rows.")
+    active_demands = _active_column_pier_uls_demand_dataframe_from_state(st.session_state)
+    analysis_input = _serviceability_analysis_input_from_session()
+    shear_df = _column_pier_shear_check_dataframe(st.session_state, analysis_input)
+    _render_analysis_summary_strip(
+        _column_pier_shear_summary_cards(
+            shear_df=shear_df,
+            active_demands=active_demands,
+            analysis_input=analysis_input,
+        ),
+        columns=3,
     )
+    code = project_design_code_from_session(st.session_state)
+    if code != PROJECT_CODE_ACI318:
+        st.warning("Column/Pier AASHTO LRFD shear is not implemented. This tab does not issue Vn or PASS/FAIL for AASHTO projects.")
+    elif shear_df.empty:
+        st.warning("No Column/Pier ACI shear rows are ready. Enter nonzero Vux/Vuy, confirm section/material inputs, and activate valid transverse reinforcement regions.")
+    elif any(str(value) == "Preview FAIL" for value in shear_df["Status"].tolist()):
+        st.error("One or more ACI RC shear preview gates exceed 1.0. Review demand, section size, and transverse reinforcement before relying on the member.")
+    elif any(str(value) == "REVIEW" for value in shear_df["Status"].tolist()):
+        st.warning("ACI shear values are calculated, but the result remains REVIEW because one or more guarded assumptions apply.")
+    else:
+        st.success("ACI RC shear preview gates pass for the current visible rows. This is not final code-certified shear design.")
+
+    if not shear_df.empty:
+        display_columns = [
+            "Status", "Direction", "Case", "Demand", "Capacity", "Utilization",
+            "Zone", "Tie/hoop", "bw mm", "d mm", "Av/s mm2/mm", "Av/s required mm2/mm",
+            "Governing D/C value",
+        ]
+        st.dataframe(shear_df[display_columns], use_container_width=True, hide_index=True)
+    with st.expander("ACI shear audit / method details", expanded=False):
+        if shear_df.empty:
+            st.info("Audit rows are not available until the section, material, active Vux/Vuy demand, and active transverse reinforcement are ready.")
+        else:
+            st.dataframe(shear_df, use_container_width=True, hide_index=True)
+        st.markdown(
+            "- Scope: ACI 318 RC Column/Pier shear preview only.\n"
+            "- Demand source: Loads -> Column/Pier ULS table, active `Vux` and `Vuy` rows.\n"
+            "- Transverse source: Sections -> Rebar -> Transverse Rebar, active Column/Pier regions. With no station owner, the lowest active `Av/s` region is used conservatively.\n"
+            "- Section basis: `bw` is measured from concrete breadth through the centroid line, so holes/voids are not counted as concrete. Auto `d` is `0.80` times the gross dimension in the checked direction.\n"
+            "- Formula basis: `Vc = 0.17 sqrt(fc) bw d`, `Vs = Av fy d / s`, `phi = 0.75`, with ACI minimum `Av/s`, maximum spacing, and `Vs` maximum screen.\n"
+            "- Exclusions: AASHTO LRFD, prestressed shear `Vci/Vcw/Vp`, seismic special detailing, slenderness/second-order effects, anchorage, and final code certification."
+        )
     with st.expander("Future shear code-check scope", expanded=False):
         st.markdown(
-            "- Required demands: Vu or Vux/Vuy with load-combination traceability.\n"
-            "- Required section inputs: shear-critical section geometry, effective depth/dv, transverse reinforcement, and spacing.\n"
-            "- Required engineering logic: axial load and prestress effects, code-specific concrete contribution, reinforcement contribution, and strength-reduction rules.\n"
-            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any PASS/FAIL result is allowed."
+            "- Add explicit direction-specific effective depth owner instead of the current auto `0.80h` preview basis.\n"
+            "- Add station/height assignment for transverse regions so end confinement and typical shaft regions can be checked at their actual demand locations.\n"
+            "- Add axial load and prestress effects only after validated code-specific equations and benchmarks are introduced.\n"
+            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any final PASS/FAIL result is allowed."
         )
 
 

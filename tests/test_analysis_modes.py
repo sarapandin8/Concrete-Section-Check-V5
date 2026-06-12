@@ -151,8 +151,8 @@ def test_analysis_page_hides_beam_sls_subpages_for_column_pier_workflow() -> Non
     assert "_analysis_subtabs_for_workflow" in source
     assert "SLS / Stress & Cracking is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
     assert "SLS Deflection / Camber is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
-    assert "Shear and torsion are planned capability guards" in source
-    assert "no shear/torsion PASS/FAIL is issued yet" in source
+    assert "Column/Pier ACI RC shear preview is available" in source
+    assert "No final code-certified shear/torsion PASS/FAIL is issued yet" in source
 
 
 def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
@@ -169,5 +169,6 @@ def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
     assert "_render_column_pier_flexural_pmm_workspace" in source
     assert "_render_column_pier_shear_guarded_workspace" in source
     assert "_render_column_pier_torsion_guarded_workspace" in source
-    assert "No PASS/FAIL" in source
-    assert "Do not issue Preview PASS, Preview FAIL, or final PASS/FAIL" in source
+    assert "_column_pier_shear_check_dataframe" in source
+    assert "ACI 318 RC shear preview" in source
+    assert "AASHTO LRFD Column/Pier shear is not implemented" in source

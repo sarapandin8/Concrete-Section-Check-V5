@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from concrete_pmm_pro.analysis.runtime import (
     ACCURACY_PRESET_RESOLUTIONS,
     AnalysisRuntimeMetadata,
@@ -16,7 +18,7 @@ from concrete_pmm_pro.analysis.runtime import (
 )
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisSettings
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar, RebarMaterial
-from concrete_pmm_pro.geometry.generators import rectangle
+from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.serviceability import ServiceabilitySettings
 import concrete_pmm_pro.ui.analysis_page as analysis_page_module
 from concrete_pmm_pro.ui.analysis_page import (
@@ -35,6 +37,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _validation_status_detail_dataframe,
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
+    _column_pier_shear_check_dataframe,
 )
 
 
@@ -55,6 +58,87 @@ def _analysis_input(**kwargs) -> AnalysisInput:
     }
     data.update(kwargs)
     return AnalysisInput(**data)
+
+
+def _column_pier_shear_state(*, code: str = "ACI 318", vux: float = 80.0, vuy: float = 120.0) -> dict[str, object]:
+    return {
+        "design_code": code,
+        "code_edition": "ACI 318-19" if code == "ACI 318" else "AASHTO LRFD 9th Edition",
+        "column_uls_loads_table": pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Case Name": "ULS-COL",
+                    "Pu": 1000.0,
+                    "Mux": 100.0,
+                    "Muy": 50.0,
+                    "Vux": vux,
+                    "Vuy": vuy,
+                    "Tu": 0.0,
+                    "Note": "test",
+                }
+            ]
+        ),
+        "column_pier_transverse_reinforcement_table": pd.DataFrame(
+            [
+                {
+                    "Active": True,
+                    "Zone": "Typical shaft",
+                    "x_start_m": 0.0,
+                    "x_end_m": 6.0,
+                    "Bar Size": "DB12",
+                    "Diameter_mm": 12.0,
+                    "Legs": 2,
+                    "Spacing_mm": 150.0,
+                    "fy_MPa": 390.0,
+                    "Note": "closed hoops",
+                }
+            ]
+        ),
+        "column_pier_transverse_reinforcement_settings": {
+            "closed_tie_layout": "Closed ties / hoops",
+            "torsion_core_basis": "Auto from section and tie offset",
+            "tie_center_offset_mm": 50.0,
+        },
+    }
+
+
+def test_column_pier_aci_shear_preview_reads_vux_vuy_and_transverse_region() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    df = _column_pier_shear_check_dataframe(_column_pier_shear_state(), analysis_input)
+
+    assert set(df["Direction"]) == {"Vux", "Vuy"}
+    assert set(df["Status"]) == {"Preview PASS"}
+    assert (pd.to_numeric(df["phiVn kN"], errors="coerce") > pd.to_numeric(df["Abs demand kN"], errors="coerce")).all()
+    assert (pd.to_numeric(df["Av/s mm2/mm"], errors="coerce") > 0.0).all()
+
+
+def test_column_pier_aci_shear_hollow_section_breadth_subtracts_void() -> None:
+    section = rectangular_hollow(
+        width_mm=1000.0,
+        height_mm=800.0,
+        t_left_mm=130.0,
+        t_right_mm=130.0,
+        t_top_mm=110.0,
+        t_bottom_mm=110.0,
+    )
+    analysis_input = _analysis_input(section_geometry=section, prestress_elements=[])
+    df = _column_pier_shear_check_dataframe(_column_pier_shear_state(vux=0.0, vuy=50.0), analysis_input)
+
+    assert list(df["Direction"]) == ["Vuy"]
+    bw_mm = float(df.iloc[0]["bw mm"])
+    assert abs(bw_mm - 260.0) <= 1.0e-6
+    assert bw_mm < 1000.0
+    assert "holes/voids" in str(df.iloc[0]["Notes"])
+
+
+def test_column_pier_aashto_shear_remains_review_without_capacity_claim() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    df = _column_pier_shear_check_dataframe(_column_pier_shear_state(code="AASHTO LRFD"), analysis_input)
+
+    assert set(df["Status"]) == {"REVIEW"}
+    assert df["Capacity"].eq("-").all()
+    assert df["Notes"].str.contains("AASHTO LRFD Column/Pier shear is not implemented").all()
 
 
 def test_analysis_input_hash_is_stable_for_identical_engineering_inputs() -> None:

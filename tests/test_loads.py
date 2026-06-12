@@ -542,6 +542,19 @@ def test_beam_sls_stage_tab_edits_are_persisted_with_single_rerun_guard() -> Non
     assert "Combined SLS backend table used by Analysis" in source
 
 
+def test_column_pier_load_table_edits_are_persisted_with_single_rerun_guard() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "loads_page.py").read_text(encoding="utf-8")
+
+    assert '"column_uls_loads_table",' in source
+    assert '"column_sls_loads_table",' in source
+    assert "COLUMN_ULS_LOAD_COLUMNS" in source
+    assert "COLUMN_SLS_LOAD_COLUMNS" in source
+    assert source.count("_store_editor_table_and_rerun_on_change(") >= 3
+
+
 def test_beam_sls_stage_basis_warnings_accept_service_total_but_flag_mismatched_basis() -> None:
     table = pd.DataFrame(
         [

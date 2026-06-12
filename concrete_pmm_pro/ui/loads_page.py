@@ -1772,7 +1772,12 @@ def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
         key="column_uls_loads_editor",
     )
     edited_uls = _stringify_table(edited_uls, COLUMN_ULS_LOAD_COLUMNS)
-    st.session_state["column_uls_loads_table"] = edited_uls
+    _store_editor_table_and_rerun_on_change(
+        "column_uls_loads_table",
+        edited_uls,
+        uls_df,
+        COLUMN_ULS_LOAD_COLUMNS,
+    )
 
     with st.expander("Import Column/Pier SLS Loads from Excel / CSV", expanded=False):
         st.caption("Column/Pier SLS loads follow the same case-based import pattern as the accepted ULS table; no station column is used.")
@@ -1806,7 +1811,12 @@ def _render_column_load_tables(force_unit: str, moment_unit: str) -> None:
         key="column_sls_loads_editor",
     )
     edited_sls = _stringify_table(edited_sls, COLUMN_SLS_LOAD_COLUMNS)
-    st.session_state["column_sls_loads_table"] = edited_sls
+    _store_editor_table_and_rerun_on_change(
+        "column_sls_loads_table",
+        edited_sls,
+        sls_df,
+        COLUMN_SLS_LOAD_COLUMNS,
+    )
 
     legacy_editor = _column_workflow_tables_to_legacy_editor_table(edited_uls, edited_sls)
     st.session_state["loads_table"] = legacy_editor

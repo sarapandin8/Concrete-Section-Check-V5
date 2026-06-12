@@ -83,19 +83,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRESTRESS_DB_PATH = REPO_ROOT / "data" / "prestress_steel_database.csv"
 
 STEEL_TYPE_OPTIONS = ["wire", "strand", "prestressing_bar", "tendon_group", "custom"]
-INPUT_MODE_OPTIONS = ["Passive", "Pe_eff", "fpe"]
+JACKING_LOSS_INPUT_MODE = "Jacking + Total Loss %"
+LEGACY_JACKING_LOSS_INPUT_MODE = "Jacking Stress + Losses"
+INPUT_MODE_OPTIONS = ["Passive", "Pe_eff", "fpe", JACKING_LOSS_INPUT_MODE]
 INPUT_MODE_DISPLAY_LABELS = {
-    "Passive": "Passive — no prestress force",
-    "Pe_eff": "Pe_eff — enter effective force after losses (kN)",
-    "fpe": "fpe — enter effective stress after losses (MPa)",
+    "Passive": "Passive - no prestress force",
+    "Pe_eff": "Pe_eff - enter effective force after losses (kN)",
+    "fpe": "fpe - enter effective stress after losses (MPa)",
+    JACKING_LOSS_INPUT_MODE: "Jacking + Total Loss % - compute Pe_eff from fpj and total loss",
 }
 INPUT_MODE_EDITOR_OPTIONS = list(INPUT_MODE_DISPLAY_LABELS.values())
 LEGACY_INPUT_MODE_ALIASES = {
     "Effective Force Pe": "Pe_eff",
     "Effective Stress fpe": "fpe",
+    LEGACY_JACKING_LOSS_INPUT_MODE: JACKING_LOSS_INPUT_MODE,
     **{display_label: value for value, display_label in INPUT_MODE_DISPLAY_LABELS.items()},
 }
-LEGACY_INPUT_MODE_OPTIONS = ["Jacking Stress + Losses"]
+LEGACY_INPUT_MODE_OPTIONS = [LEGACY_JACKING_LOSS_INPUT_MODE]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
 
 PRESTRESS_COMPACT_EDITOR_COLUMNS = [
@@ -108,6 +112,8 @@ PRESTRESS_COMPACT_EDITOR_COLUMNS = [
     "Input Mode",
     "Pe_eff_kN",
     "fpe_MPa",
+    "fpj_ratio",
+    "loss_percent",
     "Bonded",
     "Count",
 ]
@@ -860,7 +866,7 @@ def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def _effective_prestress_columns() -> list[str]:
-    return ["Input Mode", "Pe_eff_kN", "fpe_MPa"]
+    return ["Input Mode", "Pe_eff_kN", "fpe_MPa", "fpj_ratio", "loss_percent"]
 
 
 def _product_row(product: str, prestress_db: pd.DataFrame) -> pd.Series | None:
@@ -1061,6 +1067,23 @@ def _sync_effective_inputs_for_row(normalized: pd.DataFrame, index: Any) -> None
         fpe_mpa = fpe_mpa if fpe_mpa is not None else 0.0
         normalized.at[index, "fpe_MPa"] = fpe_mpa
         normalized.at[index, "Pe_eff_kN"] = (area_mm2 * fpe_mpa / 1000.0) if area_mm2 and area_mm2 > 0 else None
+        return
+
+    if mode == JACKING_LOSS_INPUT_MODE:
+        fpu_mpa = _to_float(normalized.at[index, "fpu_MPa"] if "fpu_MPa" in normalized.columns else None)
+        fpj_ratio = _to_float(normalized.at[index, "fpj_ratio"] if "fpj_ratio" in normalized.columns else None)
+        loss_percent = _to_float(normalized.at[index, "loss_percent"] if "loss_percent" in normalized.columns else None)
+        fpj_ratio = 0.75 if fpj_ratio is None else fpj_ratio
+        loss_percent = 15.0 if loss_percent is None else loss_percent
+        normalized.at[index, "fpj_ratio"] = fpj_ratio
+        normalized.at[index, "loss_percent"] = loss_percent
+        if area_mm2 and area_mm2 > 0 and fpu_mpa and fpu_mpa > 0 and fpj_ratio >= 0.0 and 0.0 <= loss_percent <= 100.0:
+            fpe_mpa = fpj_ratio * fpu_mpa * (1.0 - loss_percent / 100.0)
+            normalized.at[index, "fpe_MPa"] = fpe_mpa
+            normalized.at[index, "Pe_eff_kN"] = area_mm2 * fpe_mpa / 1000.0
+        else:
+            normalized.at[index, "fpe_MPa"] = None
+            normalized.at[index, "Pe_eff_kN"] = None
 
 
 def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -1075,6 +1098,8 @@ def _normalize_prestress_table_for_display(table: pd.DataFrame, prestress_db: pd
         "Input Mode",
         "Pe_eff_kN",
         "fpe_MPa",
+        "fpj_ratio",
+        "loss_percent",
         "Strand Count",
         "Strand Diameter_mm",
         "Strand Area_mm2",
@@ -1136,8 +1161,9 @@ def normalize_prestress_table_for_effective_input_sync(table: pd.DataFrame, pres
     """Synchronize product defaults and effective prestress display fields.
 
     Product data controls area/material reference values. Input Mode controls
-    only the dependent Pe_eff/fpe display value; it never derives prestress
-    from product breaking load.
+    only the dependent Pe_eff/fpe display value. Jacking + Total Loss % derives
+    Pe_eff from fpu, area, fpj_ratio, and loss_percent; it never derives
+    prestress from product breaking load.
     """
 
     return _normalize_prestress_table_for_display(table, prestress_db)
@@ -4740,7 +4766,7 @@ def _resolve_initial_state(
     fpj_ratio = _to_float(row.get("fpj_ratio"))
     loss_percent = _to_float(row.get("loss_percent"))
     if fpu_mpa is None:
-        errors.append(f"Row {row_number}: fpu_MPa is required for Jacking Stress + Losses mode.")
+        errors.append(f"Row {row_number}: fpu_MPa is required for {JACKING_LOSS_INPUT_MODE} mode.")
     if fpj_ratio is None:
         errors.append(f"Row {row_number}: fpj_ratio must be numeric.")
     elif fpj_ratio < 0:
@@ -4764,6 +4790,13 @@ def _resolve_initial_state(
     if fpe_mpa > fpu_value:
         errors.append(f"Row {row_number}: effective stress after losses must not exceed fpu_MPa.")
         return 0.0, 0.0, 0.0, errors, warnings, info
+    if fpe_mpa > 0.75 * fpu_value:
+        warnings.append(
+            f"Row {row_number}: effective stress after total loss is greater than 0.75 x fpu_MPa; "
+            "verify jacking stress and total loss assumptions."
+        )
+    if fpe_mpa == 0:
+        warnings.append(f"Row {row_number}: {JACKING_LOSS_INPUT_MODE} mode produces zero effective prestress.")
     return area_mm2 * fpe_mpa, fpe_mpa, fpe_mpa / float(values["ep_mpa"]), errors, warnings, info
 
 
@@ -4958,6 +4991,7 @@ def _engineering_notes_html() -> str:
     notes = [
         "Choose Passive for non-prestressed steel contribution. Choose Pe_eff to enter effective force directly.",
         "Choose fpe to enter effective stress and compute Pe_eff from Area_mm2; Pe_eff is after selected losses.",
+        "Choose Jacking + Total Loss % to compute fpe from fpj_ratio x fpu and total loss percentage.",
         "Product breaking load is reference data only and is never used as Pe_eff.",
         "Duct ID is duct reference information and is not steel diameter.",
         "For tendon_group rows, Area_mm2 controls steel area; Eq Steel Dia_mm is display and preview information only.",
@@ -4972,6 +5006,7 @@ def _input_mode_guide_html() -> str:
         ("Passive", "No effective prestress force. The steel is included as passive high-strength steel only."),
         ("Pe_eff", "Enter effective prestress force in kN after losses. fpe is computed from Pe_eff / Area."),
         ("fpe", "Enter effective prestress stress in MPa after losses. Pe_eff is computed from Area x fpe."),
+        ("Jacking + Total Loss %", "Enter fpj_ratio and total loss percentage. Pe_eff is computed from Area x fpj_ratio x fpu x (1 - loss%)."),
     ]
     card_html = "".join(
         '<div class="cpmm-prestress-mode-card">'
@@ -5067,7 +5102,7 @@ def _build_prestress_summary_metrics(
         PrestressMetric("Analysis readiness", "Yes" if valid_for_analysis else "No", status="ready" if valid_for_analysis else "danger", strong=True),
         PrestressMetric("Tendon groups", f"{tendon_group_count:,}", detail=f"Strand/PT bars: {strand_pt_count:,}"),
         PrestressMetric("Bonded state", f"{bonded_count:,} / {unbonded_count:,}", detail="bonded / unbonded", status="warning" if unbonded_count else "neutral"),
-        PrestressMetric("Input modes", "See table", detail="Passive / Pe_eff / fpe"),
+        PrestressMetric("Input modes", "See table", detail="Passive / Pe_eff / fpe / Jacking + loss"),
         PrestressMetric("Validation", f"{error_count:,} error(s)", detail=f"{warning_count:,} warning(s)", status="danger" if error_count else ("warning" if warning_count else "ready"), strong=bool(error_count)),
     ]
 
@@ -5499,18 +5534,31 @@ def render_prestress_page() -> None:
                         "Input Mode": st.column_config.SelectboxColumn(
                             "Input Mode",
                             options=INPUT_MODE_EDITOR_OPTIONS,
-                            help="Choose how effective prestress is entered. The app stores a canonical mode internally and computes the dependent Pe_eff/fpe value after editing.",
+                            help="Choose how effective prestress is entered. Jacking + Total Loss % computes fpe and Pe_eff from fpj_ratio, fpu, area, and total loss.",
                         ),
                         "Pe_eff_kN": st.column_config.NumberColumn(
                             "Pe_eff_kN",
-                            help="Effective prestress force after losses. Used only when Input Mode = Pe_eff; fpe is then computed from Pe_eff / Area.",
+                            help="Effective prestress force after losses. Enter directly in Pe_eff mode; otherwise this is computed from fpe or jacking/loss inputs.",
                         ),
                         "fpe_MPa": st.column_config.NumberColumn(
                             "fpe_MPa",
-                            help="Effective prestress stress after losses. Used only when Input Mode = fpe; Pe_eff is then computed from Area x fpe.",
+                            help="Effective prestress stress after losses. Enter directly in fpe mode; otherwise this is computed from Pe_eff or jacking/loss inputs.",
                         ),
-                        "fpj_ratio": st.column_config.NumberColumn("fpj_ratio"),
-                        "loss_percent": st.column_config.NumberColumn("loss_percent"),
+                        "fpj_ratio": st.column_config.NumberColumn(
+                            "fpj_ratio",
+                            min_value=0.0,
+                            step=0.01,
+                            format="%.3f",
+                            help="Jacking stress ratio fpj/fpu. Default 0.75. Used only by Jacking + Total Loss % mode.",
+                        ),
+                        "loss_percent": st.column_config.NumberColumn(
+                            "loss_percent",
+                            min_value=0.0,
+                            max_value=100.0,
+                            step=1.0,
+                            format="%.1f",
+                            help="Total prestress loss percentage from jacking stress to effective stress. Used only by Jacking + Total Loss % mode.",
+                        ),
                         "Bonded": st.column_config.CheckboxColumn("Bonded"),
                         "Count": st.column_config.NumberColumn("Count", min_value=1, step=1),
                         "Strand Count": st.column_config.NumberColumn("Strand Count", disabled=True),

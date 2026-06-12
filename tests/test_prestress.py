@@ -9,6 +9,7 @@ from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
     INPUT_MODE_OPTIONS,
     INPUT_MODE_DISPLAY_LABELS,
+    JACKING_LOSS_INPUT_MODE,
     PRESTRESS_COMPACT_EDITOR_COLUMNS,
     PrestressParseResult,
     TENDON_PRODUCT_CREATION_MODES,
@@ -163,6 +164,20 @@ def test_jacking_stress_plus_losses() -> None:
     assert element.pe_eff_n == pytest.approx(100.0 * expected_fpe)
 
 
+def test_jacking_total_loss_mode_converts_to_effective_prestress() -> None:
+    result = prestress_elements_from_dataframe(
+        pd.DataFrame([_row(**{"Input Mode": JACKING_LOSS_INPUT_MODE, "fpu_MPa": 1860.0, "fpj_ratio": 0.75, "loss_percent": 15.0})]),
+        load_prestress_steel_database(),
+    )
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    element = result.elements[0]
+    assert not result.errors
+    assert element.initial_stress_mpa == pytest.approx(expected_fpe)
+    assert element.initial_strain == pytest.approx(expected_fpe / 195000.0)
+    assert element.pe_eff_n == pytest.approx(100.0 * expected_fpe)
+
+
 def test_fpy_greater_than_or_equal_to_fpu_is_rejected() -> None:
     with pytest.raises(ValueError, match="fpy_mpa"):
         PrestressElement(
@@ -258,7 +273,7 @@ def test_product_creation_modes_exclude_manual_custom_table() -> None:
 
 
 def test_effective_input_mode_options_are_user_facing_modes() -> None:
-    assert INPUT_MODE_OPTIONS == ["Passive", "Pe_eff", "fpe"]
+    assert INPUT_MODE_OPTIONS == ["Passive", "Pe_eff", "fpe", JACKING_LOSS_INPUT_MODE]
 
 
 
@@ -300,6 +315,32 @@ def test_input_mode_editor_labels_are_user_facing_but_normalize_to_canonical_val
     assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0)
 
 
+def test_jacking_total_loss_editor_label_normalizes_to_canonical_mode() -> None:
+    editor_table = _prestress_table_for_editor(pd.DataFrame([_row(**{"Input Mode": JACKING_LOSS_INPUT_MODE})]))
+
+    assert editor_table.loc[0, "Input Mode"] == INPUT_MODE_DISPLAY_LABELS[JACKING_LOSS_INPUT_MODE]
+
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame(
+            [
+                _row(
+                    **{
+                        "Input Mode": INPUT_MODE_DISPLAY_LABELS[JACKING_LOSS_INPUT_MODE],
+                        "Area_mm2": 1680.0,
+                        "fpu_MPa": 1860.0,
+                    }
+                )
+            ]
+        ),
+        load_prestress_steel_database(),
+    )
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    assert normalized.loc[0, "Input Mode"] == JACKING_LOSS_INPUT_MODE
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(expected_fpe)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0 * expected_fpe / 1000.0)
+
+
 def test_note_is_not_shown_in_compact_prestress_editor_columns() -> None:
     assert "Count" in PRESTRESS_COMPACT_EDITOR_COLUMNS
     assert "Note" not in PRESTRESS_COMPACT_EDITOR_COLUMNS
@@ -333,6 +374,44 @@ def test_effective_input_sync_fpe_mode_computes_pe_eff() -> None:
 
     assert normalized.loc[0, "fpe_MPa"] == pytest.approx(1100.0)
     assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1848.0)
+
+
+def test_effective_input_sync_jacking_total_loss_mode_computes_pe_eff() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame(
+            [
+                _row(
+                    **{
+                        "Input Mode": JACKING_LOSS_INPUT_MODE,
+                        "Area_mm2": 1680.0,
+                        "fpu_MPa": 1860.0,
+                        "Pe_eff_kN": 0.0,
+                        "fpe_MPa": 0.0,
+                    }
+                )
+            ]
+        ),
+        load_prestress_steel_database(),
+    )
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    assert normalized.loc[0, "Input Mode"] == JACKING_LOSS_INPUT_MODE
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(expected_fpe)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(1680.0 * expected_fpe / 1000.0)
+
+
+def test_effective_input_sync_tendon_group_jacking_mode_uses_area_and_fpu_not_breaking_load() -> None:
+    normalized = normalize_prestress_table_for_effective_input_sync(
+        pd.DataFrame([_row(Product="6-25", **{"Steel Type": "tendon_group", "Input Mode": JACKING_LOSS_INPUT_MODE, "Pe_eff_kN": 1.0, "fpe_MPa": 1.0})]),
+        load_prestress_steel_database(),
+    )
+
+    expected_fpe = 1860.0 * 0.75 * 0.85
+    assert normalized.loc[0, "Area_mm2"] == pytest.approx(3500.0)
+    assert normalized.loc[0, "Breaking Load_kN"] == pytest.approx(6500.0)
+    assert normalized.loc[0, "fpe_MPa"] == pytest.approx(expected_fpe)
+    assert normalized.loc[0, "Pe_eff_kN"] == pytest.approx(3500.0 * expected_fpe / 1000.0)
+    assert normalized.loc[0, "Pe_eff_kN"] != pytest.approx(normalized.loc[0, "Breaking Load_kN"])
 
 
 def test_effective_input_sync_product_area_change_preserves_pe_eff_and_recomputes_fpe() -> None:

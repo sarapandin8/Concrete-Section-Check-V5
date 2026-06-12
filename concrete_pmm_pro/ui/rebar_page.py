@@ -908,7 +908,12 @@ def _normalize_shear_reinforcement_table(edited_df: pd.DataFrame, previous_df: p
     return table
 
 
-def _shear_reinforcement_preview_dataframe(df: pd.DataFrame, rebar_db: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
+def _shear_reinforcement_preview_dataframe(
+    df: pd.DataFrame,
+    rebar_db: pd.DataFrame,
+    *,
+    allow_zero_length_reference: bool = False,
+) -> tuple[pd.DataFrame, list[str], list[str]]:
     table = _ensure_shear_reinforcement_columns(df)
     rows: list[dict[str, object]] = []
     errors: list[str] = []
@@ -931,7 +936,9 @@ def _shear_reinforcement_preview_dataframe(df: pd.DataFrame, rebar_db: pd.DataFr
         row_errors: list[str] = []
         if x0 is None or x1 is None:
             row_errors.append("x start/end must be numeric")
-        elif x1 <= x0:
+        elif allow_zero_length_reference and x1 < x0:
+            row_errors.append("reference end must be greater than or equal to reference start")
+        elif not allow_zero_length_reference and x1 <= x0:
             row_errors.append("x end must be greater than x start")
         if bar_size not in SHEAR_STIRRUP_BAR_OPTIONS:
             row_errors.append("bar size must be DB10, DB12, DB16, DB20, or DB25")
@@ -1388,7 +1395,11 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
         st.session_state["column_pier_transverse_reinforcement_editor_revision"] = 0
 
     previous = st.session_state.get(COLUMN_PIER_TRANSVERSE_TABLE_KEY)
-    preview_df, preview_errors, preview_warnings = _shear_reinforcement_preview_dataframe(pd.DataFrame(previous), rebar_db)
+    preview_df, preview_errors, preview_warnings = _shear_reinforcement_preview_dataframe(
+        pd.DataFrame(previous),
+        rebar_db,
+        allow_zero_length_reference=True,
+    )
     active_rebars = list(st.session_state.get("rebars", []) or [])
     st.markdown(_strip_html(_column_pier_transverse_readiness_cards(pd.DataFrame(previous), settings, len(active_rebars), preview_errors)), unsafe_allow_html=True)
     st.info(
@@ -1429,7 +1440,11 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
     st.session_state[COLUMN_PIER_TRANSVERSE_TABLE_KEY] = normalized
     _store_column_pier_transverse_metadata(normalized)
 
-    preview_df, errors, warnings = _shear_reinforcement_preview_dataframe(normalized, rebar_db)
+    preview_df, errors, warnings = _shear_reinforcement_preview_dataframe(
+        normalized,
+        rebar_db,
+        allow_zero_length_reference=True,
+    )
     if settings.get("closed_tie_layout") == "Open ties - shear only review":
         warnings.append("Open ties are not accepted as torsion transverse reinforcement; torsion must remain REVIEW until closed ties/hoops or spiral reinforcement are defined.")
     if settings.get("torsion_core_basis") == "Manual core dimensions" and not (settings.get("manual_core_width_mm") and settings.get("manual_core_depth_mm")):

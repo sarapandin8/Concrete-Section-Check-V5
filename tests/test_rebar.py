@@ -359,6 +359,26 @@ def test_column_pier_legacy_three_region_template_collapses_to_control_section()
     assert "legacy three-region template" in str(collapsed.iloc[0]["Note"])
 
 
+def test_column_pier_control_section_allows_zero_length_reference() -> None:
+    rebar_db = load_rebar_database()
+    table = _default_column_pier_transverse_reinforcement_table()
+    table.loc[0, "Active"] = True
+
+    preview, errors, warnings = _shear_reinforcement_preview_dataframe(
+        table,
+        rebar_db,
+        allow_zero_length_reference=True,
+    )
+
+    assert errors == []
+    assert warnings == []
+    assert len(preview) == 1
+    assert preview.iloc[0]["x start (m)"] == pytest.approx(0.0)
+    assert preview.iloc[0]["x end (m)"] == pytest.approx(0.0)
+    avs_column = next(column for column in preview.columns if str(column).startswith("Av/s") and "/mm)" in str(column))
+    assert preview.iloc[0][avs_column] != "-"
+
+
 def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_al() -> None:
     table = _default_column_pier_transverse_reinforcement_table()
     table["Active"] = True

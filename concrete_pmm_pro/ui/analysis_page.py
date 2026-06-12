@@ -8813,6 +8813,11 @@ def _render_column_pier_shear_guarded_workspace() -> None:
             "Governing D/C value",
         ]
         st.dataframe(shear_df[display_columns], use_container_width=True, hide_index=True)
+        st.error(
+            "Seismic confinement review: if this column/pier is located in a seismic zone, plastic-hinge region, or column-base region, "
+            "provide special transverse reinforcement per the governing code. The shear result above uses the Control section row only "
+            "and does not certify seismic confinement detailing."
+        )
     with st.expander("ACI shear audit / method details", expanded=False):
         if shear_df.empty:
             st.info("Audit rows are not available until the section, material, active Vux/Vuy demand, and active transverse reinforcement are ready.")

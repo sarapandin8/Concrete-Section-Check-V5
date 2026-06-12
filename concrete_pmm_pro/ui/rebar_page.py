@@ -1442,6 +1442,58 @@ def _render_column_pier_seismic_spacing_advisor(
             st.rerun()
 
 
+def _column_pier_transverse_preview_with_seismic_advisor(
+    preview_df: pd.DataFrame,
+    settings: dict[str, Any],
+    table: pd.DataFrame,
+    rebar_db: pd.DataFrame,
+) -> pd.DataFrame:
+    """Append a non-capacity seismic advisor row to the Column/Pier preview.
+
+    The returned row is display-only.  It is not stored in the transverse
+    reinforcement table and is not read by shear/torsion analysis unless the
+    engineer explicitly applies or copies the suggested spacing into the
+    Control section row.
+    """
+
+    seismic_detailing = str(settings.get("seismic_detailing") or COLUMN_PIER_SEISMIC_DETAILING_DEFAULT)
+    if seismic_detailing != "ACI 318 special seismic confinement advisor":
+        return preview_df
+
+    normalized = _ensure_shear_reinforcement_columns(pd.DataFrame(table))
+    base_row = normalized.iloc[0] if not normalized.empty else pd.Series(dtype=object)
+    geometry = st.session_state.get("section_geometry")
+    section_min_dimension_mm = _section_outer_min_dimension_mm(geometry if isinstance(geometry, SectionGeometry) else None)
+    min_bar_diameter_mm = _minimum_active_rebar_diameter_from_state(rebar_db)
+    hx_mm = _to_float(settings.get("seismic_hx_mm")) or COLUMN_PIER_SEISMIC_HX_DEFAULT_MM
+    advisor = _aci_special_seismic_spacing_advisor(
+        section_min_dimension_mm=section_min_dimension_mm,
+        min_longitudinal_bar_diameter_mm=min_bar_diameter_mm,
+        hx_mm=hx_mm,
+    )
+
+    spacing = advisor.suggested_spacing_mm
+    bar_size = str(base_row.get("Bar Size") or DEFAULT_SHEAR_STIRRUP_BAR).strip()
+    legs = _to_count(base_row.get("Legs")) or DEFAULT_SHEAR_STIRRUP_LEGS
+    fy = _to_float(base_row.get("fy_MPa")) or DEFAULT_SHEAR_STIRRUP_FY_MPA
+    area = _shear_stirrup_bar_area_mm2(bar_size, rebar_db)
+    avs_mm2_per_mm = float(area) * float(legs) / float(spacing) if area is not None and spacing is not None and spacing > 0.0 else None
+    advisor_row = {
+        "Active": False,
+        "Zone": "Recommended seismic spacing (ACI advisor)",
+        "x start (m)": "-",
+        "x end (m)": "-",
+        "Stirrup": f"{bar_size} × {legs} legs @ {spacing:.0f} mm" if spacing is not None else f"{bar_size} × {legs} legs @ -",
+        "fy (MPa)": fy,
+        "Av/s (mm²/mm)": avs_mm2_per_mm if avs_mm2_per_mm is not None else "-",
+        "Av/s (mm²/m)": avs_mm2_per_mm * 1000.0 if avs_mm2_per_mm is not None else "-",
+        "Note": "Advisor only / REVIEW. Shear and torsion analysis uses the Control section row only unless this spacing is applied to Row 1.",
+    }
+    if preview_df.empty:
+        return pd.DataFrame([advisor_row])
+    return pd.concat([preview_df, pd.DataFrame([advisor_row])], ignore_index=True)
+
+
 def _shear_depth_settings_from_state() -> dict[str, Any]:
     """Return Beam/Girder effective shear-depth settings stored in metadata.
 
@@ -1741,11 +1793,14 @@ def _render_column_pier_transverse_reinforcement_layout(rebar_db: pd.DataFrame) 
             st.success("Column/Pier control-section transverse reinforcement input is ready for the current shear/torsion preview milestones.")
 
     st.markdown("##### Control-section transverse reinforcement preview")
-    st.caption("This preview computes provided Av/s from the control-section row. It does not final-certify shear or torsion capacity.")
-    if preview_df.empty:
+    st.caption("Row 1 is the provided Control section used by shear/torsion analysis. Any seismic advisor row is display-only until applied to Row 1.")
+    display_preview_df = _column_pier_transverse_preview_with_seismic_advisor(preview_df, settings, normalized, rebar_db)
+    if display_preview_df.empty:
         st.info("No transverse reinforcement control section is defined yet.")
     else:
-        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_preview_df, use_container_width=True, hide_index=True)
+        if str(settings.get("seismic_detailing") or "") == "ACI 318 special seismic confinement advisor":
+            st.warning("Seismic advisor row is not used by Analysis. Shear and torsion calculations use the Control section row only unless the suggested spacing is applied to Row 1.")
 
     with st.expander("Column/Pier shear and torsion workflow notes", expanded=False):
         st.write("- Current Column/Pier shear and torsion previews use the active control-section row as the provided transverse reinforcement source.")

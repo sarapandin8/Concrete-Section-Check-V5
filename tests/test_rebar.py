@@ -413,6 +413,17 @@ def test_column_pier_seismic_options_keep_aashto_as_manual_review_route() -> Non
     assert "AASHTO LRFD seismic bridge column - manual review" in COLUMN_PIER_SEISMIC_DETAILING_OPTIONS
 
 
+def test_column_pier_preview_keeps_seismic_advisor_row_display_only() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source = (repo_root / "concrete_pmm_pro" / "ui" / "rebar_page.py").read_text(encoding="utf-8")
+
+    assert "Recommended seismic spacing (ACI advisor)" in source
+    assert "Advisor only / REVIEW" in source
+    assert "Shear and torsion calculations use the Control section row only" in source
+
+
 def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_al() -> None:
     table = _default_column_pier_transverse_reinforcement_table()
     table["Active"] = True

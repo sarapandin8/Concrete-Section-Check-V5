@@ -40,6 +40,7 @@ from concrete_pmm_pro.data.prestress_tendon_products import (
     tendon_product_display_label,
     tendon_product_options,
 )
+from concrete_pmm_pro.geometry.rebar_layout import generate_perimeter_rebar_layout
 from concrete_pmm_pro.geometry.summary import to_shapely_polygon
 from concrete_pmm_pro.serviceability.section_properties import compute_gross_section_properties
 from concrete_pmm_pro.serviceability.girder_prestress_losses import (
@@ -109,8 +110,9 @@ LEGACY_INPUT_MODE_ALIASES = {
 LEGACY_INPUT_MODE_OPTIONS = [LEGACY_JACKING_LOSS_INPUT_MODE]
 TENDON_PRODUCT_CREATION_MODES = ["Standard tendon product", "Custom tendon"]
 MANUAL_PRESTRESS_LAYOUT_METHOD = "Manual table"
+AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD = "Auto perimeter layout"
 PLANNED_PRESTRESS_LAYOUT_METHODS = ["Linear layout", "Circular layout"]
-PRESTRESS_LAYOUT_METHOD_OPTIONS = [MANUAL_PRESTRESS_LAYOUT_METHOD, *PLANNED_PRESTRESS_LAYOUT_METHODS]
+PRESTRESS_LAYOUT_METHOD_OPTIONS = [MANUAL_PRESTRESS_LAYOUT_METHOD, AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD, *PLANNED_PRESTRESS_LAYOUT_METHODS]
 PRESTRESS_LAYOUT_METHOD_STATE_KEY = "prestress_layout_method"
 PRESTRESS_LAYOUT_METHOD_NOTICE_KEY = "prestress_layout_method_planned_notice"
 PRESTRESS_FORCE_INPUT_METHOD_STATE_KEY = "prestress_force_input_method"
@@ -532,6 +534,20 @@ class PrestressParseResult:
 
 
 @dataclass(frozen=True)
+class AutoPrestressLayoutResult:
+    table: pd.DataFrame
+    errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    info: tuple[str, ...] = ()
+    perimeter_length_mm: float | None = None
+    actual_spacing_mm: float | None = None
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+@dataclass(frozen=True)
 class PrestressMetric:
     title: str
     value: str
@@ -906,6 +922,149 @@ def _apply_force_input_method_to_active_rows(table: pd.DataFrame, input_mode: An
             blank_mask = active_mask & applied[column].map(_is_blank)
             applied.loc[blank_mask, column] = default
     return applied
+
+
+def _auto_prestress_layout_empty_table() -> pd.DataFrame:
+    columns = [
+        "Active",
+        "Label",
+        "Steel Type",
+        "Product",
+        "x_mm",
+        "y_mm",
+        "Area_mm2",
+        "Diameter_mm",
+        "Eq Steel Dia_mm",
+        "fpy_MPa",
+        "fpu_MPa",
+        "Ep_MPa",
+        "Input Mode",
+        "Pe_eff_kN",
+        "fpe_MPa",
+        "fpj_ratio",
+        "loss_percent",
+        "Bonded",
+        "Count",
+        "Strand Count",
+        "Breaking Load_kN",
+        "Duct Type",
+        "Duct ID_mm",
+        "Note",
+    ]
+    return pd.DataFrame(columns=columns)
+
+
+def _auto_layout_product_diameter_mm(product: str, prestress_db: pd.DataFrame) -> float | None:
+    tendon_product = get_tendon_product(product)
+    if tendon_product is not None:
+        return equivalent_steel_diameter_mm(tendon_product.tendon_area_mm2)
+    database_row = _product_row(product, prestress_db)
+    if database_row is None:
+        return None
+    diameter = _to_float(database_row.get("diameter_mm"))
+    if diameter is not None and diameter > 0.0:
+        return diameter
+    area = _to_float(database_row.get("area_mm2"))
+    return equivalent_steel_diameter_mm(area) if area is not None and area > 0.0 else None
+
+
+def generate_auto_perimeter_prestress_layout(
+    geometry: SectionGeometry | None,
+    prestress_db: pd.DataFrame,
+    *,
+    product: str,
+    edge_offset_mm: float = 75.0,
+    target_spacing_mm: float = 150.0,
+    min_elements: int = 4,
+    label_prefix: str = "PS-AUTO-",
+    input_mode: str = "Passive",
+    bonded: bool = True,
+) -> AutoPrestressLayoutResult:
+    """Generate section-level prestress rows along the inward offset perimeter."""
+
+    empty_table = _auto_prestress_layout_empty_table()
+    product_label = "" if _is_blank(product) else str(product).strip()
+    mode = _normalize_input_mode_label(input_mode)
+    errors: list[str] = []
+    warnings: list[str] = []
+    info: list[str] = []
+
+    if not product_label or product_label == "Custom":
+        return AutoPrestressLayoutResult(
+            table=empty_table,
+            errors=("Select a catalog prestress product before generating an auto perimeter prestress layout.",),
+        )
+    if mode not in INPUT_MODE_OPTIONS:
+        return AutoPrestressLayoutResult(
+            table=empty_table,
+            errors=(f"Prestress input mode must be one of {', '.join(INPUT_MODE_OPTIONS)}.",),
+        )
+    diameter_mm = _auto_layout_product_diameter_mm(product_label, prestress_db)
+    if diameter_mm is None or diameter_mm <= 0.0:
+        return AutoPrestressLayoutResult(
+            table=empty_table,
+            errors=(f"Could not resolve a positive equivalent diameter for product '{product_label}'.",),
+        )
+
+    perimeter_result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size=product_label,
+        diameter_mm=float(diameter_mm),
+        material="Prestress",
+        edge_offset_mm=float(edge_offset_mm),
+        target_spacing_mm=float(target_spacing_mm),
+        min_bars=int(min_elements),
+        label_prefix="PS",
+    )
+    if perimeter_result.errors:
+        return AutoPrestressLayoutResult(
+            table=empty_table,
+            errors=tuple(perimeter_result.errors),
+            warnings=tuple(perimeter_result.warnings),
+            info=tuple(perimeter_result.info),
+            perimeter_length_mm=perimeter_result.perimeter_length_mm,
+            actual_spacing_mm=perimeter_result.actual_spacing_mm,
+        )
+
+    prefix = str(label_prefix or "PS-AUTO-").strip() or "PS-AUTO-"
+    rows: list[dict[str, Any]] = []
+    for index, source_row in enumerate(perimeter_result.table.to_dict(orient="records"), start=1):
+        row = _blank_prestress_row(f"{prefix}{index:02d}")
+        row.update(
+            {
+                "Active": True,
+                "Product": product_label,
+                "x_mm": source_row.get("x_mm"),
+                "y_mm": source_row.get("y_mm"),
+                "Input Mode": mode,
+                "Bonded": bool(bonded),
+                "Count": 1,
+                "Note": (
+                    f"Auto perimeter prestress: offset={edge_offset_mm:g} mm, target spacing={target_spacing_mm:g} mm, "
+                    f"product={product_label}, mode={mode}. Review cover, spacing, ducts, anchorage, and detailing before final design."
+                ),
+            }
+        )
+        rows.append(row)
+
+    normalized = normalize_prestress_table_for_effective_input_sync(pd.DataFrame(rows, columns=empty_table.columns), prestress_db)
+    info.extend(perimeter_result.info)
+    info.append(
+        f"Generated {len(normalized.index):,} prestress row(s) along an inward offset perimeter; no manual rows are changed until Apply is pressed."
+    )
+    warnings.extend(perimeter_result.warnings)
+    if get_tendon_product(product_label) is not None:
+        warnings.append(
+            "Tendon-group auto layout places one tendon group at each generated point; duct spacing, anchorage zones, and constructability require engineering review."
+        )
+    return AutoPrestressLayoutResult(
+        table=normalized,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+        info=tuple(info),
+        perimeter_length_mm=perimeter_result.perimeter_length_mm,
+        actual_spacing_mm=perimeter_result.actual_spacing_mm,
+    )
 
 
 def _prestress_table_for_editor(table: pd.DataFrame) -> pd.DataFrame:
@@ -5362,6 +5521,123 @@ def _render_tendon_product_tools() -> None:
         st.success(f"Added custom tendon {product.label}. Pe_eff remains user-controlled.")
 
 
+def _default_auto_prestress_product_option(product_options: list[str]) -> int:
+    for preferred in ("15.2mm strand", "12.7mm strand", "PS Bar 32 - 1080/1230"):
+        if preferred in product_options:
+            return product_options.index(preferred)
+    for index, option in enumerate(product_options):
+        if option and option != "Custom":
+            return index
+    return 0
+
+
+def _render_auto_perimeter_prestress_controls(
+    prestress_db: pd.DataFrame,
+    geometry: SectionGeometry | None,
+    product_options: list[str],
+) -> AutoPrestressLayoutResult:
+    st.markdown("##### Auto perimeter prestress layout")
+    st.caption(
+        "Preview prestressing steel points offset from the current section perimeter, then append or replace the generated rows in the Prestress table. "
+        "Manual rows are not changed unless you press an Apply button."
+    )
+    control_cols = st.columns([1.15, 0.85, 0.85, 0.75], gap="small")
+    with control_cols[0]:
+        product = st.selectbox(
+            "Prestress product",
+            product_options,
+            index=_default_auto_prestress_product_option(product_options),
+            key="prestress_auto_perimeter_product",
+            help="Select a catalog strand, PT/PS bar, or tendon product. Custom rows are not generated automatically in this milestone.",
+        )
+    with control_cols[1]:
+        edge_offset_mm = st.number_input(
+            "Center offset (mm)",
+            min_value=1.0,
+            value=75.0,
+            step=5.0,
+            key="prestress_auto_perimeter_edge_offset_mm",
+        )
+    with control_cols[2]:
+        target_spacing_mm = st.number_input(
+            "Target spacing (mm)",
+            min_value=1.0,
+            value=150.0,
+            step=10.0,
+            key="prestress_auto_perimeter_target_spacing_mm",
+        )
+    with control_cols[3]:
+        min_elements = st.number_input(
+            "Minimum points",
+            min_value=1,
+            value=4,
+            step=1,
+            key="prestress_auto_perimeter_min_elements",
+        )
+
+    detail_cols = st.columns([0.9, 1.2, 0.65], gap="small")
+    with detail_cols[0]:
+        label_prefix = st.text_input("Label prefix", value="PS-AUTO-", key="prestress_auto_perimeter_label_prefix")
+    with detail_cols[1]:
+        input_mode = st.selectbox(
+            "Generated force input mode",
+            INPUT_MODE_EDITOR_OPTIONS,
+            index=INPUT_MODE_EDITOR_OPTIONS.index(JACKING_LOSS_INPUT_MODE) if JACKING_LOSS_INPUT_MODE in INPUT_MODE_EDITOR_OPTIONS else 0,
+            key="prestress_auto_perimeter_input_mode",
+        )
+    with detail_cols[2]:
+        bonded = st.checkbox("Bonded", value=True, key="prestress_auto_perimeter_bonded")
+
+    result = generate_auto_perimeter_prestress_layout(
+        geometry,
+        prestress_db,
+        product=product,
+        edge_offset_mm=float(edge_offset_mm),
+        target_spacing_mm=float(target_spacing_mm),
+        min_elements=int(min_elements),
+        label_prefix=label_prefix,
+        input_mode=input_mode,
+        bonded=bool(bonded),
+    )
+
+    for error in result.errors:
+        st.error(f"ERROR: {error}")
+    for warning in result.warnings:
+        st.warning(f"WARNING: {warning}")
+    for info in result.info:
+        st.info(f"INFO: {info}")
+
+    if result.ok and not result.table.empty:
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Generated points", f"{len(result.table.index):,}")
+        metric_cols[1].metric("Actual spacing", f"{(result.actual_spacing_mm or 0.0):.1f} mm")
+        metric_cols[2].metric("Offset", f"{edge_offset_mm:.1f} mm")
+        total_pe = float(pd.to_numeric(result.table.get("Pe_eff_kN", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum())
+        metric_cols[3].metric("Total Pe_eff", f"{total_pe:,.1f} kN")
+        st.dataframe(
+            result.table[["Active", "Label", "Product", "x_mm", "y_mm", "Area_mm2", "Input Mode", "Pe_eff_kN", "fpe_MPa", "Bonded", "Count", "Note"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+        apply_cols = st.columns(2, gap="medium")
+        with apply_cols[0]:
+            if st.button("Append generated rows", type="primary", use_container_width=True, key="prestress_auto_append_perimeter_layout"):
+                current = pd.DataFrame(st.session_state.get("prestress_table", pd.DataFrame()))
+                combined = pd.concat([current, result.table], ignore_index=True, sort=False)
+                st.session_state["prestress_table"] = normalize_prestress_table_for_effective_input_sync(combined, prestress_db)
+                st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+                st.rerun()
+        with apply_cols[1]:
+            if st.button("Replace table with generated rows", use_container_width=True, key="prestress_auto_replace_perimeter_layout"):
+                st.session_state["prestress_table"] = normalize_prestress_table_for_effective_input_sync(result.table, prestress_db)
+                st.session_state["prestress_editor_revision"] = int(st.session_state.get("prestress_editor_revision", 0)) + 1
+                st.rerun()
+    else:
+        st.caption("No generated prestress perimeter layout is available yet.")
+
+    return result
+
+
 def _render_validation(
     result: PrestressParseResult,
     geometry_errors: list[str],
@@ -5551,9 +5827,13 @@ def render_prestress_page() -> None:
                     "Use the table row Input Mode to define Passive, Pe_eff, fpe, or Jacking + Total Loss %. "
                     f"Active layout method: {layout_method}."
                 )
+                product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
 
                 with st.expander("Tendon Product Creation / product database", expanded=False):
                     _render_tendon_product_tools()
+
+                if layout_method == AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD:
+                    _render_auto_perimeter_prestress_controls(prestress_db, st.session_state.get("section_geometry"), product_options)
 
                 st.markdown("#### Advanced Prestress Table")
                 st.markdown(
@@ -5571,7 +5851,6 @@ def render_prestress_page() -> None:
                     unsafe_allow_html=True,
                 )
                 st.markdown(_input_mode_guide_html(), unsafe_allow_html=True)
-                product_options = _product_options_for_table(prestress_db, pd.DataFrame(st.session_state["prestress_table"]))
                 st.markdown(_product_selection_guide_html(product_options), unsafe_allow_html=True)
                 st.markdown("##### Prestress force input method")
                 method_col, apply_col = st.columns([0.74, 0.26], gap="medium")

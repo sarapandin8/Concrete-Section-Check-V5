@@ -7,6 +7,7 @@ from concrete_pmm_pro.core.models import PrestressElement
 from concrete_pmm_pro.data.prestress_tendon_products import apply_tendon_product_to_row, make_custom_tendon_product
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
 from concrete_pmm_pro.ui.prestress_page import (
+    AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD,
     INPUT_MODE_OPTIONS,
     INPUT_MODE_DISPLAY_LABELS,
     JACKING_LOSS_INPUT_MODE,
@@ -19,7 +20,9 @@ from concrete_pmm_pro.ui.prestress_page import (
     _apply_force_input_method_to_active_rows,
     _build_prestress_status_rows,
     _build_prestress_summary_metrics,
+    _default_auto_prestress_product_option,
     _engineering_notes_html,
+    generate_auto_perimeter_prestress_layout,
     _is_planned_prestress_layout_method,
     _normalize_prestress_table_for_display,
     _planned_prestress_layout_message,
@@ -283,9 +286,15 @@ def test_effective_input_mode_options_are_user_facing_modes() -> None:
 
 
 def test_prestress_layout_methods_keep_only_manual_as_implemented_workflow() -> None:
-    assert PRESTRESS_LAYOUT_METHOD_OPTIONS == [MANUAL_PRESTRESS_LAYOUT_METHOD, "Linear layout", "Circular layout"]
+    assert PRESTRESS_LAYOUT_METHOD_OPTIONS == [
+        MANUAL_PRESTRESS_LAYOUT_METHOD,
+        AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD,
+        "Linear layout",
+        "Circular layout",
+    ]
     assert PLANNED_PRESTRESS_LAYOUT_METHODS == ["Linear layout", "Circular layout"]
     assert not _is_planned_prestress_layout_method(MANUAL_PRESTRESS_LAYOUT_METHOD)
+    assert not _is_planned_prestress_layout_method(AUTO_PERIMETER_PRESTRESS_LAYOUT_METHOD)
     assert _is_planned_prestress_layout_method("Linear layout")
     assert _is_planned_prestress_layout_method("Circular layout")
 
@@ -296,6 +305,64 @@ def test_planned_prestress_layout_message_routes_user_back_to_manual_table() -> 
     assert "Linear layout is planned" in message
     assert "Manual table remains the active prestress input workflow" in message
     assert "not used for analysis yet" in message
+
+
+def test_default_auto_prestress_product_prefers_single_strand() -> None:
+    options = ["", "Custom", "Tendon 6-12", "15.2mm strand", "PS Bar 32 - 1080/1230"]
+
+    assert _default_auto_prestress_product_option(options) == options.index("15.2mm strand")
+
+
+def test_auto_perimeter_prestress_layout_generates_jacking_rows() -> None:
+    geometry = rectangle(width_mm=600.0, height_mm=600.0)
+    db = load_prestress_steel_database()
+
+    result = generate_auto_perimeter_prestress_layout(
+        geometry,
+        db,
+        product="15.2mm strand",
+        edge_offset_mm=75.0,
+        target_spacing_mm=150.0,
+        min_elements=4,
+        label_prefix="PS-AUTO-",
+        input_mode=JACKING_LOSS_INPUT_MODE,
+    )
+
+    assert result.ok
+    assert len(result.table) == 12
+    assert result.actual_spacing_mm == pytest.approx(150.0)
+    assert result.table["Label"].iloc[0] == "PS-AUTO-01"
+    assert set(result.table["Product"]) == {"15.2mm strand"}
+    assert set(result.table["Input Mode"]) == {JACKING_LOSS_INPUT_MODE}
+    assert result.table["Pe_eff_kN"].sum() > 0.0
+    assert all("Auto perimeter prestress" in note for note in result.table["Note"])
+
+
+def test_auto_perimeter_prestress_layout_rejects_impossible_offset() -> None:
+    geometry = rectangle(width_mm=200.0, height_mm=200.0)
+
+    result = generate_auto_perimeter_prestress_layout(
+        geometry,
+        load_prestress_steel_database(),
+        product="15.2mm strand",
+        edge_offset_mm=125.0,
+        target_spacing_mm=150.0,
+        min_elements=4,
+    )
+
+    assert not result.ok
+    assert "offset is too large" in result.errors[0]
+
+
+def test_auto_perimeter_prestress_layout_requires_catalog_product() -> None:
+    result = generate_auto_perimeter_prestress_layout(
+        rectangle(width_mm=600.0, height_mm=600.0),
+        load_prestress_steel_database(),
+        product="Custom",
+    )
+
+    assert not result.ok
+    assert "Select a catalog prestress product" in result.errors[0]
 
 
 def test_apply_force_input_method_updates_active_rows_only() -> None:

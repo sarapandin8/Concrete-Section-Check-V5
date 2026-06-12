@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from concrete_pmm_pro.core.models import Point2D, SectionGeometry
+from concrete_pmm_pro.core.models import Point2D, Rebar, SectionGeometry
+from concrete_pmm_pro.geometry.generators import rectangular_hollow
 from concrete_pmm_pro.ui import rebar_page
 
 
@@ -145,6 +146,39 @@ def test_perimeter_rebar_layout_places_mandatory_corner_control_bars() -> None:
     generated_points = {(round(row.x_mm, 3), round(row.y_mm, 3)) for row in result.table.itertuples()}
     assert {(-225.0, -225.0), (225.0, -225.0), (225.0, 225.0), (-225.0, 225.0)} <= generated_points
     assert any("Corner-controlled layout" in info for info in result.info)
+
+
+def test_perimeter_rebar_layout_uses_outer_boundary_for_hollow_section() -> None:
+    from concrete_pmm_pro.geometry.rebar_layout import generate_perimeter_rebar_layout
+
+    geometry = rectangular_hollow(
+        width_mm=1000.0,
+        height_mm=800.0,
+        t_top_mm=120.0,
+        t_bottom_mm=140.0,
+        t_left_mm=110.0,
+        t_right_mm=130.0,
+    )
+
+    result = generate_perimeter_rebar_layout(
+        geometry,
+        bar_size="DB20",
+        diameter_mm=20.0,
+        material="SD40",
+        edge_offset_mm=75.0,
+        target_spacing_mm=150.0,
+        min_bars=4,
+        label_prefix="B",
+    )
+
+    assert result.ok
+    generated_points = {(round(row.x_mm, 3), round(row.y_mm, 3)) for row in result.table.itertuples()}
+    assert {(-425.0, -325.0), (425.0, -325.0), (425.0, 325.0), (-425.0, 325.0)} <= generated_points
+    rebars = [
+        Rebar(x_mm=float(row.x_mm), y_mm=float(row.y_mm), diameter_mm=20.0, material_name="SD40", label=str(row.Label))
+        for row in result.table.itertuples()
+    ]
+    assert rebar_page.validate_rebars_against_geometry(rebars, geometry) == []
 
 
 def test_rebar_preview_is_rendered_inside_status_column_before_summary() -> None:

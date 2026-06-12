@@ -49,6 +49,17 @@ def _as_polygon(geometry: SectionGeometry) -> Polygon:
     return polygon
 
 
+def _as_outer_polygon(geometry: SectionGeometry) -> Polygon:
+    polygon = Polygon([point.as_tuple() for point in geometry.outer_polygon])
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    if isinstance(polygon, MultiPolygon):
+        polygon = max(polygon.geoms, key=lambda part: part.area)
+    if not isinstance(polygon, Polygon) or polygon.is_empty or polygon.area <= 0:
+        raise ValueError("Section outer boundary is not a valid polygon.")
+    return polygon
+
+
 def _largest_polygon(geometry: BaseGeometry) -> tuple[Polygon | None, bool]:
     """Return the usable polygon and whether disconnected pieces were discarded."""
     if geometry.is_empty:
@@ -236,7 +247,12 @@ def generate_perimeter_rebar_layout(
     except ValueError as exc:
         return PerimeterRebarLayoutResult(table=empty_table, errors=(str(exc),))
 
-    offset_geom = section.buffer(-float(edge_offset_mm), join_style=2, mitre_limit=2.0)
+    try:
+        outer_boundary = _as_outer_polygon(geometry)
+    except ValueError as exc:
+        return PerimeterRebarLayoutResult(table=empty_table, errors=(str(exc),))
+
+    offset_geom = outer_boundary.buffer(-float(edge_offset_mm), join_style=2, mitre_limit=2.0)
     layout_polygon, discarded_pieces = _largest_polygon(offset_geom)
     if layout_polygon is None or layout_polygon.is_empty or layout_polygon.area <= 0:
         return PerimeterRebarLayoutResult(
@@ -280,10 +296,14 @@ def generate_perimeter_rebar_layout(
 
     rows: list[dict[str, object]] = []
     outside_count = 0
+    void_count = 0
+    hole_polygons = [Polygon([point.as_tuple() for point in hole]) for hole in geometry.holes]
     prefix = str(label_prefix or "B").strip() or "B"
     for index, distance in enumerate(distances):
         point = perimeter.interpolate(distance % perimeter_length_mm)
-        if not _point_is_effectively_inside(section, point):
+        if any(hole.covers(point) for hole in hole_polygons):
+            void_count += 1
+        elif not _point_is_effectively_inside(section, point):
             outside_count += 1
         rows.append(
             {
@@ -299,6 +319,10 @@ def generate_perimeter_rebar_layout(
             }
         )
 
+    if void_count:
+        errors.append(
+            f"{void_count} generated bar point(s) are inside a void/hole; reduce the offset, use manual input, or use a future inner-face layout."
+        )
     if outside_count:
         errors.append(f"{outside_count} generated bar point(s) are outside concrete; use manual input or adjust the offset.")
 

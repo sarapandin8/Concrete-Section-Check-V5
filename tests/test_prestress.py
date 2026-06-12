@@ -338,6 +338,36 @@ def test_auto_perimeter_prestress_layout_generates_jacking_rows() -> None:
     assert all("Auto perimeter prestress" in note for note in result.table["Note"])
 
 
+def test_auto_perimeter_prestress_layout_handles_hollow_section_outer_boundary() -> None:
+    geometry = rectangular_hollow(
+        width_mm=1000.0,
+        height_mm=800.0,
+        t_top_mm=120.0,
+        t_bottom_mm=140.0,
+        t_left_mm=110.0,
+        t_right_mm=130.0,
+    )
+    db = load_prestress_steel_database()
+
+    result = generate_auto_perimeter_prestress_layout(
+        geometry,
+        db,
+        product="15.2mm strand",
+        edge_offset_mm=75.0,
+        target_spacing_mm=150.0,
+        min_elements=4,
+        label_prefix="PS-AUTO-",
+        input_mode=JACKING_LOSS_INPUT_MODE,
+    )
+
+    assert result.ok
+    generated_points = {(round(row.x_mm, 3), round(row.y_mm, 3)) for row in result.table.itertuples()}
+    assert {(-425.0, -325.0), (425.0, -325.0), (425.0, 325.0), (-425.0, 325.0)} <= generated_points
+    parsed = prestress_elements_from_dataframe(result.table, db)
+    assert parsed.errors == []
+    assert validate_prestress_against_geometry(parsed.elements, geometry) == []
+
+
 def test_auto_perimeter_prestress_layout_rejects_impossible_offset() -> None:
     geometry = rectangle(width_mm=200.0, height_mm=200.0)
 

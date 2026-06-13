@@ -33,11 +33,16 @@ def default_report_section_plan(
     beam_summary = None
     if snapshot.member_type == "beam_girder":
         beam_summary = "Beam/Girder workflow is future work; no beam/girder design calculations are included."
+    scope_limitation_keys: list[str] = []
+    if snapshot.member_type == "beam_girder":
+        scope_limitation_keys.append("beam_girder_shear_torsion")
+    elif snapshot.member_type == "column_pier_pmm":
+        scope_limitation_keys.append("column_pier_vt_scope")
 
     return [
         ReportSection("executive_summary", "Executive Summary", summary=f"Report readiness: {readiness_summary.overall_status}.", table_keys=["result_traceability_snapshot", "report_readiness"], limitation_keys=high_limitation_keys),
         ReportSection("project_metadata", "Project / Analysis Metadata", table_keys=["result_traceability_snapshot"]),
-        ReportSection("analysis_mode_scope", "Analysis Mode and Scope", summary=beam_summary or "Current analysis workflow metadata is summarized.", limitation_keys=["beam_girder_shear_torsion"] if snapshot.member_type == "beam_girder" else []),
+        ReportSection("analysis_mode_scope", "Analysis Mode and Scope", summary=beam_summary or "Current analysis workflow metadata is summarized.", limitation_keys=scope_limitation_keys),
         ReportSection("geometry_materials", "Section Geometry and Materials", status="AVAILABLE" if snapshot.section_available and snapshot.materials_available else "PARTIAL", figure_keys=["section_geometry_layout"] if "section_geometry_layout" in figure_keys else [], table_keys=["result_traceability_snapshot"]),
         ReportSection("reinforcement_prestress", "Reinforcement and Prestress Layout", status="AVAILABLE" if snapshot.rebar_count or snapshot.prestress_count else "PARTIAL", table_keys=["custom_stress_check_points"], figure_keys=["custom_stress_points_layout"] if "custom_stress_points_layout" in figure_keys else []),
         ReportSection("uls_pmm_strength", "ULS PMM Strength Check", status=pmm_status, table_keys=["pmm_summary"], figure_keys=[key for key in ["pmm_interaction_surface", "pmm_mux_muy_slice"] if key in figure_keys], limitation_keys=["neutral_axis_sweep_resolution", "prestress_axial_cap"]),

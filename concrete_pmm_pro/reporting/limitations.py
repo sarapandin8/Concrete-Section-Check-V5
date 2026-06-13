@@ -125,6 +125,16 @@ def get_engineering_limitations() -> list[EngineeringLimitation]:
             "Use dedicated beam/girder design checks outside this prototype.",
         ),
         EngineeringLimitation(
+            "column_pier_vt_scope",
+            "Column/Pier shear, torsion, and V+T scope",
+            "GUARDED_SCOPE",
+            "MEDIUM",
+            "Column/Pier",
+            "ACI RC nonprestressed Column/Pier shear, torsion, and V+T gates are available under Analysis, but unsupported routes remain REVIEW.",
+            "AASHTO LRFD, prestressed V+T, seismic special detailing, anchorage/hooks, lap splices, and shop-drawing detailing are not certified by the current Column/Pier V+T gate.",
+            "Use the Analysis > ULS / PMM > Shear + Torsion audit table for ACI RC nonprestressed checks and perform independent review for excluded routes.",
+        ),
+        EngineeringLimitation(
             "lightweight_concrete_ec",
             "Lightweight concrete Ec",
             "SIMPLIFIED",
@@ -289,5 +299,7 @@ def collect_limitations_for_report(session_state: Any = None, include_all: bool 
         relevant_keys.add("lightweight_concrete_ec")
     if _detect_member_type(session_state) == "beam_girder":
         relevant_keys.add("beam_girder_shear_torsion")
+    if _detect_member_type(session_state) == "column_pier_pmm":
+        relevant_keys.add("column_pier_vt_scope")
     selected.extend(item for item in limitations if item.key in relevant_keys)
     return deduplicate_limitations_by_key(selected)

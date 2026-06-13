@@ -1258,7 +1258,7 @@ def _column_pier_transverse_readiness_cards(
         RebarMetric("Torsion input", "Ready" if torsion_ready else "REVIEW", "Needs closed ties/hoops or spiral plus torsion core basis", "ready" if torsion_ready else "warning", strong=not torsion_ready),
         RebarMetric("Closed transverse reinforcement", closed_layout or "Not defined", "Do not use open ties for torsion capacity", "ready" if closed_ready else "warning"),
         RebarMetric("Longitudinal torsion bars", longitudinal_status, "Ordinary active rebar only; prestress is not counted as Al", "ready" if rebar_count > 0 else "warning"),
-        RebarMetric("Capability", "Input owner only", "No shear/torsion PASS/FAIL issued in this milestone", "neutral"),
+        RebarMetric("Capability", "Input owner only", "Analysis issues scoped ACI RC shear/torsion/V+T status from this Control section row", "neutral"),
     ]
 
 
@@ -1266,8 +1266,8 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
     current = _column_pier_transverse_settings_from_state()
     st.markdown("#### Column/Pier Shear and Torsion Reinforcement")
     st.caption(
-        "Define the control-section transverse reinforcement used by the current Column/Pier shear and torsion preview checks. "
-        "Future station/height-specific region checks will be a separate milestone; no shear or torsion capacity is final-certified from this page."
+        "Define the control-section transverse reinforcement used by the current Column/Pier shear, torsion, and V+T Analysis checks. "
+        "Future station/height-specific region checks will be a separate milestone; capacity status is reported in Analysis, not from this input page."
     )
     col_a, col_b, col_c = st.columns([1.0, 1.0, 1.0], gap="small")
     with col_a:
@@ -1284,7 +1284,7 @@ def _render_column_pier_transverse_settings() -> dict[str, Any]:
             COLUMN_PIER_TORSION_CORE_OPTIONS,
             index=COLUMN_PIER_TORSION_CORE_OPTIONS.index(current["torsion_core_basis"]),
             key="column_pier_transverse_torsion_core_basis",
-            help="Future torsion checks will need Ao/Aoh or equivalent core geometry. This milestone records the owner and guard state only.",
+            help="Column/Pier torsion and V+T checks use Ao/Aoh or equivalent core geometry from this owner. Unsupported routes remain guarded in Analysis.",
         )
     with col_c:
         tie_center_offset_mm = st.number_input(

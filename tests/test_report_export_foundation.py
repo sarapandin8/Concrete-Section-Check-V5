@@ -20,6 +20,7 @@ from concrete_pmm_pro.reporting import (
 )
 from concrete_pmm_pro.reporting.readiness import check_report_readiness
 from concrete_pmm_pro.reporting.traceability import build_result_traceability_snapshot
+from concrete_pmm_pro.core.analysis import AnalysisModeSettings
 
 
 def test_default_report_metadata_creates_sensible_defaults() -> None:
@@ -45,6 +46,15 @@ def test_default_report_section_plan_includes_warnings_and_limitations() -> None
     sections = default_report_section_plan(snapshot, readiness, figures, limitations)
 
     assert any(section.section_id == "warnings_limitations" for section in sections)
+
+
+def test_default_report_section_plan_links_column_pier_vt_scope_limitation() -> None:
+    snapshot = build_result_traceability_snapshot({"analysis_mode_settings": AnalysisModeSettings(member_type="column_pier_pmm")})
+    readiness = check_report_readiness(snapshot)
+    sections = default_report_section_plan(snapshot, readiness, [], get_engineering_limitations())
+    by_id = {section.section_id: section for section in sections}
+
+    assert "column_pier_vt_scope" in by_id["analysis_mode_scope"].limitation_keys
 
 
 def test_default_report_section_plan_marks_uls_missing_without_pmm() -> None:

@@ -438,6 +438,7 @@ def test_column_pier_transverse_readiness_excludes_prestress_from_longitudinal_a
     assert by_title["Longitudinal torsion bars"].value == "Available"
     assert "prestress is not counted as Al" in by_title["Longitudinal torsion bars"].detail
     assert by_title["Torsion input"].value == "Ready"
+    assert "Analysis issues scoped ACI RC shear/torsion/V+T status" in by_title["Capability"].detail
 
 
 def test_shear_reinforcement_preview_calculates_avs_for_active_zone() -> None:

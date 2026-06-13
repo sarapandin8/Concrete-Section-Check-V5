@@ -156,6 +156,18 @@ def test_collect_limitations_include_all_false_adds_beam_girder_limitation() -> 
             assert item.key in keys
 
 
+def test_collect_limitations_include_all_false_adds_column_pier_vt_scope_limitation() -> None:
+    settings = AnalysisModeSettings(member_type="column_pier_pmm")
+    limitations = collect_limitations_for_report({"analysis_mode_settings": settings}, include_all=False)
+    keys = [item.key for item in limitations]
+
+    assert "column_pier_vt_scope" in keys
+    assert len(keys) == len(set(keys))
+    by_key = {item.key: item for item in limitations}
+    assert "ACI RC nonprestressed" in by_key["column_pier_vt_scope"].user_note
+    assert "AASHTO LRFD" in by_key["column_pier_vt_scope"].engineering_note
+
+
 def test_collect_limitations_include_all_false_excludes_neutral_axis_without_pmm_context() -> None:
     keys = {item.key for item in collect_limitations_for_report({}, include_all=False)}
 

@@ -151,8 +151,8 @@ def test_analysis_page_hides_beam_sls_subpages_for_column_pier_workflow() -> Non
     assert "_analysis_subtabs_for_workflow" in source
     assert "SLS / Stress & Cracking is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
     assert "SLS Deflection / Camber is not selected for Column/Pier/Wall/Pylon PMM workflow" in source
-    assert "Column/Pier ACI RC shear preview is available" in source
-    assert "No final code-certified shear/torsion PASS/FAIL is issued yet" in source
+    assert "Column/Pier ACI RC shear, torsion, and combined V+T views are available under ULS / PMM" in source
+    assert "AASHTO, prestressed V+T, and seismic/detailing certification remain guarded review scope" in source
 
 
 def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
@@ -165,13 +165,17 @@ def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
     assert '"Flexural (PMM)"' in source
     assert '"Shear"' in source
     assert '"Torsion"' in source
+    assert '"Shear + Torsion"' in source
     assert "_column_pier_uls_check_choice" in source
     assert "_render_column_pier_flexural_pmm_workspace" in source
     assert "_render_column_pier_shear_guarded_workspace" in source
     assert "_render_column_pier_torsion_guarded_workspace" in source
+    assert "_render_column_pier_combined_vt_workspace" in source
     assert "_column_pier_shear_check_dataframe" in source
+    assert "_column_pier_combined_vt_check_dataframe" in source
     assert "ACI 318 RC shear preview" in source
     assert "AASHTO LRFD Column/Pier shear is not implemented" in source
+    assert "ACI 318 RC combined shear-torsion interaction gate" in source
     assert "Seismic confinement review" in source
     assert "The shear result above uses the Control section row only" in source
     assert "Recommended seismic spacing (ACI advisor)" in source

@@ -40,6 +40,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _column_pier_shear_check_dataframe,
     _column_pier_aci_seismic_spacing_summary_dataframe,
     _column_pier_torsion_check_dataframe,
+    _column_pier_combined_vt_check_dataframe,
+    _column_pier_governing_combined_vt_row,
 )
 
 
@@ -204,6 +206,56 @@ def test_column_pier_aashto_torsion_remains_review_without_capacity_claim() -> N
     assert set(df["Status"]) == {"REVIEW"}
     assert df["Capacity"].eq("-").all()
     assert df["Notes"].str.contains("AASHTO LRFD Column/Pier torsion is not implemented").all()
+
+
+def test_column_pier_aci_combined_vt_gate_reads_shear_torsion_and_ordinary_al() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(vux=80.0, vuy=120.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_combined_vt_check_dataframe(state, analysis_input)
+    governing = _column_pier_governing_combined_vt_row(df)
+
+    assert set(df["Direction"]) == {"Vux", "Vuy"}
+    assert set(df["Status"]) == {"PASS"}
+    assert (pd.to_numeric(df["Overall D/C value"], errors="coerce") < 1.0).all()
+    assert (pd.to_numeric(df["Provided Av+2At per s mm2/mm"], errors="coerce") > 0.0).all()
+    assert governing is not None
+    assert governing["Check"] == "Shear + Torsion"
+    assert "ordinary longitudinal Al" in str(governing["Notes"])
+
+
+def test_column_pier_aci_combined_vt_gate_fails_high_torsion_demand() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(vux=80.0, vuy=120.0, tu=800.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_combined_vt_check_dataframe(state, analysis_input)
+
+    assert "FAIL" in set(df["Status"])
+    assert (pd.to_numeric(df["Overall D/C value"], errors="coerce") > 1.0).any()
+
+
+def test_column_pier_aashto_combined_vt_remains_review_without_final_claim() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(code="AASHTO LRFD", vux=80.0, vuy=120.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_combined_vt_check_dataframe(state, analysis_input)
+
+    assert set(df["Status"]) == {"REVIEW"}
+    assert df["Notes"].str.contains("AASHTO LRFD Column/Pier combined shear-torsion interaction is not implemented").all()
+
+
+def test_column_pier_combined_vt_with_active_prestress_stays_review() -> None:
+    analysis_input = _analysis_input()
+    state = _column_pier_shear_state(vux=80.0, vuy=120.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    df = _column_pier_combined_vt_check_dataframe(state, analysis_input)
+
+    assert set(df["Status"]) == {"REVIEW"}
+    assert df["Notes"].str.contains("Active prestress is present").all()
 
 
 def test_analysis_input_hash_is_stable_for_identical_engineering_inputs() -> None:

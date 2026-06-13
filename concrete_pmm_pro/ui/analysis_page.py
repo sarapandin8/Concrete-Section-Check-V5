@@ -219,7 +219,7 @@ from concrete_pmm_pro.verification.sls_benchmarks import (
 
 ANALYSIS_SUBTABS = ["ULS / PMM", "SLS / Stress & Cracking", "SLS Deflection / Camber", "Report / QA"]
 ANALYSIS_COLUMN_PIER_SUBTABS = ["ULS / PMM", "Report / QA"]
-COLUMN_PIER_ULS_CHECK_SUBTABS = ["Flexural (PMM)", "Shear", "Torsion"]
+COLUMN_PIER_ULS_CHECK_SUBTABS = ["Flexural (PMM)", "Shear", "Torsion", "Shear + Torsion"]
 # Legacy source-test token retained while PERF.RERUN1 switches from eager st.tabs
 # to lazy subpage rendering: uls_tab, sls_tab, sls_deflection_tab, report_tab
 PMM_3D_MASTER_TOGGLE_KEY = "show_pmm_3d_interaction"
@@ -586,7 +586,7 @@ def _workflow_sls_status_text(settings: AnalysisModeSettings) -> str:
 
 def _workflow_shear_torsion_status_text(settings: AnalysisModeSettings) -> str:
     if is_pmm_primary_workflow(settings):
-        return "Shear ACI preview / torsion guarded"
+        return "ACI RC shear / torsion / V+T"
     if settings.member_type == "beam_girder":
         return "Bridge ULS guarded"
     if settings.member_type == "building_beam_girder":
@@ -807,8 +807,8 @@ def _render_analysis_mode_section() -> AnalysisModeSettings:
         if settings.member_type == "column_pier_pmm":
             st.success("Current workflow uses Pu, Mux, and Muy with PMM interaction and ULS D/C review.")
             st.info(
-                "Column/Pier ACI RC shear preview is available in the ULS Shear subview; torsion remains a guarded future code check. "
-                "No final code-certified shear/torsion PASS/FAIL is issued yet."
+                "Column/Pier ACI RC shear, torsion, and combined V+T views are available under ULS / PMM. "
+                "AASHTO, prestressed V+T, and seismic/detailing certification remain guarded review scope."
             )
             st.info("Beam/Girder SLS stress and deflection/camber workflows are not selected for Column/Pier/Wall/Pylon analysis.")
             st.info("Prestress is treated as internal prestress/reinforcement action, not duplicated as Pu demand.")
@@ -3690,6 +3690,335 @@ def _column_pier_governing_torsion_row(torsion_df: pd.DataFrame | None) -> dict[
     if df.empty:
         return None
     return df.sort_values("__dc", ascending=False, kind="stable").iloc[0].to_dict()
+
+
+def _column_pier_section_torsion_shape_type(analysis_input: AnalysisInput | None) -> str:
+    if analysis_input is None:
+        return "solid"
+    try:
+        polygon = to_shapely_polygon(analysis_input.section_geometry)
+        if len(getattr(polygon, "interiors", [])) > 0:
+            return "hollow"
+    except Exception:
+        return "solid"
+    return "solid"
+
+
+def _column_pier_combined_vt_result_for_case_direction(
+    state: Mapping[str, object],
+    demand_row: Mapping[str, object],
+    *,
+    direction: str,
+    analysis_input: AnalysisInput | None,
+) -> dict[str, object]:
+    case = str(demand_row.get("Case Name") or "-")
+    vu_kN = _beam_uls_float(demand_row.get(direction))
+    tu_kNm = _beam_uls_float(demand_row.get("Tu"))
+    code = project_design_code_from_session(state)
+    if code != PROJECT_CODE_ACI318:
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "REVIEW",
+            "Direction": direction,
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": tu_kNm if math.isfinite(tu_kNm) else float("nan"),
+            "Overall D/C value": float("nan"),
+            "Code basis": "AASHTO LRFD Column/Pier V+T not implemented",
+            "Notes": "AASHTO LRFD Column/Pier combined shear-torsion interaction is not implemented in ULS.COL.VT.ACI_FINAL1.",
+        }
+    if not math.isfinite(tu_kNm) or abs(float(tu_kNm)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL:
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "NOT APPLICABLE",
+            "Direction": direction,
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": 0.0,
+            "Stress status": "NOT ACTIVE",
+            "Transverse status": "NOT ACTIVE",
+            "Longitudinal status": "NOT ACTIVE",
+            "Source shear status": "NOT CHECKED",
+            "Source torsion status": "NO DEMAND",
+            "Overall D/C value": float("nan"),
+            "Code basis": "ACI 318 Column/Pier RC V+T interaction",
+            "Notes": "No active Tu demand; combined shear-torsion interaction is not applicable for this row.",
+        }
+    if analysis_input is None:
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "DATA REQUIRED",
+            "Direction": direction,
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": float(tu_kNm),
+            "Overall D/C value": float("nan"),
+            "Code basis": "ACI 318 Column/Pier RC V+T interaction",
+            "Notes": "Section geometry, concrete material, transverse reinforcement, and ordinary longitudinal rebar are required for Column/Pier V+T.",
+        }
+
+    source_row = dict(demand_row)
+    if not math.isfinite(vu_kN):
+        source_row[direction] = float("nan")
+    elif abs(float(vu_kN)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL:
+        source_row[direction] = 1.0e-3
+    shear = _column_pier_shear_result_for_case_direction(state, source_row, direction=direction, analysis_input=analysis_input)
+    torsion = _column_pier_torsion_result_for_case(state, demand_row, analysis_input=analysis_input)
+    notes: list[str] = []
+    if math.isfinite(vu_kN) and abs(float(vu_kN)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL:
+        notes.append("Vu = 0 is treated as a valid combined V+T state; shear stress and required shear reinforcement terms are zero.")
+
+    source_shear_status = str(shear.get("Status") or "DATA REQUIRED")
+    source_torsion_status = str(torsion.get("Status") or "DATA REQUIRED")
+    fc = _beam_uls_float(getattr(analysis_input.concrete_material, "fc_MPa", None))
+    bw_mm = _beam_uls_float(shear.get("bw mm"))
+    d_mm = _beam_uls_float(shear.get("d mm"))
+    phi = _beam_uls_float(shear.get("phi"))
+    if not math.isfinite(phi) or phi <= 0.0:
+        phi = 0.75
+    vc_kN = _beam_uls_float(shear.get("Vc kN"))
+    avs_provided = _beam_uls_float(shear.get("Av/s mm2/mm"))
+    ao = _beam_uls_float(torsion.get("Ao mm2"))
+    aoh = _beam_uls_float(torsion.get("Aoh mm2"))
+    ph = _beam_uls_float(torsion.get("ph mm"))
+    at_per_s = _beam_uls_float(torsion.get("At/s mm2/mm"))
+    zone = _column_pier_active_transverse_zone_for_torsion(state)
+    fy = _beam_uls_float(zone.get("fy_MPa")) if zone is not None else float("nan")
+    cot_theta = 1.0
+    shape = _column_pier_section_torsion_shape_type(analysis_input)
+    has_prestress = _column_pier_has_active_prestress(analysis_input)
+    required_inputs = [fc, bw_mm, d_mm, phi, vc_kN, avs_provided, ao, aoh, ph, at_per_s, fy]
+    if not all(math.isfinite(value) and value > 0.0 for value in required_inputs) or not math.isfinite(vu_kN):
+        return {
+            "Check": "Shear + Torsion",
+            "Status": "DATA REQUIRED",
+            "Direction": direction,
+            "Case": case,
+            "Vu kN": vu_kN if math.isfinite(vu_kN) else float("nan"),
+            "Tu kN-m": float(tu_kNm),
+            "Source shear status": source_shear_status,
+            "Source torsion status": source_torsion_status,
+            "Shape": shape.upper(),
+            "Overall D/C value": float("nan"),
+            "Code basis": "ACI 318 Column/Pier RC V+T interaction",
+            "Notes": "Combined V+T needs finite shear geometry/capacity terms, torsion core geometry, active closed transverse reinforcement, and ordinary longitudinal rebar source data.",
+        }
+
+    threshold_status = str(torsion.get("Threshold status") or "")
+    threshold_below = source_torsion_status == "BELOW THRESHOLD" or threshold_status == "BELOW THRESHOLD"
+    if threshold_below:
+        shear_dc = _beam_uls_float(shear.get("Governing D/C value"))
+        stress_status = "THRESHOLD OK"
+        transverse_status = "THRESHOLD OK"
+        longitudinal_status = "NOT REQUIRED"
+        if source_shear_status == "Preview FAIL":
+            status = "FAIL"
+        elif has_prestress or source_shear_status == "REVIEW" or source_torsion_status == "REVIEW":
+            status = "REVIEW"
+        elif source_shear_status in {"Preview PASS", "NO DEMAND"}:
+            status = "PASS"
+        else:
+            status = "DATA REQUIRED"
+        notes.extend(
+            [
+                "Tu is below the implemented ACI torsion threshold screen, so combined V+T interaction reinforcement is not required for this row.",
+                "Source shear gate still controls the row status when finite Vu is present.",
+            ]
+        )
+        if has_prestress:
+            notes.append("Active prestress is present; PSC V+T interaction is not implemented, so the row remains REVIEW.")
+        return {
+            "Check": "Shear + Torsion",
+            "Status": status,
+            "Direction": direction,
+            "Case": case,
+            "Vu kN": float(vu_kN),
+            "Tu kN-m": float(tu_kNm),
+            "Shape": shape.upper(),
+            "Stress status": stress_status,
+            "Transverse status": transverse_status,
+            "Longitudinal status": longitudinal_status,
+            "Source shear status": source_shear_status,
+            "Source torsion status": source_torsion_status,
+            "Stress D/C value": float("nan"),
+            "Transverse D/C value": float("nan"),
+            "Longitudinal D/C value": float("nan"),
+            "Overall D/C value": shear_dc,
+            "Shear stress MPa": 0.0 if abs(float(vu_kN)) <= _COLUMN_PIER_SHEAR_DEMAND_TOL else abs(float(vu_kN)) * 1000.0 / (float(bw_mm) * float(d_mm)),
+            "Torsion stress MPa": 0.0,
+            "Interaction stress MPa": 0.0,
+            "Stress limit MPa": float("nan"),
+            "Av shear req mm2/mm": 0.0,
+            "At torsion req mm2/mm": 0.0,
+            "Combined transverse req mm2/mm": 0.0,
+            "Minimum transverse req mm2/mm": _beam_uls_float(shear.get("Av/s required mm2/mm")),
+            "Governing transverse req mm2/mm": _beam_uls_float(shear.get("Av/s required mm2/mm")),
+            "Provided Av+2At per s mm2/mm": float(avs_provided) + 2.0 * float(at_per_s),
+            "Al V+T req mm2": 0.0,
+            "Al provided mm2": _beam_uls_float(torsion.get("Al provided mm2")),
+            "bw mm": float(bw_mm),
+            "d mm": float(d_mm),
+            "Ao mm2": float(ao),
+            "Aoh mm2": float(aoh),
+            "ph mm": float(ph),
+            "phi": float(phi),
+            "cot theta": cot_theta,
+            "Code basis": "ACI 318 Column/Pier RC V+T threshold/source gate",
+            "Interaction form": "torsion below threshold",
+            "Notes": "; ".join(part for part in notes if part),
+        }
+
+    shear_stress = abs(float(vu_kN)) * 1000.0 / (float(bw_mm) * float(d_mm))
+    torsion_stress = abs(float(tu_kNm)) * 1.0e6 * float(ph) / (1.7 * float(aoh) * float(aoh))
+    if shape == "hollow":
+        stress_demand = shear_stress + torsion_stress
+        interaction_form = "linear sum for hollow section"
+    else:
+        stress_demand = math.sqrt(shear_stress * shear_stress + torsion_stress * torsion_stress)
+        interaction_form = "root-sum-square for solid section"
+    vc_stress = float(vc_kN) * 1000.0 / (float(bw_mm) * float(d_mm))
+    stress_limit = float(phi) * (vc_stress + 0.66 * math.sqrt(float(fc)))
+    stress_dc = stress_demand / stress_limit if stress_limit > 0.0 else float("nan")
+    stress_status = "PASS" if math.isfinite(stress_dc) and stress_dc <= 1.0 + 1.0e-9 else "FAIL"
+
+    shear_req = max(
+        0.0,
+        (abs(float(vu_kN)) * 1000.0 / float(phi) - float(vc_kN) * 1000.0)
+        / (float(fy) * float(d_mm) * float(cot_theta)),
+    )
+    torsion_req = abs(float(tu_kNm)) * 1.0e6 / (float(phi) * 2.0 * float(ao) * float(fy) * float(cot_theta))
+    combined_req = shear_req + 2.0 * torsion_req
+    min_req = max(0.062 * math.sqrt(float(fc)) * float(bw_mm) / float(fy), 0.35 * float(bw_mm) / float(fy))
+    required_total = max(combined_req, min_req)
+    provided_total = float(avs_provided) + 2.0 * float(at_per_s)
+    transverse_dc = required_total / provided_total if provided_total > 0.0 else float("nan")
+    transverse_status = "PASS" if math.isfinite(transverse_dc) and transverse_dc <= 1.0 + 1.0e-9 else "FAIL"
+    longitudinal_req = torsion_req * float(ph) * float(cot_theta) * float(cot_theta)
+    longitudinal_review = _beam_uls_torsion_longitudinal_review(state, longitudinal_req)
+    longitudinal_status = str(longitudinal_review.get("status") or "DATA REQUIRED")
+    longitudinal_dc = _beam_uls_float(longitudinal_review.get("utilization"))
+    overall_values = [value for value in [stress_dc, transverse_dc, longitudinal_dc] if math.isfinite(value)]
+    overall_dc = max(overall_values) if overall_values else float("nan")
+
+    source_fail = source_shear_status == "Preview FAIL" or source_torsion_status == "Preview FAIL"
+    source_review = source_shear_status == "REVIEW" or source_torsion_status == "REVIEW"
+    if has_prestress:
+        status = "REVIEW"
+        notes.append("Active prestress is present. PSC V+T interaction and prestress-specific compatibility are not implemented, so this row remains REVIEW.")
+    elif source_fail or "FAIL" in {stress_status, transverse_status, longitudinal_status}:
+        status = "FAIL"
+    elif source_review:
+        status = "REVIEW"
+    elif longitudinal_status in {"LAYOUT REQUIRED", "NOT CHECKED", "NOT READY"}:
+        status = "DATA REQUIRED"
+    else:
+        status = "PASS"
+    notes.extend(
+        [
+            "ULS.COL.VT.ACI_FINAL1 checks ACI RC combined V+T stress, combined transverse reinforcement (Av/s + 2At/s), and ordinary longitudinal Al.",
+            "Column/Pier demand rows are case-based; the Control section transverse row is used and no minimum transverse reinforcement is silently assumed.",
+            "Ordinary longitudinal rebar is counted for Al. Prestress strands, tendons, and PT bars are not counted as torsion Al.",
+            str(longitudinal_review.get("description") or ""),
+        ]
+    )
+    if shape == "hollow":
+        notes.append("Hollow/voided section uses linear stress interaction. Verify the declared closed transverse path represents the torsion cell before final design.")
+    return {
+        "Check": "Shear + Torsion",
+        "Status": status,
+        "Direction": direction,
+        "Case": case,
+        "Vu kN": float(vu_kN),
+        "Tu kN-m": float(tu_kNm),
+        "Shape": shape.upper(),
+        "Stress status": stress_status,
+        "Transverse status": transverse_status,
+        "Longitudinal status": longitudinal_status,
+        "Source shear status": source_shear_status,
+        "Source torsion status": source_torsion_status,
+        "Stress D/C value": stress_dc,
+        "Transverse D/C value": transverse_dc,
+        "Longitudinal D/C value": longitudinal_dc,
+        "Overall D/C value": overall_dc,
+        "Shear stress MPa": shear_stress,
+        "Torsion stress MPa": torsion_stress,
+        "Interaction stress MPa": stress_demand,
+        "Stress limit MPa": stress_limit,
+        "Av shear req mm2/mm": shear_req,
+        "At torsion req mm2/mm": torsion_req,
+        "Combined transverse req mm2/mm": combined_req,
+        "Minimum transverse req mm2/mm": min_req,
+        "Governing transverse req mm2/mm": required_total,
+        "Provided Av+2At per s mm2/mm": provided_total,
+        "Al V+T req mm2": longitudinal_req,
+        "Al provided mm2": longitudinal_review.get("provided_mm2", float("nan")),
+        "bw mm": float(bw_mm),
+        "d mm": float(d_mm),
+        "Ao mm2": float(ao),
+        "Aoh mm2": float(aoh),
+        "ph mm": float(ph),
+        "phi": float(phi),
+        "cot theta": cot_theta,
+        "Code basis": "ACI 318 Column/Pier RC V+T interaction gate",
+        "Interaction form": interaction_form,
+        "Notes": "; ".join(part for part in notes if part),
+    }
+
+
+def _column_pier_combined_vt_check_dataframe(state: Mapping[str, object], analysis_input: AnalysisInput | None) -> pd.DataFrame:
+    columns = [
+        "Check", "Status", "Direction", "Case", "Vu kN", "Tu kN-m", "Shape",
+        "Stress status", "Transverse status", "Longitudinal status", "Source shear status", "Source torsion status",
+        "Stress D/C value", "Transverse D/C value", "Longitudinal D/C value", "Overall D/C value",
+        "Shear stress MPa", "Torsion stress MPa", "Interaction stress MPa", "Stress limit MPa",
+        "Av shear req mm2/mm", "At torsion req mm2/mm", "Combined transverse req mm2/mm",
+        "Minimum transverse req mm2/mm", "Governing transverse req mm2/mm", "Provided Av+2At per s mm2/mm",
+        "Al V+T req mm2", "Al provided mm2", "bw mm", "d mm", "Ao mm2", "Aoh mm2", "ph mm",
+        "phi", "cot theta", "Code basis", "Interaction form", "Notes",
+    ]
+    active_df = _active_column_pier_uls_demand_dataframe_from_state(state)
+    if active_df.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for _, demand_row in active_df.iterrows():
+        for direction in ["Vux", "Vuy"]:
+            result = _column_pier_combined_vt_result_for_case_direction(
+                state,
+                demand_row,
+                direction=direction,
+                analysis_input=analysis_input,
+            )
+            for column in columns:
+                result.setdefault(
+                    column,
+                    float("nan")
+                    if column.endswith("kN")
+                    or column.endswith("kN-m")
+                    or column.endswith("MPa")
+                    or column.endswith("mm2/mm")
+                    or column.endswith("mm2")
+                    or column.endswith("mm")
+                    or column in {"Stress D/C value", "Transverse D/C value", "Longitudinal D/C value", "Overall D/C value", "phi", "cot theta"}
+                    else "-",
+                )
+            rows.append(result)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _column_pier_governing_combined_vt_row(vt_df: pd.DataFrame | None) -> dict[str, object] | None:
+    if vt_df is None or vt_df.empty:
+        return None
+    df = vt_df.copy()
+    df = df[~df.get("Status", pd.Series(index=df.index, dtype=object)).astype(str).isin(["NOT APPLICABLE"])].copy()
+    if df.empty:
+        return None
+    df["__dc"] = pd.to_numeric(df.get("Overall D/C value"), errors="coerce")
+    df["__tu"] = pd.to_numeric(df.get("Tu kN-m"), errors="coerce").abs()
+    df["__vu"] = pd.to_numeric(df.get("Vu kN"), errors="coerce").abs()
+    status_priority = {"FAIL": 5, "DATA REQUIRED": 4, "REVIEW": 3, "PASS": 2}
+    df["__status_priority"] = df.get("Status", pd.Series(index=df.index, dtype=object)).map(lambda value: status_priority.get(str(value), 1))
+    idx = df.sort_values(["__status_priority", "__dc", "__tu", "__vu"], ascending=[False, False, False, False]).index[0]
+    return vt_df.loc[idx].drop(labels=["__dc", "__tu", "__vu", "__status_priority"], errors="ignore").to_dict()
 
 
 def _beam_uls_governing_action(active_df: pd.DataFrame, column: str) -> dict[str, object] | None:
@@ -8668,9 +8997,9 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
         if code == PROJECT_CODE_ACI318
         else "AASHTO LRFD Column/Pier shear is not implemented; no Vn or PASS/FAIL is issued"
     )
-    torsion_status = "ACI RC preview" if code == PROJECT_CODE_ACI318 else "REVIEW / planned"
+    torsion_status = "ACI RC V+T gate" if code == PROJECT_CODE_ACI318 else "REVIEW / planned"
     torsion_detail = (
-        "ACI 318 RC torsion preview reads Tu, closed transverse reinforcement, and ordinary rebar Al; PSC, AASHTO, and combined V+T remain guarded"
+        "ACI 318 RC torsion and combined V+T read Tu, closed transverse reinforcement, and ordinary rebar Al; PSC and AASHTO remain guarded"
         if code == PROJECT_CODE_ACI318
         else "AASHTO LRFD Column/Pier torsion is not implemented; no Tn or PASS/FAIL is issued"
     )
@@ -8715,7 +9044,7 @@ def _column_pier_analysis_scope_cards() -> list[dict[str, object]]:
 def _render_column_pier_analysis_decision_view() -> None:
     st.markdown("### Column / Pier / Wall / Pylon Decision View")
     st.caption(
-        "Commercial workflow focus: run PMM interaction for Pu-Mux-Muy strength, then review guarded future checks without issuing unsupported shear/torsion results."
+        "Commercial workflow focus: run PMM interaction for Pu-Mux-Muy strength, then review scoped ACI RC shear, torsion, and V+T gates without extending them to unsupported routes."
     )
     _render_analysis_summary_strip(_column_pier_analysis_scope_cards(), columns=5)
 
@@ -9055,14 +9384,135 @@ def _render_column_pier_torsion_guarded_workspace() -> None:
             "- Transverse source: Sections -> Rebar -> Transverse Rebar, active Column/Pier closed ties/hoops or spiral. With no station owner, the lowest active `At/s` region is used conservatively.\n"
             "- Longitudinal source: ordinary active rebar only. Prestress strands, tendons, and PT bars are not counted as torsion `Al` in this milestone.\n"
             "- Formula basis: threshold screen uses `0.083 sqrt(fc) Acp^2/Pcp`; strength preview uses `Tn = 2 Ao At fy cot(theta) / s`, `theta = 45 deg`, `phi = 0.75`, plus `Al` and `s <= min(ph/8, 300 mm)` gates.\n"
-            "- Exclusions: AASHTO LRFD, prestressed torsion, multi-cell hollow torsion, seismic special detailing, anchorage/hooks, combined V+T, and final code certification."
+            "- Exclusions: AASHTO LRFD, prestressed torsion, multi-cell hollow torsion, seismic special detailing, anchorage/hooks, and shop-drawing detailing. Use the Shear + Torsion tab for the scoped ACI RC V+T interaction gate."
         )
     with st.expander("Future torsion code-check scope", expanded=False):
         st.markdown(
             "- Add station/height assignment for torsion transverse regions so confinement and shaft/core regions can be checked at actual demand locations.\n"
             "- Add explicit engineer-controlled Ao/Aoh visualization and validation for custom/hollow sections.\n"
-            "- Add combined shear-torsion interaction only after shear and torsion source gates are both validated.\n"
-            "- Required validation: separate ACI 318 and AASHTO LRFD benchmarks before any final PASS/FAIL result is allowed."
+            "- Expand the Shear + Torsion tab beyond the current ACI RC nonprestressed scope only after code-specific benchmarks exist.\n"
+            "- Required validation: AASHTO LRFD, prestressed V+T, seismic detailing, anchorage/hooks, and multi-cell hollow benchmarks before those routes can issue final PASS/FAIL."
+        )
+
+
+def _column_pier_combined_vt_summary_cards(
+    *,
+    vt_df: pd.DataFrame,
+    active_demands: pd.DataFrame,
+    analysis_input: AnalysisInput | None,
+) -> list[dict[str, object]]:
+    code = project_design_code_from_session(st.session_state)
+    edition = project_code_edition_from_session(st.session_state)
+    governing = _column_pier_governing_combined_vt_row(vt_df)
+    active_tu_count = 0
+    if not active_demands.empty and "Tu" in active_demands.columns:
+        active_tu_count = int(pd.to_numeric(active_demands["Tu"], errors="coerce").abs().gt(_COLUMN_PIER_SHEAR_DEMAND_TOL).sum())
+    if code != PROJECT_CODE_ACI318:
+        status_value = "REVIEW"
+        status_detail = "AASHTO LRFD Column/Pier V+T interaction is not implemented in this milestone"
+        status_color = "warning"
+    elif vt_df.empty:
+        status_value = "NOT READY"
+        status_detail = "Needs active ULS rows, nonzero Tu, Vux/Vuy source data, closed transverse reinforcement, and ordinary Al"
+        status_color = "warning"
+    elif any(str(value) == "FAIL" for value in vt_df["Status"].tolist()):
+        status_value = "FAIL"
+        status_detail = "At least one combined stress, transverse reinforcement, longitudinal Al, or source gate exceeds 1.0"
+        status_color = "danger"
+    elif any(str(value) == "DATA REQUIRED" for value in vt_df["Status"].tolist()):
+        status_value = "DATA REQUIRED"
+        status_detail = "One or more source inputs are incomplete for the final ACI RC V+T gate"
+        status_color = "warning"
+    elif any(str(value) == "REVIEW" for value in vt_df["Status"].tolist()):
+        status_value = "REVIEW"
+        status_detail = "Guarded inputs such as active prestress or unsupported code route prevent final acceptance"
+        status_color = "warning"
+    elif all(str(value) == "NOT APPLICABLE" for value in vt_df["Status"].tolist()):
+        status_value = "NOT APPLICABLE"
+        status_detail = "No active Tu demand in the current Column/Pier ULS rows"
+        status_color = "neutral"
+    else:
+        status_value = "PASS"
+        status_detail = "Scoped ACI RC V+T interaction gates pass for nonprestressed Column/Pier rows"
+        status_color = "ready"
+    governing_detail = "No governing combined V+T row"
+    governing_value = "-"
+    interaction_value = "-"
+    if governing is not None:
+        governing_value = f"D/C {_format_beam_uls_ratio(governing.get('Overall D/C value'))}"
+        governing_detail = f"{governing.get('Case', '-')} / {governing.get('Direction', '-')}"
+        interaction_value = str(governing.get("Interaction form") or "-")
+    prestress_value = "No"
+    prestress_detail = "ACI RC nonprestressed V+T route"
+    if _column_pier_has_active_prestress(analysis_input):
+        prestress_value = "Present"
+        prestress_detail = "PSC V+T interaction is not implemented; result remains REVIEW"
+    return [
+        {"title": "V+T status", "value": status_value, "detail": status_detail, "status": status_color, "strong": True},
+        {"title": "Code route", "value": "ACI 318 RC" if code == PROJECT_CODE_ACI318 else "Not implemented", "detail": f"{edition}; AASHTO and PSC routes remain guarded", "status": "info" if code == PROJECT_CODE_ACI318 else "warning"},
+        {"title": "Active Tu cases", "value": f"{active_tu_count:,}", "detail": "Each active Tu is checked for Vux and Vuy directions" if active_tu_count else "No nonzero Tu in active ULS rows", "status": "info" if active_tu_count else "neutral"},
+        {"title": "Governing row", "value": governing_value, "detail": governing_detail, "status": "info"},
+        {"title": "Interaction form", "value": interaction_value, "detail": "Solid uses root-sum-square; hollow uses linear stress sum", "status": "info"},
+        {"title": "Prestress effects", "value": prestress_value, "detail": prestress_detail, "status": "warning" if prestress_value == "Present" else "neutral"},
+    ]
+
+
+def _render_column_pier_combined_vt_workspace() -> None:
+    st.markdown("#### Shear + Torsion")
+    st.caption("Scoped ACI 318 RC combined shear-torsion interaction gate for Column/Pier case-based ULS rows.")
+    active_demands = _active_column_pier_uls_demand_dataframe_from_state(st.session_state)
+    analysis_input = _serviceability_analysis_input_from_session()
+    vt_df = _column_pier_combined_vt_check_dataframe(st.session_state, analysis_input)
+    _render_analysis_summary_strip(
+        _column_pier_combined_vt_summary_cards(
+            vt_df=vt_df,
+            active_demands=active_demands,
+            analysis_input=analysis_input,
+        ),
+        columns=3,
+    )
+    code = project_design_code_from_session(st.session_state)
+    if code != PROJECT_CODE_ACI318:
+        st.warning("Column/Pier AASHTO LRFD V+T interaction is not implemented. This tab does not issue final V+T PASS/FAIL for AASHTO projects.")
+    elif vt_df.empty:
+        st.warning("No Column/Pier ACI RC V+T rows are ready. Enter nonzero Tu, confirm Vux/Vuy rows, activate closed transverse reinforcement, and provide ordinary longitudinal rebar.")
+    elif any(str(value) == "FAIL" for value in vt_df["Status"].tolist()):
+        st.error("One or more ACI RC combined V+T gates fail. Review demand, section/core geometry, transverse reinforcement, and ordinary longitudinal torsion bars.")
+    elif any(str(value) == "DATA REQUIRED" for value in vt_df["Status"].tolist()):
+        st.warning("ACI RC V+T interaction is not ready because one or more required source inputs are incomplete.")
+    elif any(str(value) == "REVIEW" for value in vt_df["Status"].tolist()):
+        st.warning("ACI RC V+T values are calculated or partially screened, but guarded assumptions prevent final acceptance for one or more rows.")
+    elif all(str(value) == "NOT APPLICABLE" for value in vt_df["Status"].tolist()):
+        st.info("No active Tu demand is present. Use the Shear tab for shear-only review.")
+    else:
+        st.success("ACI RC combined shear-torsion interaction gates pass for the current nonprestressed Column/Pier rows.")
+
+    if not vt_df.empty:
+        display_columns = [
+            "Status", "Direction", "Case", "Vu kN", "Tu kN-m", "Shape",
+            "Stress status", "Transverse status", "Longitudinal status",
+            "Source shear status", "Source torsion status",
+            "Stress D/C value", "Transverse D/C value", "Longitudinal D/C value", "Overall D/C value",
+            "Interaction form",
+        ]
+        st.dataframe(vt_df[display_columns], use_container_width=True, hide_index=True)
+        st.error(
+            "Seismic confinement/detailing review remains separate: this V+T gate uses the Control section transverse row only "
+            "and does not certify plastic-hinge confinement, hoop anchorage, lap-splice confinement, or seismic detailing."
+        )
+
+    with st.expander("ACI V+T audit / method details", expanded=False):
+        if vt_df.empty:
+            st.info("Audit rows are not available until the section, material, active V/T demand, closed transverse reinforcement, and ordinary Al source are ready.")
+        else:
+            st.dataframe(vt_df, use_container_width=True, hide_index=True)
+        st.markdown(
+            "- Scope: ACI 318 RC nonprestressed Column/Pier combined shear-torsion interaction gate.\n"
+            "- Demand source: Loads -> Column/Pier ULS table, active `Vux`, `Vuy`, and `Tu` rows.\n"
+            "- Transverse source: Sections -> Rebar -> Transverse Rebar, single active Control section row; no minimum ties are silently assumed.\n"
+            "- Longitudinal torsion source: ordinary active longitudinal rebar only. Prestress strands, tendons, and PT bars are not counted as `Al`.\n"
+            "- Formula basis: combined stress uses `Vu/(bw d)` with `Tu ph/(1.7 Aoh^2)`; solid sections use root-sum-square and hollow sections use linear sum. Combined transverse demand uses `Av/s + 2At/s`.\n"
+            "- Exclusions: AASHTO LRFD, prestressed V+T, second-order effects, seismic special detailing, closed-hoop anchorage/hooks, development/lap splices, and shop-drawing detailing."
         )
 
 
@@ -14978,6 +15428,8 @@ def render_analysis_uls_pmm() -> None:
         _render_column_pier_shear_guarded_workspace()
     elif active_check == "Torsion":
         _render_column_pier_torsion_guarded_workspace()
+    elif active_check == "Shear + Torsion":
+        _render_column_pier_combined_vt_workspace()
     else:
         _render_column_pier_flexural_pmm_workspace()
 

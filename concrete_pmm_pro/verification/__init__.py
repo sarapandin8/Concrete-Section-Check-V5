@@ -1,6 +1,11 @@
 """Verification and validation helpers for Concrete PMM Pro."""
 
 from concrete_pmm_pro.verification.dc_directional_benchmarks import DCDirectionalBenchmarkSummary, run_valid_dc1_directional_benchmark_pack
+from concrete_pmm_pro.verification.column_pier_vt_benchmarks import (
+    ColumnPierVTBenchmarkSummary,
+    benchmark_cases,
+    reference_values,
+)
 from concrete_pmm_pro.verification.po_axial_cap_benchmarks import POAxialCapSummary, run_valid_po1_axial_cap_benchmark_pack
 from concrete_pmm_pro.verification.pmm_final_rc1_benchmarks import PMMFinalRC1Summary, run_pmm_final_rc1_readiness_gate
 from concrete_pmm_pro.verification.ps_bonded_benchmarks import PSBenchmarkSummary, run_valid_ps1_bonded_prestress_benchmark_pack
@@ -18,6 +23,7 @@ from concrete_pmm_pro.verification.validation_framework import (
 
 __all__ = [
     "DCDirectionalBenchmarkSummary",
+    "ColumnPierVTBenchmarkSummary",
     "PMMSolverValidationReport",
     "PMMFinalRC1Summary",
     "POAxialCapSummary",
@@ -30,6 +36,8 @@ __all__ = [
     "run_pmm_solver_validation_report",
     "run_pmm_final_rc1_readiness_gate",
     "run_valid_dc1_directional_benchmark_pack",
+    "benchmark_cases",
+    "reference_values",
     "run_valid_po1_axial_cap_benchmark_pack",
     "run_valid_ps1_bonded_prestress_benchmark_pack",
     "run_valid_ps2_stress_region_benchmark_pack",

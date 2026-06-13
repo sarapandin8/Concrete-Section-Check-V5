@@ -176,6 +176,7 @@ def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
     assert "ACI 318 RC shear preview" in source
     assert "AASHTO LRFD Column/Pier shear is not implemented" in source
     assert "ACI 318 RC combined shear-torsion interaction gate" in source
+    assert "ULS.COL.VT.QA1" in source
     assert "Seismic confinement review" in source
     assert "The shear result above uses the Control section row only" in source
     assert "Recommended seismic spacing (ACI advisor)" in source

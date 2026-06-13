@@ -9512,6 +9512,7 @@ def _render_column_pier_combined_vt_workspace() -> None:
             "- Transverse source: Sections -> Rebar -> Transverse Rebar, single active Control section row; no minimum ties are silently assumed.\n"
             "- Longitudinal torsion source: ordinary active longitudinal rebar only. Prestress strands, tendons, and PT bars are not counted as `Al`.\n"
             "- Formula basis: combined stress uses `Vu/(bw d)` with `Tu ph/(1.7 Aoh^2)`; solid sections use root-sum-square and hollow sections use linear sum. Combined transverse demand uses `Av/s + 2At/s`.\n"
+            "- Validation evidence: `ULS.COL.VT.QA1` compares this Analysis gate against independent rectangular-section hand references for Vux, Vuy, zero-shear torsion, and below-threshold torsion cases.\n"
             "- Exclusions: AASHTO LRFD, prestressed V+T, second-order effects, seismic special detailing, closed-hoop anchorage/hooks, development/lap splices, and shop-drawing detailing."
         )
 

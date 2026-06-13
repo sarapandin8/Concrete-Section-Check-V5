@@ -38,6 +38,7 @@ from concrete_pmm_pro.ui.analysis_page import (
     _pmm_3d_display_enabled_from_state,
     _should_generate_pmm_3d_figure_from_state,
     _column_pier_shear_check_dataframe,
+    _column_pier_aci_seismic_spacing_summary_dataframe,
     _column_pier_torsion_check_dataframe,
 )
 
@@ -147,6 +148,24 @@ def test_column_pier_aashto_shear_remains_review_without_capacity_claim() -> Non
     assert set(df["Status"]) == {"REVIEW"}
     assert df["Capacity"].eq("-").all()
     assert df["Notes"].str.contains("AASHTO LRFD Column/Pier shear is not implemented").all()
+
+
+def test_column_pier_shear_view_reads_aci_seismic_spacing_advisor_summary() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state()
+    state["rebars"] = analysis_input.rebars
+    state["column_pier_transverse_reinforcement_settings"]["seismic_detailing"] = "ACI 318 special seismic confinement advisor"
+    state["column_pier_transverse_reinforcement_settings"]["seismic_hx_mm"] = 300.0
+
+    df = _column_pier_aci_seismic_spacing_summary_dataframe(state, analysis_input)
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["Recommendation"] == "Recommended seismic spacing (ACI advisor)"
+    assert row["Tie / hoop"] == "DB12 x 2 legs @ 100 mm"
+    assert row["Suggested spacing"] == "100 mm"
+    assert row["Governing criterion"] == "0.25 x minimum outside section dimension"
+    assert "Control section row only" in row["Analysis use"]
 
 
 def test_column_pier_aci_torsion_preview_reads_tu_closed_ties_and_ordinary_al() -> None:

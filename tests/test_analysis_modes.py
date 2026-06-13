@@ -174,3 +174,5 @@ def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
     assert "AASHTO LRFD Column/Pier shear is not implemented" in source
     assert "Seismic confinement review" in source
     assert "The shear result above uses the Control section row only" in source
+    assert "Recommended seismic spacing (ACI advisor)" in source
+    assert "Seismic spacing advisor is not selected in Sections -> Rebar -> Transverse Rebar" in source

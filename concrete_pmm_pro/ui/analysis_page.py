@@ -255,6 +255,8 @@ COLUMN_PIER_TRANSVERSE_COLUMNS_ANALYSIS = [
 ]
 _BEAM_ULS_DEMAND_TOL = 1.0e-9
 _COLUMN_PIER_SHEAR_DEMAND_TOL = 1.0e-9
+_COLUMN_PIER_ACI_SEISMIC_ADVISOR_LABEL = "ACI 318 special seismic confinement advisor"
+_COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM = 25.0
 _BEAM_ULS_FLEXURE_PREVIEW_MAX_ROWS = 24
 _GIRDER_STRAND_FPU_MPA_DEFAULT = 1860.0
 _GIRDER_STRAND_FPY_MPA_DEFAULT = 1670.0
@@ -2883,6 +2885,100 @@ def _column_pier_active_transverse_zone_for_shear(state: Mapping[str, object]) -
     if not rows:
         return None
     return sorted(rows, key=lambda item: (float(item["Av/s mm2/mm"]), -_beam_uls_float(item.get("Spacing_mm"))))[0]
+
+
+def _column_pier_reference_transverse_row_for_seismic_advisor(state: Mapping[str, object]) -> dict[str, object] | None:
+    df = _column_pier_transverse_reinforcement_dataframe_from_state(state)
+    if df.empty:
+        return None
+    active = df[df["Active"]].copy()
+    source = active if not active.empty else df
+    return source.iloc[0].to_dict()
+
+
+def _column_pier_section_outer_min_dimension_mm(section_geometry: SectionGeometry | None) -> float | None:
+    if section_geometry is None:
+        return None
+    try:
+        outer_polygon = to_shapely_polygon(SectionGeometry(name=section_geometry.name, outer_polygon=section_geometry.outer_polygon, holes=[]))
+        minx, miny, maxx, maxy = outer_polygon.bounds
+    except Exception:
+        return None
+    width = float(maxx) - float(minx)
+    depth = float(maxy) - float(miny)
+    if not all(math.isfinite(value) and value > 0.0 for value in [width, depth]):
+        return None
+    return min(width, depth)
+
+
+def _column_pier_min_active_longitudinal_rebar_diameter_mm(state: Mapping[str, object]) -> float | None:
+    if not ordinary_rebar_enabled(state, default=True):
+        return None
+    raw_rebars = _beam_uls_get_state_value(state, "rebars", []) or []
+    try:
+        rebars = effective_rebars_for_analysis(list(raw_rebars), state)
+    except Exception:
+        rebars = list(raw_rebars)
+    diameters = [
+        _beam_uls_float(getattr(item, "diameter_mm", None))
+        for item in rebars
+        if math.isfinite(_beam_uls_float(getattr(item, "diameter_mm", None))) and _beam_uls_float(getattr(item, "diameter_mm", None)) > 0.0
+    ]
+    return min(diameters) if diameters else None
+
+
+def _column_pier_aci_seismic_spacing_summary_dataframe(
+    state: Mapping[str, object],
+    analysis_input: AnalysisInput | None,
+) -> pd.DataFrame:
+    settings = _column_pier_transverse_settings_from_state(state)
+    if str(settings.get("seismic_detailing") or "") != _COLUMN_PIER_ACI_SEISMIC_ADVISOR_LABEL:
+        return pd.DataFrame()
+    row = _column_pier_reference_transverse_row_for_seismic_advisor(state)
+    section_min_dim = _column_pier_section_outer_min_dimension_mm(analysis_input.section_geometry if analysis_input is not None else None)
+    min_bar_dia = _column_pier_min_active_longitudinal_rebar_diameter_mm(state)
+    hx_mm = _beam_uls_float(settings.get("seismic_hx_mm"))
+    if not math.isfinite(hx_mm) or hx_mm <= 0.0:
+        hx_mm = 300.0
+
+    criteria: list[tuple[str, float]] = []
+    if section_min_dim is not None and section_min_dim > 0.0:
+        criteria.append(("0.25 x minimum outside section dimension", float(section_min_dim) / 4.0))
+    if min_bar_dia is not None and min_bar_dia > 0.0:
+        criteria.append(("6 x smallest active longitudinal bar diameter", 6.0 * float(min_bar_dia)))
+    so_raw = 100.0 + (350.0 - float(hx_mm)) / 3.0
+    so_limit = min(150.0, max(100.0, so_raw))
+    criteria.append(("s0 from hx, bounded to 100-150 mm", so_limit))
+
+    if not criteria:
+        suggested_spacing = float("nan")
+        governing = "REVIEW - advisor inputs unavailable"
+    else:
+        governing, s_max = min(criteria, key=lambda item: item[1])
+        suggested_spacing = max(
+            _COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM,
+            math.floor(float(s_max) / _COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM) * _COLUMN_PIER_SEISMIC_SPACING_INCREMENT_MM,
+        )
+
+    bar_size = str((row or {}).get("Bar Size") or "-").strip() or "-"
+    legs = _beam_uls_float((row or {}).get("Legs"))
+    legs_text = "-" if not math.isfinite(legs) or legs <= 0.0 else f"{int(legs)} legs"
+    tie_text = f"{bar_size} x {legs_text}"
+    if math.isfinite(suggested_spacing) and suggested_spacing > 0.0:
+        tie_text = f"{tie_text} @ {suggested_spacing:.0f} mm"
+
+    return pd.DataFrame(
+        [
+            {
+                "Recommendation": "Recommended seismic spacing (ACI advisor)",
+                "Tie / hoop": tie_text,
+                "Suggested spacing": "-" if not math.isfinite(suggested_spacing) else f"{suggested_spacing:.0f} mm",
+                "hx": f"{hx_mm:.0f} mm",
+                "Governing criterion": governing,
+                "Analysis use": "Advisor only / REVIEW - shear uses Control section row only",
+            }
+        ]
+    )
 
 
 def _lineal_intersection_length_mm(geometry: object) -> float:
@@ -8818,6 +8914,11 @@ def _render_column_pier_shear_guarded_workspace() -> None:
             "provide special transverse reinforcement per the governing code. The shear result above uses the Control section row only "
             "and does not certify seismic confinement detailing."
         )
+        seismic_advisor_df = _column_pier_aci_seismic_spacing_summary_dataframe(st.session_state, analysis_input)
+        if seismic_advisor_df.empty:
+            st.info("Seismic spacing advisor is not selected in Sections -> Rebar -> Transverse Rebar. Activate it there to show the recommended seismic tie/hoop spacing here.")
+        else:
+            st.dataframe(seismic_advisor_df, use_container_width=True, hide_index=True)
     with st.expander("ACI shear audit / method details", expanded=False):
         if shear_df.empty:
             st.info("Audit rows are not available until the section, material, active Vux/Vuy demand, and active transverse reinforcement are ready.")

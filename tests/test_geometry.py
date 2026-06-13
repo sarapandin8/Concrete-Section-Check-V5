@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from concrete_pmm_pro.core.models import Point2D, SectionGeometry
-from concrete_pmm_pro.geometry.generators import circle, rectangle, rectangular_hollow
+from concrete_pmm_pro.geometry.generators import circle, rectangle, rectangular_chamfered, rectangular_chamfered_dimensions, rectangular_hollow
 from concrete_pmm_pro.geometry.summary import summarize_geometry
 from concrete_pmm_pro.geometry.validation import validate_section_geometry
 
@@ -27,6 +27,43 @@ def test_hollow_rectangle_area() -> None:
     geometry = rectangular_hollow(width_mm=1000, height_mm=800, wall_thickness_mm=100)
     summary = summarize_geometry(geometry)
     assert summary.area_mm2 == 1000 * 800 - 800 * 600
+
+
+def test_rectangular_chamfered_supports_independent_x_y_chamfers() -> None:
+    geometry = rectangular_chamfered(width_mm=500, height_mm=700, chamfer_x_mm=80, chamfer_y_mm=40)
+    summary = summarize_geometry(geometry)
+    points = [(point.x, point.y) for point in geometry.outer_polygon]
+
+    assert points[0] == (-170.0, -350.0)
+    assert points[1] == (170.0, -350.0)
+    assert points[2] == (250.0, -310.0)
+    assert summary.area_mm2 == pytest_approx(500 * 700 - 2 * 80 * 40, rel=1e-12)
+    assert geometry.metadata["chamfer_x_mm"] == 80
+    assert geometry.metadata["chamfer_y_mm"] == 40
+
+
+def test_rectangular_chamfered_legacy_single_chamfer_remains_supported() -> None:
+    geometry = rectangular_chamfered(width_mm=500, height_mm=700, chamfer_mm=50)
+    points = [(point.x, point.y) for point in geometry.outer_polygon]
+
+    assert points[0] == (-200.0, -350.0)
+    assert points[2] == (250.0, -300.0)
+
+
+def test_rectangular_chamfered_rejects_chamfers_that_remove_a_side() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="chamfer_x_mm"):
+        rectangular_chamfered(width_mm=500, height_mm=700, chamfer_x_mm=250, chamfer_y_mm=40)
+    with pytest.raises(ValueError, match="chamfer_y_mm"):
+        rectangular_chamfered(width_mm=500, height_mm=700, chamfer_x_mm=80, chamfer_y_mm=350)
+
+
+def test_rectangular_chamfered_dimension_guides_show_cx_and_cy() -> None:
+    dimensions = rectangular_chamfered_dimensions(width_mm=500, height_mm=700, chamfer_x_mm=80, chamfer_y_mm=40)
+    symbols = [item.symbol for item in dimensions]
+
+    assert symbols == ["B", "H", "cx", "cy"]
 
 
 def test_invalid_polygon() -> None:

@@ -63,8 +63,17 @@
           "step": 10
         },
         {
-          "name": "chamfer_mm",
-          "label": "Chamfer c (mm)",
+          "name": "chamfer_x_mm",
+          "label": "Chamfer x cx (mm)",
+          "type": "number",
+          "default": 50,
+          "min": 0,
+          "max": 2000,
+          "step": 5
+        },
+        {
+          "name": "chamfer_y_mm",
+          "label": "Chamfer y cy (mm)",
           "type": "number",
           "default": 50,
           "min": 0,

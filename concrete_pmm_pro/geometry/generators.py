@@ -485,24 +485,50 @@ def rectangle(width_mm: float, height_mm: float, name: str = "Rectangle") -> Sec
     return SectionGeometry(name=name, outer_polygon=_rectangle_points(width_mm, height_mm), holes=[], metadata={"preset": "rectangle"})
 
 
-def rectangular_chamfered(width_mm: float, height_mm: float, chamfer_mm: float, name: str = "Rectangular chamfered") -> SectionGeometry:
+def rectangular_chamfered(
+    width_mm: float,
+    height_mm: float,
+    chamfer_mm: float | None = None,
+    chamfer_x_mm: float | None = None,
+    chamfer_y_mm: float | None = None,
+    name: str = "Rectangular chamfered",
+) -> SectionGeometry:
     _require_positive("B", width_mm)
     _require_positive("H", height_mm)
-    _require_non_negative("chamfer_mm", chamfer_mm)
+    legacy_chamfer = 0.0 if chamfer_mm is None else float(chamfer_mm)
+    cx_raw = legacy_chamfer if chamfer_x_mm is None else float(chamfer_x_mm)
+    cy_raw = legacy_chamfer if chamfer_y_mm is None else float(chamfer_y_mm)
+    _require_non_negative("chamfer_x_mm", cx_raw)
+    _require_non_negative("chamfer_y_mm", cy_raw)
+    if cx_raw * 2.0 >= width_mm:
+        raise ValueError("Invalid geometry: chamfer_x_mm must be smaller than B/2.")
+    if cy_raw * 2.0 >= height_mm:
+        raise ValueError("Invalid geometry: chamfer_y_mm must be smaller than H/2.")
     w = width_mm / 2.0
     h = height_mm / 2.0
-    c = min(chamfer_mm, width_mm / 2.0, height_mm / 2.0)
+    cx = cx_raw
+    cy = cy_raw
     points = [
-        _point(-w + c, -h),
-        _point(w - c, -h),
-        _point(w, -h + c),
-        _point(w, h - c),
-        _point(w - c, h),
-        _point(-w + c, h),
-        _point(-w, h - c),
-        _point(-w, -h + c),
+        _point(-w + cx, -h),
+        _point(w - cx, -h),
+        _point(w, -h + cy),
+        _point(w, h - cy),
+        _point(w - cx, h),
+        _point(-w + cx, h),
+        _point(-w, h - cy),
+        _point(-w, -h + cy),
     ]
-    return SectionGeometry(name=name, outer_polygon=points, holes=[], metadata={"preset": "rectangular_chamfered"})
+    return SectionGeometry(
+        name=name,
+        outer_polygon=points,
+        holes=[],
+        metadata={
+            "preset": "rectangular_chamfered",
+            "chamfer_x_mm": cx_raw,
+            "chamfer_y_mm": cy_raw,
+            "legacy_chamfer_mm": chamfer_mm,
+        },
+    )
 
 
 def circle(diameter_mm: float, segments: int = 128, name: str = "Circle") -> SectionGeometry:
@@ -1513,11 +1539,25 @@ def rectangle_dimensions(width_mm: float, height_mm: float, **_: object) -> list
     ]
 
 
-def rectangular_chamfered_dimensions(width_mm: float, height_mm: float, chamfer_mm: float, **kwargs: object) -> list[DimensionItem]:
+def rectangular_chamfered_dimensions(
+    width_mm: float,
+    height_mm: float,
+    chamfer_mm: float | None = None,
+    chamfer_x_mm: float | None = None,
+    chamfer_y_mm: float | None = None,
+    **kwargs: object,
+) -> list[DimensionItem]:
     dims = rectangle_dimensions(width_mm, height_mm, **kwargs)
     w = width_mm / 2.0
     h = height_mm / 2.0
-    dims.append(_dim("c", _point(w - chamfer_mm, h), _point(w, h - chamfer_mm), _point(w + chamfer_mm, h + chamfer_mm), "aligned", chamfer_mm))
+    legacy_chamfer = 0.0 if chamfer_mm is None else float(chamfer_mm)
+    cx = legacy_chamfer if chamfer_x_mm is None else float(chamfer_x_mm)
+    cy = legacy_chamfer if chamfer_y_mm is None else float(chamfer_y_mm)
+    offset = max(width_mm, height_mm) * 0.08
+    if cx > 0:
+        dims.append(_dim("cx", _point(w - cx, h + offset), _point(w, h + offset), _point(w - cx / 2.0, h + 1.6 * offset), "horizontal", cx))
+    if cy > 0:
+        dims.append(_dim("cy", _point(w + offset, h - cy), _point(w + offset, h), _point(w + 1.8 * offset, h - cy / 2.0), "vertical", cy))
     return dims
 
 

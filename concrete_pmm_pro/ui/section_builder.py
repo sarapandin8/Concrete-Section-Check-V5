@@ -199,6 +199,31 @@ def _number_input(parameter: dict[str, Any], key_prefix: str) -> float:
     )
 
 
+def _legacy_rectangular_chamfer_value() -> float | None:
+    params = st.session_state.get("section_parameters", {})
+    legacy_value = None
+    if isinstance(params, dict):
+        legacy_value = params.get("chamfer_mm")
+    if legacy_value is None:
+        legacy_value = st.session_state.get("rectangular_chamfered_chamfer_mm")
+    try:
+        return None if legacy_value is None else float(legacy_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sync_rectangular_chamfered_legacy_widget_defaults(preset: dict[str, Any]) -> None:
+    if str(preset.get("key", "")) != "rectangular_chamfered":
+        return
+    legacy = _legacy_rectangular_chamfer_value()
+    if legacy is None:
+        return
+    for name in ("chamfer_x_mm", "chamfer_y_mm"):
+        key = f"rectangular_chamfered_{name}"
+        if key not in st.session_state:
+            st.session_state[key] = legacy
+
+
 def _safe_status(status: str) -> str:
     return status if status in {"ready", "warning", "danger", "info", "neutral"} else "neutral"
 
@@ -1490,6 +1515,7 @@ def _render_geometry_parameters_workspace(
         label_mode = {"Symbol + Value": "symbol_value", "Symbol only": "symbol", "Value only": "value"}[label_mode_label]
 
         params: dict[str, Any] = {}
+        _sync_rectangular_chamfered_legacy_widget_defaults(preset)
         hidden_material_parameters = _hidden_material_parameter_names(preset)
         visible_parameters = [
             parameter for parameter in preset["parameters"] if parameter["name"] not in hidden_material_parameters
@@ -1557,6 +1583,12 @@ def _build_geometry(
     params: dict[str, Any],
 ) -> tuple[Any | None, list[Any], ValidationResult]:
     generator_name = preset["generator"]
+    if generator_name == "rectangular_chamfered" and "chamfer_mm" in params:
+        params = {
+            **params,
+            "chamfer_x_mm": params.get("chamfer_x_mm", params["chamfer_mm"]),
+            "chamfer_y_mm": params.get("chamfer_y_mm", params["chamfer_mm"]),
+        }
     generator_params = {name: params[name] for name in _geometry_parameter_names(preset) if name in params}
     try:
         geometry = default_registry.geometry(generator_name)(**generator_params, name=preset["display_name"])

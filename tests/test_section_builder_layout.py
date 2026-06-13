@@ -42,6 +42,48 @@ def test_rectangle_width_height_remain_section_builder_parameters() -> None:
     assert "Height H (mm)" in labels
 
 
+def test_rectangular_chamfered_uses_separate_x_y_chamfer_parameters() -> None:
+    preset = preset_by_key("rectangular_chamfered")
+    labels = [parameter["label"] for parameter in preset["parameters"]]
+    names = [parameter["name"] for parameter in preset["parameters"]]
+
+    assert "Chamfer x cx (mm)" in labels
+    assert "Chamfer y cy (mm)" in labels
+    assert "chamfer_x_mm" in names
+    assert "chamfer_y_mm" in names
+    assert "chamfer_mm" not in names
+
+
+def test_section_builder_rectangular_chamfered_builds_asymmetric_chamfer() -> None:
+    preset = preset_by_key("rectangular_chamfered")
+
+    geometry, dimensions, validation = section_builder._build_geometry(
+        preset,
+        {"width_mm": 500.0, "height_mm": 700.0, "chamfer_x_mm": 80.0, "chamfer_y_mm": 40.0},
+    )
+
+    assert validation.is_valid
+    assert geometry is not None
+    assert geometry.metadata["chamfer_x_mm"] == 80.0
+    assert geometry.metadata["chamfer_y_mm"] == 40.0
+    assert [item.symbol for item in dimensions] == ["B", "H", "cx", "cy"]
+
+
+def test_section_builder_rectangular_chamfered_legacy_chamfer_mm_params_still_build() -> None:
+    preset = preset_by_key("rectangular_chamfered")
+
+    geometry, dimensions, validation = section_builder._build_geometry(
+        preset,
+        {"width_mm": 500.0, "height_mm": 700.0, "chamfer_mm": 50.0},
+    )
+
+    assert validation.is_valid
+    assert geometry is not None
+    assert geometry.metadata["chamfer_x_mm"] == 50.0
+    assert geometry.metadata["chamfer_y_mm"] == 50.0
+    assert [item.symbol for item in dimensions] == ["B", "H", "cx", "cy"]
+
+
 def test_section_builder_status_panel_helper_escapes_values() -> None:
     html = section_builder._status_panel_html(
         [section_builder.SectionMetric("Area <gross>", "400 > 300", "safe & escaped", "info", strong=True)]

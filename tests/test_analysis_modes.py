@@ -171,6 +171,8 @@ def test_column_pier_uls_has_guarded_flexural_shear_torsion_subviews() -> None:
     assert "_render_column_pier_shear_guarded_workspace" in source
     assert "_render_column_pier_torsion_guarded_workspace" in source
     assert "_render_column_pier_combined_vt_workspace" in source
+    assert "Column/Pier ULS Decision Summary" in source
+    assert "_column_pier_check_decision_rows" in source
     assert "_column_pier_shear_check_dataframe" in source
     assert "_column_pier_combined_vt_check_dataframe" in source
     assert "ACI 318 RC shear preview" in source

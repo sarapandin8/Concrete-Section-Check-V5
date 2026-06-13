@@ -16,6 +16,7 @@ from concrete_pmm_pro.analysis.runtime import (
     serviceability_input_hash,
     timed_call,
 )
+from concrete_pmm_pro.analysis.capacity_check import DemandCapacityResult, DemandCapacitySummary
 from concrete_pmm_pro.core.analysis import AnalysisInput, AnalysisSettings
 from concrete_pmm_pro.core.models import ConcreteMaterial, LoadCase, PrestressElement, Rebar, RebarMaterial
 from concrete_pmm_pro.geometry.generators import rectangle, rectangular_hollow
@@ -42,6 +43,8 @@ from concrete_pmm_pro.ui.analysis_page import (
     _column_pier_torsion_check_dataframe,
     _column_pier_combined_vt_check_dataframe,
     _column_pier_governing_combined_vt_row,
+    _column_pier_check_decision_rows,
+    _column_pier_uls_decision_summary_cards,
 )
 
 
@@ -223,6 +226,67 @@ def test_column_pier_aci_combined_vt_gate_reads_shear_torsion_and_ordinary_al() 
     assert governing is not None
     assert governing["Check"] == "Shear + Torsion"
     assert "ordinary longitudinal Al" in str(governing["Notes"])
+
+
+def test_column_pier_uls_closeout_decision_summary_combines_pmm_shear_torsion_and_vt() -> None:
+    analysis_input = _analysis_input(prestress_elements=[])
+    state = _column_pier_shear_state(vux=80.0, vuy=120.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+    state["rc_demand_capacity_result"] = DemandCapacitySummary(
+        results=[
+            DemandCapacityResult(
+                combo_name="ULS-COL",
+                Pu_N=1_000_000.0,
+                Mux_Nmm=100_000_000.0,
+                Muy_Nmm=50_000_000.0,
+                Mu_Nmm=111_803_398.9,
+                moment_angle_rad=0.0,
+                capacity_Mn_Nmm=400_000_000.0,
+                capacity_phiMn_Nmm=360_000_000.0,
+                capacity_phiPn_N=2_000_000.0,
+                dcr=0.32,
+                status="PASS",
+                message="benchmark PMM row",
+            )
+        ],
+        governing_combo="ULS-COL",
+        max_dcr=0.32,
+        overall_status="PASS",
+    )
+
+    rows = _column_pier_check_decision_rows(state, analysis_input)
+    by_check = {row["Check"]: row for row in rows}
+
+    assert list(by_check) == ["Flexural (PMM)", "Shear", "Torsion", "Shear + Torsion"]
+    assert by_check["Flexural (PMM)"]["Status"] == "PASS"
+    assert by_check["Flexural (PMM)"]["D/C"] == "0.320"
+    assert by_check["Shear"]["Status"] == "PASS"
+    assert by_check["Torsion"]["Status"] == "PASS"
+    assert by_check["Shear + Torsion"]["Status"] == "PASS"
+    assert "QA1" in by_check["Shear + Torsion"]["Route / Scope"]
+
+    cards = _column_pier_uls_decision_summary_cards(rows, analysis_input, state)
+    assert cards[0]["value"] == "Available for final review"
+    assert cards[2]["value"] == "PASS"
+
+
+def test_column_pier_uls_closeout_decision_summary_flags_aashto_and_active_prestress_review() -> None:
+    analysis_input = _analysis_input()
+    state = _column_pier_shear_state(code="AASHTO LRFD", vux=80.0, vuy=120.0, tu=20.0)
+    state["rebars"] = analysis_input.rebars
+
+    rows = _column_pier_check_decision_rows(state, analysis_input)
+    by_check = {row["Check"]: row for row in rows}
+    cards = _column_pier_uls_decision_summary_cards(rows, analysis_input, state)
+
+    assert by_check["Flexural (PMM)"]["Status"] == "NOT READY"
+    assert by_check["Shear"]["Status"] == "REVIEW"
+    assert by_check["Torsion"]["Status"] == "REVIEW"
+    assert by_check["Shear + Torsion"]["Status"] == "REVIEW"
+    assert cards[0]["value"] == "REVIEW / incomplete"
+    assert cards[1]["status"] == "warning"
+    assert cards[3]["value"] == "Present"
+    assert cards[3]["status"] == "warning"
 
 
 def test_column_pier_aci_combined_vt_gate_fails_high_torsion_demand() -> None:

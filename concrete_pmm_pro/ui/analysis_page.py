@@ -9047,6 +9047,217 @@ def _render_column_pier_analysis_decision_view() -> None:
         "Commercial workflow focus: run PMM interaction for Pu-Mux-Muy strength, then review scoped ACI RC shear, torsion, and V+T gates without extending them to unsupported routes."
     )
     _render_analysis_summary_strip(_column_pier_analysis_scope_cards(), columns=5)
+    _render_column_pier_uls_decision_summary()
+
+
+def _column_pier_status_style(status: object) -> str:
+    text = str(status or "").strip().upper()
+    if not text:
+        return "neutral"
+    if "FAIL" in text or "OUT_OF_RANGE" in text:
+        return "danger"
+    if "PASS" in text or "BELOW THRESHOLD" in text or text == "NOT APPLICABLE":
+        return "ready"
+    if "REVIEW" in text or "DATA REQUIRED" in text or "NOT READY" in text or "NOT_CHECKED" in text:
+        return "warning"
+    return "info"
+
+
+def _column_pier_dc_text(value: object) -> str:
+    numeric = _beam_uls_float(value)
+    if numeric is None:
+        return "-"
+    return _format_beam_uls_ratio(numeric)
+
+
+def _column_pier_status_counts(rows: list[dict[str, object]]) -> dict[str, int]:
+    counts = {"danger": 0, "warning": 0, "ready": 0, "neutral": 0, "info": 0}
+    for row in rows:
+        style = _column_pier_status_style(row.get("Status"))
+        counts[style] = counts.get(style, 0) + 1
+    return counts
+
+
+def _column_pier_check_decision_rows(
+    state: Mapping[str, object],
+    analysis_input: AnalysisInput | None,
+) -> list[dict[str, object]]:
+    code = project_design_code_from_session(state)
+    dc_summary = state.get("rc_demand_capacity_result")
+    if dc_summary is None:
+        dc_summary = state.get("demand_capacity_summary")
+
+    if isinstance(dc_summary, DemandCapacitySummary):
+        pmm_status = str(dc_summary.overall_status or "NOT_CHECKED").replace("_", " ")
+        pmm_case = str(dc_summary.governing_combo or "-")
+        pmm_dc = _column_pier_dc_text(dc_summary.max_dcr)
+        pmm_action = "Run PMM analysis." if dc_summary.overall_status == "NOT_CHECKED" else "Review PMM diagnostics / QA before final issue."
+    else:
+        pmm_status = "NOT READY"
+        pmm_case = "-"
+        pmm_dc = "-"
+        pmm_action = "Run / Recalculate Analysis in Flexural (PMM)."
+
+    shear_df = _column_pier_shear_check_dataframe(state, analysis_input)
+    torsion_df = _column_pier_torsion_check_dataframe(state, analysis_input)
+    vt_df = _column_pier_combined_vt_check_dataframe(state, analysis_input)
+    shear = _column_pier_governing_shear_row(shear_df)
+    torsion = _column_pier_governing_torsion_row(torsion_df)
+    vt = _column_pier_governing_combined_vt_row(vt_df)
+
+    def _check_status(df: pd.DataFrame, *, empty_status: str, fail_status: str = "FAIL") -> str:
+        if code != PROJECT_CODE_ACI318:
+            return "REVIEW"
+        if df.empty:
+            return empty_status
+        statuses = {str(value) for value in df.get("Status", pd.Series(dtype=str)).tolist()}
+        if any("FAIL" in item for item in statuses):
+            return fail_status
+        if "DATA REQUIRED" in statuses:
+            return "DATA REQUIRED"
+        if "REVIEW" in statuses:
+            return "REVIEW"
+        if statuses and all(item in {"NOT APPLICABLE", "BELOW THRESHOLD", "NO DEMAND"} for item in statuses):
+            return sorted(statuses)[0]
+        if any("PASS" in item for item in statuses):
+            return "PASS"
+        return sorted(statuses)[0] if statuses else empty_status
+
+    rows = [
+        {
+            "Check": "Flexural (PMM)",
+            "Status": pmm_status,
+            "Governing Case": pmm_case,
+            "Demand": "Pu, Mux, Muy",
+            "D/C": pmm_dc,
+            "Route / Scope": "ACI RC/PSC PMM production-preview; AASHTO PMM remains REVIEW",
+            "Required Action": pmm_action,
+        },
+        {
+            "Check": "Shear",
+            "Status": _check_status(shear_df, empty_status="NOT READY", fail_status="Preview FAIL"),
+            "Governing Case": "-" if shear is None else f"{shear.get('Case', '-')} / {shear.get('Direction', '-')}",
+            "Demand": "Vux, Vuy",
+            "D/C": "-" if shear is None else _column_pier_dc_text(shear.get("Governing D/C value")),
+            "Route / Scope": "ACI 318 RC preview; AASHTO, PSC shear, and seismic detailing remain REVIEW",
+            "Required Action": "Confirm Control section transverse reinforcement, section/material, and seismic detailing separately.",
+        },
+        {
+            "Check": "Torsion",
+            "Status": _check_status(torsion_df, empty_status="NOT READY", fail_status="Preview FAIL"),
+            "Governing Case": "-" if torsion is None else str(torsion.get("Case", "-")),
+            "Demand": "Tu",
+            "D/C": "-" if torsion is None else _column_pier_dc_text(torsion.get("Governing D/C value")),
+            "Route / Scope": "ACI 318 RC preview; closed ties/hoops plus ordinary longitudinal Al only",
+            "Required Action": "Confirm closed hoop/tie geometry, torsion core, ordinary Al, hooks, and anchorage.",
+        },
+        {
+            "Check": "Shear + Torsion",
+            "Status": _check_status(vt_df, empty_status="NOT READY"),
+            "Governing Case": "-" if vt is None else f"{vt.get('Case', '-')} / {vt.get('Direction', '-')}",
+            "Demand": "Vux/Vuy + Tu",
+            "D/C": "-" if vt is None else _column_pier_dc_text(vt.get("Overall D/C value")),
+            "Route / Scope": "ACI 318 RC nonprestressed V+T gate; QA1 hand-check references available",
+            "Required Action": "Use this as the controlling V+T decision only within the scoped nonprestressed ACI RC route.",
+        },
+    ]
+    return rows
+
+
+def _column_pier_uls_decision_summary_cards(
+    rows: list[dict[str, object]],
+    analysis_input: AnalysisInput | None,
+    state: Mapping[str, object] | None = None,
+) -> list[dict[str, object]]:
+    counts = _column_pier_status_counts(rows)
+    if counts["danger"]:
+        decision = "FAIL / action required"
+        detail = f"{counts['danger']} check(s) fail or exceed a gate."
+        status = "danger"
+    elif counts["warning"]:
+        decision = "REVIEW / incomplete"
+        detail = f"{counts['warning']} check(s) require review, missing input, or unsupported route handling."
+        status = "warning"
+    elif counts["ready"] == len(rows):
+        decision = "Available for final review"
+        detail = "All visible Column/Pier ULS decision rows are passing or not applicable within their scoped routes."
+        status = "ready"
+    else:
+        decision = "Partially available"
+        detail = "Some checks are informational or not active."
+        status = "info"
+
+    code = project_design_code_from_session(state or st.session_state)
+    prestress_active = _column_pier_has_active_prestress(analysis_input)
+    vt_row = next((row for row in rows if row.get("Check") == "Shear + Torsion"), None)
+    vt_status = str(vt_row.get("Status") if vt_row else "NOT READY")
+    return [
+        {
+            "title": "Column/Pier ULS decision",
+            "value": decision,
+            "detail": detail,
+            "status": status,
+            "strong": True,
+        },
+        {
+            "title": "Code route",
+            "value": code,
+            "detail": "ACI RC shear/torsion/V+T is scoped; AASHTO routes stay REVIEW until validated",
+            "status": "info" if code == PROJECT_CODE_ACI318 else "warning",
+        },
+        {
+            "title": "V+T gate",
+            "value": vt_status,
+            "detail": "Final scoped ACI RC nonprestressed interaction gate",
+            "status": _column_pier_status_style(vt_status),
+        },
+        {
+            "title": "Prestress in V/T",
+            "value": "Present" if prestress_active else "Not active",
+            "detail": "Prestressed shear/torsion interaction remains REVIEW when active prestress exists",
+            "status": "warning" if prestress_active else "neutral",
+        },
+    ]
+
+
+def _render_column_pier_uls_decision_summary() -> None:
+    analysis_input = _serviceability_analysis_input_from_session()
+    rows = _column_pier_check_decision_rows(st.session_state, analysis_input)
+    st.markdown("#### Column/Pier ULS Decision Summary")
+    st.caption(
+        "Decision-first overview for the current stored inputs. This panel does not rerun PMM; shear, torsion, and V+T are read-only previews/check gates from the current session data."
+    )
+    _render_analysis_summary_strip(_column_pier_uls_decision_summary_cards(rows, analysis_input, st.session_state), columns=4)
+    summary_df = pd.DataFrame(
+        rows,
+        columns=["Check", "Status", "Governing Case", "Demand", "D/C", "Route / Scope", "Required Action"],
+    )
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    warning_rows = [row for row in rows if _column_pier_status_style(row.get("Status")) in {"danger", "warning"}]
+    if warning_rows:
+        with st.expander("Column/Pier ULS action items", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Check": row["Check"],
+                            "Status": row["Status"],
+                            "Required Action": row["Required Action"],
+                            "Scope Note": row["Route / Scope"],
+                        }
+                        for row in warning_rows
+                    ],
+                    columns=["Check", "Status", "Required Action", "Scope Note"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+    with st.expander("Column/Pier ULS decision scope", expanded=False):
+        st.markdown(
+            "- PMM flexural result is read from the last stored PMM demand/capacity result; use Flexural (PMM) to run or refresh it.\n"
+            "- Shear, Torsion, and Shear + Torsion are computed from current active Column/Pier ULS load rows and the Control section transverse reinforcement source.\n"
+            "- ACI RC nonprestressed V+T has QA1 independent benchmark evidence. AASHTO LRFD, prestressed V+T, seismic confinement/detailing, anchorage/hooks, lap splices, and shop-drawing detailing remain outside the acceptance scope."
+        )
 
 
 def _column_pier_uls_check_choice() -> str:

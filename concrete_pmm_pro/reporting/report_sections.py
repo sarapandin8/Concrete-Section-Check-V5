@@ -38,7 +38,7 @@ def default_report_section_plan(
         scope_limitation_keys.append("beam_girder_shear_torsion")
     elif snapshot.member_type == "column_pier_pmm":
         scope_limitation_keys.append("column_pier_vt_scope")
-    verification_table_keys = ["pmm_verification", "hand_check_results", "sls_verification_results"]
+    verification_table_keys = ["pmm_verification", "hand_check_results", "sls_verification_results", "pmm_published_benchmark_inventory"]
     verification_available = any([snapshot.pmm_verification_status, snapshot.hand_check_status, snapshot.sls_verification_status])
     if snapshot.member_type == "column_pier_pmm":
         verification_table_keys.append("column_pier_vt_qa1_benchmarks")

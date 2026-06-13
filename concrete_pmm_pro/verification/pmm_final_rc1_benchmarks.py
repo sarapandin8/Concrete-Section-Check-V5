@@ -191,7 +191,7 @@ def run_pmm_final_rc1_readiness_gate() -> PMMFinalRC1Summary:
             title="Production-preview status readiness decision",
             status=evidence_status,
             message=(
-                "ACI RC Flexural PMM has production-preview readiness evidence and PMM.FINAL.RC1.CLOSEOUT finalizes guarded UI/report wording without claiming final certification."
+                "ACI RC Flexural PMM has production-preview readiness evidence and PMM.FINAL.RC1.CLOSEOUT finalizes guarded UI/report wording; it must not claim final certification."
                 if evidence_status == PASS
                 else "ACI RC Flexural PMM still has final-readiness evidence items requiring review before production-preview wording."
             ),

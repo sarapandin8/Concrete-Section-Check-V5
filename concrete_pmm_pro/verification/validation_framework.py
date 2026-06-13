@@ -46,6 +46,7 @@ ValidationStatus = Literal["implemented", "partial", "planned"]
 ValidationCategory = Literal[
     "RC-only PMM",
     "Prestress PMM",
+    "Custom shape PMM",
     "Demand/Capacity",
     "Numerical robustness",
     "Warning policy",
@@ -349,6 +350,18 @@ def build_pmm_solver_validation_matrix() -> list[ValidationCaseSpec]:
             current_location="concrete_pmm_pro/analysis/pmm_solver.py; concrete_pmm_pro/ui/analysis_page.py; tests/test_prestress_pmm_solver.py; tests/test_analysis_runtime.py; tests/test_valid_ps2_stress_region.py",
             next_action="Develop refined prestress compression-side stress-strain reference cases before replacing the current tensile-strain clamp model.",
             warnings_addressed=("compression reversal", "governing impact", "prestress stress metadata"),
+        ),
+        ValidationCaseSpec(
+            case_id="PMM.BENCH.PS.CUSTOM1",
+            title="Prestressed/custom-shape PMM published benchmark inventory",
+            category="Custom shape PMM",
+            status="partial",
+            purpose="Separate implemented internal/derived PMM evidence from missing published references for prestressed and custom-shape final-readiness.",
+            acceptance="Inventory must identify implemented internal evidence, missing published/custom-shape references, acceptance gates, and next actions without claiming internal checks are published benchmarks.",
+            source="PMM published benchmark readiness inventory and existing validation packs.",
+            current_location="concrete_pmm_pro/verification/pmm_published_benchmark_inventory.py; tests/test_pmm_published_benchmark_inventory.py",
+            next_action="Collect traceable published/reference PMM cases for bonded prestress, hollow/custom shapes, irregular polygons, and demand-capacity extraction.",
+            warnings_addressed=("published benchmark", "prestressed PMM", "custom shape PMM", "final certification guard"),
         ),
         ValidationCaseSpec(
             case_id="VALID.PMM.DC1",

@@ -211,6 +211,12 @@ Implemented or partially implemented items include:
    - Move validated method assumptions into report notes/manuals.
    - Show only result-affecting warnings in the main ULS summary.
 
+9. **PMM.BENCH.PS.CUSTOM1 - Prestressed/custom-shape published benchmark inventory** - inventory added.
+   - Separates implemented internal/derived evidence from missing published/reference cases.
+   - Current internal evidence includes `VALID.PS1`, `VALID.PS2`, `QA.PO1`, and `SOLVER.PS.PASSIVE1`.
+   - Published/reference examples are still required for bonded prestressed PMM, hollow/custom shapes, irregular polygons, prestressed custom shapes, and demand-capacity extraction.
+   - This inventory intentionally blocks final-certification wording until published/reference examples are selected and numeric acceptance tolerances are added.
+
 ## Current limitation statement
 
 Until validation benchmarks are expanded, PMM output should be described as:

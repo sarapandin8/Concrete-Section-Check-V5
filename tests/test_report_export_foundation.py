@@ -85,6 +85,7 @@ def test_collect_available_report_tables_returns_standard_tables() -> None:
         "engineering_limitations",
         "unit_conventions",
         "terminology",
+        "pmm_published_benchmark_inventory",
     }.issubset(keys)
 
 

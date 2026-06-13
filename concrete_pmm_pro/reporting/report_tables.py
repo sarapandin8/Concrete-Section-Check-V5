@@ -13,6 +13,9 @@ from concrete_pmm_pro.reporting.terminology import terminology_to_dataframe
 from concrete_pmm_pro.reporting.traceability import build_result_traceability_snapshot, result_traceability_snapshot_to_dataframe
 from concrete_pmm_pro.reporting.units import unit_conventions_to_dataframe
 from concrete_pmm_pro.verification.column_pier_vt_benchmarks import benchmark_cases
+from concrete_pmm_pro.verification.pmm_published_benchmark_inventory import (
+    summarize_pmm_published_benchmark_inventory,
+)
 
 
 def _get(mapping: Any, key: str, default: Any = None) -> Any:
@@ -53,6 +56,7 @@ def collect_available_report_tables(session_state: Any) -> list[ReportTableInfo]
     snapshot = build_result_traceability_snapshot(session_state)
     readiness = check_report_readiness(snapshot)
     limitations = collect_limitations_for_report(session_state, include_all=True)
+    pmm_benchmark_inventory = summarize_pmm_published_benchmark_inventory()
 
     standard_tables = [
         ReportTableInfo(
@@ -102,6 +106,15 @@ def collect_available_report_tables(session_state: Any) -> list[ReportTableInfo]
             "get_standard_terminology",
             "Engineering term glossary for report consistency.",
             row_count=len(terminology_to_dataframe()),
+        ),
+        ReportTableInfo(
+            "pmm_published_benchmark_inventory",
+            "PMM Published Benchmark Inventory",
+            True,
+            "verification.pmm_published_benchmark_inventory",
+            "Readiness inventory separating internal PMM evidence from published/reference benchmark gaps for prestressed and custom shapes.",
+            row_count=len(pmm_benchmark_inventory.items),
+            warning="Published/reference prestressed and custom-shape PMM examples are still required before final certification wording.",
         ),
     ]
 

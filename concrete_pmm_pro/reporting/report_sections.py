@@ -38,6 +38,11 @@ def default_report_section_plan(
         scope_limitation_keys.append("beam_girder_shear_torsion")
     elif snapshot.member_type == "column_pier_pmm":
         scope_limitation_keys.append("column_pier_vt_scope")
+    verification_table_keys = ["pmm_verification", "hand_check_results", "sls_verification_results"]
+    verification_available = any([snapshot.pmm_verification_status, snapshot.hand_check_status, snapshot.sls_verification_status])
+    if snapshot.member_type == "column_pier_pmm":
+        verification_table_keys.append("column_pier_vt_qa1_benchmarks")
+        verification_available = True
 
     return [
         ReportSection("executive_summary", "Executive Summary", summary=f"Report readiness: {readiness_summary.overall_status}.", table_keys=["result_traceability_snapshot", "report_readiness"], limitation_keys=high_limitation_keys),
@@ -50,7 +55,7 @@ def default_report_section_plan(
         ReportSection("sls_stress_check", "SLS Stress Check", status=sls_status, table_keys=["sls_stress_results", "sls_prestress_contribution", "transformed_section_properties"], figure_keys=[key for key in ["sls_section_stress_points", "sls_stress_bar_diagram", "transformed_section_preview"] if key in figure_keys], limitation_keys=["ixy_coupling_sls", "cracked_section_sls", "unbonded_prestress"]),
         ReportSection("cracking_classification", "No-Tension / Decompression / Cracking Classification", status=crack_status, table_keys=["cracking_classification"], figure_keys=["cracking_classification_overlay"] if "cracking_classification_overlay" in figure_keys else [], limitation_keys=["cracked_section_sls", "crack_width_check"]),
         ReportSection("sls_visualization", "SLS Stress Visualization", status="AVAILABLE" if snapshot.sls_result_available else "MISSING", table_keys=["sls_visualization_selected_combo"], figure_keys=[key for key in ["sls_section_stress_points", "sls_stress_bar_diagram"] if key in figure_keys]),
-        ReportSection("verification", "Verification and Benchmark Checks", status="AVAILABLE" if any([snapshot.pmm_verification_status, snapshot.hand_check_status, snapshot.sls_verification_status]) else "PARTIAL", table_keys=["pmm_verification", "hand_check_results", "sls_verification_results"]),
+        ReportSection("verification", "Verification and Benchmark Checks", status="AVAILABLE" if verification_available else "PARTIAL", table_keys=verification_table_keys),
         ReportSection("warnings_limitations", "Engineering Warnings and Limitations", table_keys=["engineering_warnings", "engineering_limitations"], limitation_keys=[item.key for item in limitations], warnings=list(snapshot.warnings)),
         ReportSection("units_terminology", "Unit Conventions and Terminology", table_keys=["unit_conventions", "terminology"]),
         ReportSection("appendices_raw_tables", "Appendices / Raw Tables", status="PARTIAL", table_keys=["result_traceability_snapshot", "report_readiness", "engineering_limitations"]),

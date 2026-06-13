@@ -55,6 +55,8 @@ def test_default_report_section_plan_links_column_pier_vt_scope_limitation() -> 
     by_id = {section.section_id: section for section in sections}
 
     assert "column_pier_vt_scope" in by_id["analysis_mode_scope"].limitation_keys
+    assert "column_pier_vt_qa1_benchmarks" in by_id["verification"].table_keys
+    assert by_id["verification"].status == "AVAILABLE"
 
 
 def test_default_report_section_plan_marks_uls_missing_without_pmm() -> None:
@@ -99,6 +101,16 @@ def test_collect_available_report_tables_detects_pmm_result() -> None:
     by_key = {table.table_key: table for table in tables}
 
     assert by_key["pmm_summary"].available is True
+
+
+def test_collect_available_report_tables_exposes_column_pier_vt_qa1_benchmarks() -> None:
+    tables = collect_available_report_tables({"analysis_mode_settings": AnalysisModeSettings(member_type="column_pier_pmm")})
+    by_key = {table.table_key: table for table in tables}
+
+    table = by_key["column_pier_vt_qa1_benchmarks"]
+    assert table.available is True
+    assert table.row_count == 4
+    assert "AASHTO LRFD" in (table.warning or "")
 
 
 def test_report_tables_to_dataframe_contains_required_columns() -> None:

@@ -12,6 +12,7 @@ from concrete_pmm_pro.reporting.report_models import ReportTableInfo
 from concrete_pmm_pro.reporting.terminology import terminology_to_dataframe
 from concrete_pmm_pro.reporting.traceability import build_result_traceability_snapshot, result_traceability_snapshot_to_dataframe
 from concrete_pmm_pro.reporting.units import unit_conventions_to_dataframe
+from concrete_pmm_pro.verification.column_pier_vt_benchmarks import benchmark_cases
 
 
 def _get(mapping: Any, key: str, default: Any = None) -> Any:
@@ -113,6 +114,7 @@ def collect_available_report_tables(session_state: Any) -> list[ReportTableInfo]
     serviceability = _get(session_state, "serviceability_summary")
     crack = _get(session_state, "crack_classification_summary")
     custom_points = _get(session_state, "custom_stress_check_points")
+    column_pier_vt_qa_available = snapshot.member_type == "column_pier_pmm"
 
     standard_tables.extend(
         [
@@ -128,6 +130,15 @@ def collect_available_report_tables(session_state: Any) -> list[ReportTableInfo]
             ReportTableInfo("cracking_classification", "Cracking Classification", crack is not None, "crack_classification_summary", "Tension/cracking classification from SLS stress results.", row_count=_row_count(getattr(crack, "points", None))),
             ReportTableInfo("custom_stress_check_points", "Custom Stress Check Points", bool(custom_points), "custom_stress_check_points", "User-defined SLS stress check points.", row_count=_row_count(custom_points)),
             ReportTableInfo("sls_verification_results", "SLS Verification Results", _get(session_state, "sls_verification_summary") is not None, "sls_verification_summary", "SLS stress sign benchmark checks.", row_count=_row_count(_get(session_state, "sls_verification_summary"))),
+            ReportTableInfo(
+                "column_pier_vt_qa1_benchmarks",
+                "Column/Pier V+T QA1 Benchmarks",
+                column_pier_vt_qa_available,
+                "verification.column_pier_vt_benchmarks",
+                "Independent hand-check reference cases for the scoped ACI RC Column/Pier shear-torsion interaction gate.",
+                row_count=len(benchmark_cases()) if column_pier_vt_qa_available else None,
+                warning="Static validation evidence only; AASHTO LRFD, prestressed V+T, seismic detailing, and anchorage remain excluded routes.",
+            ),
             ReportTableInfo("sls_visualization_selected_combo", "Selected SLS Visualization Data", _has_any(session_state, ["sls_visualization_dataframe", "sls_stress_visualization_selected_combo"]), "sls_visualization_dataframe", "Selected-combo SLS stress visualization source data.", row_count=_row_count(_get(session_state, "sls_visualization_dataframe"))),
         ]
     )
